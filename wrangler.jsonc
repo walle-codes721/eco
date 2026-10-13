@@ -3,9 +3,10 @@
   "name": "eco",
   "main": "src/worker.ts",
   "compatibility_date": "2026-10-01",
-  // No *.workers.dev URL: Eco is served only at its own domain (eco.linolabs.us, added once the zone is active).
+  // No *.workers.dev URL: Eco is served only at its own domain.
   "workers_dev": false,
   "preview_urls": false,
+  "routes": [{ "pattern": "eco.linolabs.co", "custom_domain": true }],
   "observability": { "enabled": true },
   "assets": {
     "directory": "public",
