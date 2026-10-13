@@ -1,4 +1,4 @@
-// One global limiter for every live call (CLAUDE.md rules 11, 12, 20, 21). Mock calls never reach it.
+// One global limiter for every live call (CONTRIBUTING.md, token rules 3, 7, 8, 9). Mock calls never reach it.
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 
@@ -78,7 +78,7 @@ export class Budget extends DurableObject<Env> {
     );
     this.fails = rec.status === 200 ? 0 : this.fails + 1;
     if (this.fails >= 3) {
-      this.tripped = true; // rule 21: stop after 3 failures in a row
+      this.tripped = true; // token rule 8: stop after 3 failures in a row
       await this.ctx.storage.put("tripped", true);
     }
   }
@@ -101,7 +101,7 @@ export class Budget extends DurableObject<Env> {
       return s + (r.tin * pi + r.tout * po) / 1e6;
     }, 0);
     return {
-      live: this.env.ECO_LIVE === "1",
+      live: this.env.ECO_LIVE === "1" && !!this.env.RADEON_API_KEY, // same rule as tf.ts isLive
       today: rows.length,
       max: Number(this.env.ECO_MAX_CALLS ?? 50),
       tripped: this.tripped,
