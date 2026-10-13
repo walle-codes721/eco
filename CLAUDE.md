@@ -14,6 +14,6 @@ All five roles use their canonical default strings (`needs-triage`, `needs-info`
 
 Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
-## Note on rule citations in code
+## Ground rules
 
-Some code comments cite numbered rules (e.g. "CLAUDE.md rule 11", "rule 14"). These refer to a longer local CLAUDE.md (the "Ground rules" from Eco-Plan §3) that has not been pushed yet. Until the two files are merged, treat those citations as pointing to the plan's ground rules: one API client, budget lanes, mock by default, no LLM call for anything local, consent for every voice.
+Some code comments cite numbered token rules (e.g. "token rule 3", "token rule 6"). These are defined in `CONTRIBUTING.md` under "Token rules" — one Token Factory client (`src/tf.ts`), mock by default, one translation call per phrase covering every language, nothing local sent to the API, consent for every cloned voice.
