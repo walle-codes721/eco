@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="description" content="Eco translates the room, answers from the source, and tells the person in charge what nobody understood.">
+<title>Eco · One engine, two rooms</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/css/eco.css">
+<script type="module" src="/js/pages/home.js"></script>
+</head>
+<body>
+<header class="bar">
+  <div class="inner">
+    <a class="brand" href="/">Eco</a>
+    <span class="spacer"></span>
+    <a class="btn ghost sm" href="/s/new">Give a talk</a>
+    <a class="btn ghost sm" href="/o/new">Set up a business</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero wrap">
+    <span class="pill"><span class="dot live"></span>One engine. Two rooms.<span class="faint">·</span><span class="muted">AMD Token Factory</span></span>
+    <h1>Eco translates the room, answers from the source, and tells the person in charge what nobody understood.</h1>
+    <p class="sub">Live translation and source-grounded answers for talks and shop counters. A QR code and the phone in your pocket. No app.</p>
+  </section>
+
+  <section class="wrap grid-2" aria-label="The two rooms">
+    <article class="card room-card lift">
+      <div class="row"><span class="chip"><span class="dot live" style="width:7px;height:7px;border-radius:50%;display:inline-block"></span>Room 1</span><span class="spacer"></span><span class="mono muted">/s/demo</span></div>
+      <h2>Stage</h2>
+      <p class="muted">You speak English. Every listener follows on their own phone in Italian, Spanish or Hindi, asks the talk, and gets answers only from your slides. You see what lost the room.</p>
+      <div class="preview" aria-hidden="true">
+        <p class="l1">«Chi ascolta si perde dei pezzi e non può chiedere.»</p>
+        <p class="l1">«Per questo Eco ha due stanze.»</p>
+        <p class="l2">«Se non capisci qualcosa, chiedi al talk dal telefono.»</p>
+        <div class="row" style="margin-top:6px"><span class="chip">IT</span><span class="chip">ES</span><span class="chip">हि</span><span class="spacer"></span><span class="chip">slide 3</span></div>
+      </div>
+      <ul class="ticks">
+        <li data-i="check">Live captions in 3 languages</li>
+        <li data-i="check">Answers cite the slide</li>
+        <li data-i="check">Speaker board: what people asked</li>
+        <li data-i="check">Recap on every phone</li>
+      </ul>
+      <div class="row" style="flex-wrap:wrap">
+        <a class="btn primary" href="/s/demo">Try Stage <span data-i="right"></span></a>
+        <a class="btn" href="/r/demo">Join as audience</a>
+        <span class="spacer"></span>
+        <div class="qr-slot" data-path="/r/demo" title="Scan to join the demo talk on your phone" style="width:84px"></div>
+      </div>
+    </article>
+
+    <article class="card room-card lift">
+      <div class="row"><span class="chip"><span class="dot live" style="width:7px;height:7px;border-radius:50%;display:inline-block"></span>Room 2</span><span class="spacer"></span><span class="mono muted">/o/gelato</span></div>
+      <h2>Counter</h2>
+      <p class="muted">A sticker on the counter. A tourist talks or types in their language; the owner reads Italian. Questions about prices or allergens are answered from the shop's own info, never invented.</p>
+      <div class="preview" aria-hidden="true">
+        <div class="thread">
+          <div class="bubble me small">Is the pistachio gluten-free?</div>
+          <div class="bubble eco small"><div class="who">Eco · menu</div>Yes, the pistachio gelato is gluten-free. It contains pistachio nuts and milk.</div>
+        </div>
+      </div>
+      <ul class="ticks">
+        <li data-i="check">Any business: food, shop, salon</li>
+        <li data-i="check">Menu photo becomes the info</li>
+        <li data-i="check">Face-to-face mode on one iPad</li>
+        <li data-i="check">Weekly card for the owner</li>
+      </ul>
+      <div class="row" style="flex-wrap:wrap">
+        <a class="btn primary" href="/o/gelato">Try Counter <span data-i="right"></span></a>
+        <a class="btn" href="/c/gelato">Customer view</a>
+        <span class="spacer"></span>
+        <div class="qr-slot" data-path="/c/gelato" title="Scan to be the customer on your phone" style="width:84px"></div>
+      </div>
+    </article>
+  </section>
+
+  <section class="section wrap">
+    <p class="eyebrow">How it works</p>
+    <h2 class="big" style="margin:8px 0 28px">One call per phrase. Every language at once.</h2>
+    <div class="grid-3">
+      <div class="card"><div class="step-n">1</div><h3 style="margin:14px 0 6px">Hear</h3><p class="muted small">The browser cuts your speech at natural pauses. Each phrase goes to <b>MiMo-V2.6-Flash</b> on AMD Token Factory as audio.</p></div>
+      <div class="card"><div class="step-n">2</div><h3 style="margin:14px 0 6px">Translate</h3><p class="muted small">One call returns the transcript and every language. Cost grows with languages, not with the size of the room.</p></div>
+      <div class="card"><div class="step-n">3</div><h3 style="margin:14px 0 6px">Answer</h3><p class="muted small">Questions are matched locally against the slides or the shop's info, and <b>Gemma-4-31B-IT</b> answers only from those, citing where. Otherwise: "not covered".</p></div>
+    </div>
+  </section>
+
+  <section class="section wrap" style="padding-top:0">
+    <p class="eyebrow">Measured, not promised</p>
+    <h2 class="big" style="margin:8px 0 28px">Today's real numbers</h2>
+    <div class="grid-3" id="stats">
+      <div class="card"><div class="stat" data-s="p50">—</div><p class="muted small" style="margin-top:8px">Median phrase → translation, live calls today</p></div>
+      <div class="card"><div class="stat" data-s="today">—</div><p class="muted small" style="margin-top:8px">Token Factory calls today</p></div>
+      <div class="card"><div class="stat" data-s="mode">—</div><p class="muted small" style="margin-top:8px">Mode of this server</p></div>
+    </div>
+  </section>
+
+  <section class="section wrap center">
+    <p class="quote">Named after Umberto Eco, who wrote <i>The Search for the Perfect Language</i>. Eco doesn't need one: it speaks yours.</p>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap row" style="flex-wrap:wrap">
+    <span class="brand" style="font-size:15px">Eco</span>
+    <span>Built for the AMD Developer Hackathon ACT III · runs on AMD Token Factory</span>
+    <span class="spacer"></span>
+    <span>MIT</span>
+  </div>
+</footer>
+</body>
+</html>

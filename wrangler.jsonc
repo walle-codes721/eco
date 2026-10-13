@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "eco",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "html_handling": "drop-trailing-slash",
+    "run_worker_first": ["/api/*", "/s/*", "/r/*", "/o/*", "/c/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOM", "class_name": "Room" },
+      { "name": "BUDGET", "class_name": "Budget" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Budget"] }],
+  // Mock is the default. ECO_LIVE="1" only after Seb's go (CLAUDE.md rule 5).
+  "vars": {
+    "ECO_LIVE": "0",
+    "ECO_MAX_CALLS": "50",
+    "ECO_PUBLIC_HOURLY": "30"
+  }
+  // Secrets (set by Seb, never in this file): RADEON_API_KEY, ADMIN_KEY
+}

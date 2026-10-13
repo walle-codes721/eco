@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+*.png.key
+logs/
+.DS_Store
+# never commit key screenshots
+*API key*
