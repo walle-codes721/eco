@@ -4,7 +4,7 @@
 
 One engine, two rooms, all in the browser:
 
-- **Stage.** A speaker talks in English. Listeners scan a QR code and follow live captions in Italian, Spanish or Hindi on their own phone, with an optional phone voice. They can ask the talk a question, and the answer comes only from the slides and the speaker's words, citing the slide. The speaker's board shows what people asked and which slide raised the most questions. Listeners get a recap at the end.
+- **Stage.** A speaker talks in English. Listeners scan a QR code and follow live captions in Italian, Spanish or Hindi on their own phone. They can ask the talk a question, and the answer comes only from the slides and the speaker's words, citing the slide. The speaker's board shows what people asked and which slide raised the most questions. Listeners get a recap at the end.
 - **Counter.** Any business (café, shop, salon…) prints a QR sticker. A customer talks or types in their language and the owner reads it in Italian. Questions about prices, allergens or hours are answered right away from the owner's own info, and Eco never invents them. Everything else goes to the owner, translated. One iPad can also run face-to-face in split screen. The owner gets a weekly card.
 
 Built for the lablab.ai **AMD Developer Hackathon ACT III**. Runs on **AMD Token Factory**:
