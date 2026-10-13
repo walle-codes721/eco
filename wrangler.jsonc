@@ -21,9 +21,9 @@
     ]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Budget"] }],
-  // Mock is the default. ECO_LIVE="1" only after Seb's go (CLAUDE.md rule 5).
+  // Live needs ECO_LIVE="1" AND the RADEON_API_KEY secret; without the key it stays mock. Seb sets the key.
   "vars": {
-    "ECO_LIVE": "0",
+    "ECO_LIVE": "1",
     "ECO_MAX_CALLS": "50",
     "ECO_PUBLIC_HOURLY": "30"
   }

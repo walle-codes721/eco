@@ -1,4 +1,4 @@
-// The ONE Token Factory client (CLAUDE.md rule 11). Mock unless ECO_LIVE=1 and a key is set.
+// The ONE Token Factory client (CONTRIBUTING.md, token rule 3). Mock unless ECO_LIVE=1 and a key is set.
 import type { Env } from "./env";
 import type { Kind, Denied } from "./budget";
 
@@ -49,12 +49,12 @@ export async function tf<T>(
           model,
           ...req,
           temperature: 0.2,
-          ...(model.startsWith("MiMo") ? { reasoning_effort: "none" } : {}), // rule 13
+          ...(model.startsWith("MiMo") ? { reasoning_effort: "none" } : {}), // thinking off (token rule 6)
         }),
         signal: AbortSignal.timeout(kind === "extract" ? 60_000 : 15_000),
       });
       status = res.status;
-      // Rule 12: retry 429 and gateway 502/503 only, at most twice, never when the wait would kill the latency target.
+      // Token rule 7: retry 429 and gateway 502/503 only, at most twice, never when the wait would kill the latency target.
       if ([429, 502, 503].includes(status) && attempt < 2) {
         const wait = Number(res.headers.get("retry-after") ?? 0) * 1000 || 400 * 2 ** attempt;
         if (wait <= (translation ? 1500 : 4000)) {

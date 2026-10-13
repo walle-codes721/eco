@@ -21,6 +21,10 @@ Retrieval is local BM25 keyword scoring, so it costs zero tokens. Knowing who is
 
 **Status.** Captions, ask the talk, the board and Counter work in mock mode. Two things are in progress: **multiple speakers** (the speaker join link and the "now speaking" indicator) and the **cloned voice** (waiting for AMD to confirm it can host the voice model). Until the voice model is hosted, listeners hear the phone's built-in voice.
 
+**Contributing:** read [CONTRIBUTING.md](CONTRIBUTING.md) first (stack, workflow, and the rules that protect our shared API key). Open work is in [PLAN.md](PLAN.md).
+
+**Stack:** TypeScript on Cloudflare Workers + Durable Objects, with plain HTML and vanilla JS pages. No Next.js, React or other framework, no build step, no agent framework.
+
 ## Run it (mock mode, no key needed)
 
 ```sh
@@ -40,7 +44,7 @@ Try `/s/demo` (speaker console with a replaying demo talk), `/r/demo` (listener)
 
 ## Live mode
 
-Put `RADEON_API_KEY=...` in `.dev.vars` (gitignored) and set `ECO_LIVE = "1"` in `wrangler.jsonc`. Every call goes through one client (`src/tf.ts`) and one global limiter (`src/budget.ts`):
+Live mode needs two things: `ECO_LIVE = "1"` in `wrangler.jsonc` (set) and the `RADEON_API_KEY` secret. Locally, put the key in `.dev.vars` (gitignored, see `.dev.vars.example`). In production only Seb sets it, with `wrangler secret put RADEON_API_KEY`. Without the key the app stays in mock mode even when `ECO_LIVE` is on. Every call goes through one client (`src/tf.ts`) and one global limiter (`src/budget.ts`):
 
 - at most 12 requests a minute, with the last 2 slots kept for translation;
 - at most 3 calls at once;

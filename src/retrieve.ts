@@ -1,4 +1,4 @@
-// Local retrieval: no embeddings endpoint exists, and this costs zero tokens (CLAUDE.md rule 14).
+// Local retrieval: no embeddings endpoint exists, and this costs zero tokens (see CONTRIBUTING.md, token rule 5).
 
 export interface Chunk {
   tag: string; // "slide 6", "menu", "hours"... shown to users as the citation

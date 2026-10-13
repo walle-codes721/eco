@@ -1,0 +1,4 @@
+# Copy to .dev.vars (gitignored). Not needed for mock mode.
+# Only Seb sets real values. Never commit .dev.vars.
+RADEON_API_KEY=
+ADMIN_KEY=

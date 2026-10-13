@@ -22,7 +22,7 @@ const schema = (name: string, properties: Record<string, unknown>) => ({
 const audioPart = (wavB64: string) => ({ type: "input_audio", input_audio: { data: wavB64, format: "wav" } });
 const sources = (chunks: Chunk[]) => chunks.map((c) => `[${c.tag}] ${c.text}`).join("\n\n");
 
-/** Stage: one call per phrase returns the transcript and every language (rule 10). */
+/** Stage: one call per phrase returns the transcript and every language (CONTRIBUTING.md, token rule 4). */
 export function utterancePrompt(wavB64: string, langs: string[], previous: string[]) {
   const messages: Msg[] = [
     {
