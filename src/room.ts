@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt } from "./prompts";
+import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt } from "./prompts";
 import { bestSentence, chunkPages, normalize, selectContext, terms, type Chunk } from "./retrieve";
 import { voiceFor } from "./voice";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS } from "./fixtures/demo";
@@ -538,7 +538,7 @@ export class Room extends DurableObject<Env> {
 
     if (side === "customer") {
       const { picked } = selectContext(this.chunks, text);
-      const r = await tf<CustomerTurn>(this.env, "turn", MODELS.audio, customerTurnPrompt({ name: m.title, type: m.bizType, ownerLang: m.ownerLang }, picked, input), {
+      const r = await tf<CustomerTurn>(this.env, "turn", turnModel(input), customerTurnPrompt({ name: m.title, type: m.bizType, ownerLang: m.ownerLang }, picked, input), {
         pub: m.demo,
         mock: () => {
           if (!text && !m.demo) return { src: MOCK_LINE, lang: hint, to_owner: MOCK_LINE, answer: { covered: false, text: "", text_owner: "", cite: "" } };
@@ -556,7 +556,7 @@ export class Room extends DurableObject<Env> {
       if (covered) added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: d.answer.text, out: d.answer.text_owner || d.answer.text, cite: d.answer.cite, live: r.live });
       convo.open = !covered;
     } else {
-      const r = await tf<{ src: string; out: string }>(this.env, "turn", MODELS.audio, ownerTurnPrompt(m.ownerLang, convo.lang, input), {
+      const r = await tf<{ src: string; out: string }>(this.env, "turn", turnModel(input), ownerTurnPrompt(m.ownerLang, convo.lang, input), {
         pub: m.demo,
         mock: () => ({ src: text || "(audio)", out: text || "(audio)" }),
       });

@@ -117,3 +117,20 @@ describe("accounts", () => {
     expect(nameOk("Seb")).toBe(false);
   });
 });
+
+import { customerTurnPrompt, ownerTurnPrompt, turnModel, MODELS } from "../src/prompts";
+
+describe("model routing", () => {
+  const biz = { name: "Bar", type: "cafe", ownerLang: "it" };
+  it("sends typed turns to Gemma with json_object and the shape in the prompt", () => {
+    const p = customerTurnPrompt(biz, [], { text: "hi" });
+    expect(turnModel({ text: "hi" } as { wavB64?: string })).toBe(MODELS.answer);
+    expect(p.response_format).toEqual({ type: "json_object" });
+    expect(String(p.messages[0].content)).toContain('"to_owner": string');
+    expect(ownerTurnPrompt("it", "en", { text: "ciao" }).response_format).toEqual({ type: "json_object" });
+  });
+  it("keeps spoken turns on MiMo with a strict schema", () => {
+    expect(turnModel({ wavB64: "x" })).toBe(MODELS.audio);
+    expect((customerTurnPrompt(biz, [], { wavB64: "x" }).response_format as { type: string }).type).toBe("json_schema");
+  });
+});

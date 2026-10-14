@@ -13,9 +13,12 @@ Built for the lablab.ai **AMD Developer Hackathon ACT III**. Runs on **AMD Token
 |---|---|---|
 | Speech → transcript + every language | `MiMo-V2.6-Flash` (audio in, strict JSON schema) | 1 per phrase, for all listeners and languages |
 | Answers from the source | `Gemma-4-31B-IT` | 1 per new question (cached) |
-| Counter turn: translate + answer from the info | `MiMo-V2.6-Flash` | 1 per turn |
+| Counter turn, typed: translate + answer from the info | `Gemma-4-31B-IT` | 1 per turn |
+| Counter turn, spoken: transcript + translate + answer | `MiMo-V2.6-Flash` (audio in) | 1 per turn |
 | Menu photo → text | `MiMo-V2.6-Flash` (image in) | 1 per photo, once |
 | Speaker's cloned voice in each language | OmniVoice (k2-fsa), backup Chatterbox Multilingual (Resemble AI). *Hosting on AMD pending* | 1 clip per phrase per language with listeners |
+
+Gemma (Google DeepMind's open model, running on AMD GPUs through Token Factory) does every text-in job; MiMo is used only where the input is audio or a photo, which Gemma on Token Factory doesn't take.
 
 Retrieval is local BM25 keyword scoring, so it costs zero tokens. Knowing who is speaking costs nothing either: each speaker uses their own device and mic, so every line is tagged by the device it came from.
 
@@ -29,7 +32,7 @@ Retrieval is local BM25 keyword scoring, so it costs zero tokens. Knowing who is
 
 ```sh
 npm install
-npx wrangler dev          # http://localhost:8787
+npm run dev              # http://localhost:8787, always mock (npm run dev:live only with Seb's go)
 ```
 
 or with Docker:
@@ -63,7 +66,7 @@ mic → VAD (600 ms pause) → 16 kHz WAV                   ▲  captions labell
         ▼                                               │
 Room (Durable Object, one per room) ────────────────────┘
         │
-        ├─▶ tf.ts ─▶ AMD Token Factory (MiMo: transcript + every language · Gemma: answers)
+        ├─▶ tf.ts ─▶ AMD Token Factory (MiMo: speech + photos · Gemma: answers + typed turns)
         └─▶ voice.ts ─▶ voice clone (OmniVoice, backup Chatterbox; hosting pending)
 
 Budget (Durable Object): limits + call log for every live call, voice included

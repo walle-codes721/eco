@@ -6,7 +6,7 @@ Rules for working here: [CONTRIBUTING.md](CONTRIBUTING.md). Owners are suggestio
 Status as of 13 Oct: Stage and Counter work in mock mode and are deployed at eco.linolabs.co. Not done: first live calls, multiple speakers, cloned voice, the 80% replay switch, device testing, submission material.
 
 1. **Get set up** (everyone, today)
-   a. Clone, `npm install`, `npx wrangler dev`.
+   a. Clone, `npm install`, `npm run dev`.
    b. Walk through `/stage/eco/demo/speak` + `/stage/eco/demo`, then `/counter/eco/gelato/owner` + `/counter/eco/gelato`, on desktop and on a phone.
    c. Run `npm test` and `npm run check`; read `src/room.ts`, `src/tf.ts`, `src/retrieve.ts`.
    d. Note anything confusing or broken.

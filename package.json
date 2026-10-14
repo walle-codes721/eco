@@ -5,7 +5,8 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --var ECO_LIVE:0",
+    "dev:live": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest run",
     "check": "tsc --noEmit"

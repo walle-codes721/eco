@@ -14,7 +14,7 @@ Read this before you touch the code or the API. Eco is a hackathon project with 
 
 ```sh
 npm install
-npx wrangler dev        # http://localhost:8787, mock mode, no key needed
+npm run dev             # http://localhost:8787, always mock, even with a key in .dev.vars
 npm test
 npm run check
 ```
