@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt } from "./prompts";
+import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary } from "./prompts";
 import { bestSentence, chunkPages, isEcho, normalize, selectContext, terms, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT } from "./voice";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
@@ -35,6 +35,8 @@ export interface Line { speaker?: string; seq: number; t: number; at: number; sl
 export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null }
 export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean }
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
+/** The talk's summary. `n` is the seq of the last line it covers: a newer line makes it stale. */
+export interface Summary { n: number; text: Record<string, string>; live: boolean; at: number }
 type Answer = { covered: boolean; answer: string; cite: string; q_en: string };
 type CustomerTurn = { src: string; lang: string; to_owner: string; answer: { covered: boolean; text: string; text_owner: string; cite: string } };
 
@@ -62,6 +64,8 @@ export class Room extends DurableObject<Env> {
   convos: Convo[] = [];
   cache: Record<string, Answer> = {};
   peak = 0;
+  summary: Summary | null = null;
+  private summarizing = false;
   private visitors = new Map<string, number>();
   private mockI = 0;
   private cloning = 0;
@@ -72,7 +76,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -81,10 +85,11 @@ export class Room extends DurableObject<Env> {
       this.convos = (s.get("convos") as Convo[]) ?? [];
       this.cache = (s.get("cache") as Record<string, Answer>) ?? {};
       this.peak = (s.get("peak") as number) ?? 0;
+      this.summary = (s.get("summary") as Summary) ?? null;
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -187,6 +192,10 @@ export class Room extends DurableObject<Env> {
         return this.openSocket(url, isHost, me);
       case "GET transcript":
         return json({ meta: this.publicMeta(), lines: this.lines });
+      case "GET summary":
+        return json({ summary: this.summary });
+      case "POST summary":
+        return this.summarize(isHost || !!me, ip);
       case "POST utterance": {
         if (!me && !(m.demo && this.allow(ip, "voice"))) return json({ error: "Not allowed" }, 403);
         return this.utterance(req, m.demo && !isHost, me?.id ?? "s0");
@@ -311,6 +320,9 @@ export class Room extends DurableObject<Env> {
     if (status === "live") m.endedAt = null;
     await this.save("meta");
     this.send(["listener", "screen", "host"], { type: "status", status, startedAt: m.startedAt, endedAt: m.endedAt });
+    // The talk is over: write the summary now, in the background, so listeners find it on their recap without anyone asking.
+    // A second End with nothing new said is a cache hit (no call), and a failure just leaves the speaker's button.
+    if (status === "ended" && m.mode === "stage") this.ctx.waitUntil(this.summarize(true, "").catch(() => {}));
     return { status };
   }
 
@@ -522,6 +534,43 @@ export class Room extends DurableObject<Env> {
     return json({ id: q.id, covered: q.covered, answer: q.answer, cite: q.cite, cached: fromCache });
   }
 
+  /**
+   * One call: what the speakers said, summarised in every language of the room.
+   * Speakers only (the public demo room allows visitors, within its per-visitor limit).
+   * Cached until a new line arrives, so a second tap costs nothing.
+   */
+  private async summarize(isSpeaker: boolean, ip: string): Promise<Response> {
+    const m = this.meta!;
+    if (m.mode !== "stage") return json({ error: "Not a stage" }, 400);
+    if (this.lines.length < 3) return json({ error: "Too short" }, 400);
+    const n = this.lines.at(-1)!.seq;
+    if (this.summary?.n === n) return json({ summary: this.summary, cached: true });
+    if (!isSpeaker && !(m.demo && this.allow(ip, "ask"))) return json({ error: "Not allowed" }, 403);
+    if (this.summarizing) return json({ error: "busy" }, 409); // one at a time: two taps must not make two calls
+    this.summarizing = true;
+    try {
+      const langs = ["en", ...m.langs.filter((l) => l !== "en")];
+      const lines = this.lines.slice();
+      const r = await tf<Record<string, string>>(this.env, "summary", MODELS.answer, summaryPrompt(m.title, transcriptText(lines), langs), {
+        pub: m.demo,
+        mock: () => mockSummary(lines, langs),
+      });
+      if (r.data === null) return json({ error: "busy", fallback: r.fallback }, 503);
+      const text: Record<string, string> = {};
+      for (const l of langs) {
+        const v = r.data[l];
+        if (typeof v !== "string" || !v.trim()) return json({ error: "busy", fallback: "error" }, 503); // a language is missing: don't save half a summary
+        text[l] = v.trim().slice(0, 1500);
+      }
+      this.summary = { n, text, live: r.live, at: Date.now() };
+      await this.save("summary");
+      this.send(["listener", "screen", "host"], { type: "summary", summary: this.summary });
+      return json({ summary: this.summary, cached: false });
+    } finally {
+      this.summarizing = false;
+    }
+  }
+
   board() {
     const qs = this.questions;
     const topics = new Map<string, { topic: string; title: string; count: number; sample: string }>();
@@ -586,10 +635,11 @@ export class Room extends DurableObject<Env> {
     if (this.replayI >= DEMO_TALK.length || (this.replayI === 0 && this.lines.length)) {
       this.replayI = 0;
       this.lines = [];
+      this.summary = null; // it described the old loop
       this.questions = this.questions.slice(-30);
       m.startedAt = Date.now();
       m.slide = 1;
-      await this.save("lines", "meta", "questions");
+      await this.save("lines", "meta", "questions", "summary");
       this.send(["listener", "screen", "host"], { type: "reset", meta: this.publicMeta() });
       return void this.ctx.storage.setAlarm(Date.now() + 3000);
     }

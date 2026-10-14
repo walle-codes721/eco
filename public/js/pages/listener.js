@@ -16,6 +16,7 @@ try {
 const choices = [...meta.langs, "en"];
 let lang = store(`eco:lang:${id}`) ?? (choices.includes(phoneLang()) ? phoneLang() : meta.langs[0]);
 let lines = [];
+let summary = null; // { text: { en, it, ... } } once the speaker has made one
 const myQs = store(`eco:qs:${id}`) ?? [];
 let live = null;
 let atBottom = true; // smart follow: pinned to live unless the listener scrolls up
@@ -30,6 +31,7 @@ const titleEl = h("span.title.truncate", {}, meta.title);
 const bar = h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), titleEl, h("span.spacer"), langSel, soundBtn));
 const statusRow = h("div.status-row");
 const caps = h("div.captions", { "aria-live": "polite" });
+const summaryBox = h("section", { hidden: true });
 const jumpBtn = h("button.caps-jump", { type: "button" });
 const capsWrap = h("div.caps-wrap", {}, caps, jumpBtn);
 const qInput = h("input", { type: "text", maxlength: 300, enterkeyhint: "send" });
@@ -186,6 +188,7 @@ langSel.onchange = () => {
   live?.send({ type: "lang", lang });
   labels();
   drawCaps();
+  drawSummary();
   drawJump();
   drawStatus();
 };
@@ -196,11 +199,24 @@ soundBtn.onclick = () => {
 };
 
 // ---------- recap ----------
+const summaryText = () => summary?.text[lang] ?? summary?.text.en ?? "";
+
+function drawSummary() {
+  const text = summaryText();
+  summaryBox.hidden = !text;
+  summaryBox.replaceChildren(
+    h("h2", { style: { fontSize: "20px", margin: "12px 0" } }, T("summary")),
+    ...text.split("\n").filter(Boolean).map((p) => h("p", { style: { margin: "6px 0" } }, p.replace(/^-\s*/, "• "))),
+  );
+}
+
 async function recap() {
   const { lines: all } = await api(`/api/rooms/${id}/transcript`).catch(() => ({ lines }));
+  summary = (await api(`/api/rooms/${id}/summary`).catch(() => ({}))).summary ?? null;
+  drawSummary();
   const shareBtn = h("button.btn", { type: "button" }, icon("share"), T("share"));
   shareBtn.onclick = () => {
-    const text = `${meta.title}\n\n` + all.map((l) => textOf(l)).join("\n");
+    const text = `${meta.title}\n\n` + (summaryText() ? `${summaryText()}\n\n` : "") + all.map((l) => textOf(l)).join("\n");
     navigator.share ? navigator.share({ title: meta.title, text }).catch(() => {}) : navigator.clipboard.writeText(text).then(() => toast("Copied"));
   };
   main.replaceChildren(
@@ -210,6 +226,7 @@ async function recap() {
       h("p.muted", {}, `${meta.title}${meta.speaker ? ` · ${meta.speaker}` : ""}`),
       h("div.row", { style: { marginTop: "18px" } }, shareBtn),
     ),
+    summaryBox,
     h("section", { hidden: !myQs.length }, h("h2", { style: { fontSize: "20px", margin: "12px 0" } }, T("yourQs")), qList),
     h("section", { style: { padding: "12px 0 64px" } },
       h("h2", { style: { fontSize: "20px", margin: "12px 0" } }, T("transcript")),
@@ -276,7 +293,8 @@ if (meta.status === "ended") {
     if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") meta.slide = m.n;
-    if (m.type === "reset") { lines = []; drawCaps(); snapToLive(); }
+    if (m.type === "reset") { lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); }
+    if (m.type === "summary") (summary = m.summary), drawSummary();
     if (m.type === "status") {
       meta.status = m.status;
       if (m.status === "ended") return recap();
