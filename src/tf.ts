@@ -12,7 +12,7 @@ export interface TfRequest {
 
 export type TfResult<T> =
   | { data: T; live: boolean; ms: number }
-  | { data: null; live: true; ms: number; fallback: Denied | "error" };
+  | { data: null; live: true; ms: number; fallback: Denied | "error"; why?: string };
 
 export const isLive = (env: Env) => env.ECO_LIVE === "1" && !!env.RADEON_API_KEY;
 
@@ -40,6 +40,7 @@ export async function tf<T>(
   let status = 0;
   let usage = { prompt_tokens: 0, completion_tokens: 0 };
   let content = "";
+  let why = "";
   try {
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(`${BASE}/chat/completions`, {
@@ -66,11 +67,21 @@ export async function tf<T>(
         const j = (await res.json()) as { choices: { message: { content: string } }[]; usage?: typeof usage };
         content = j.choices[0]?.message?.content ?? "";
         usage = j.usage ?? usage;
+      } else {
+        // Gateway errors are {"error":{...}}, platform errors {"detail":{"error":{...}}}. Never includes the key.
+        const body = await res.text().catch(() => "");
+        let msg = body;
+        try {
+          const e = JSON.parse(body);
+          msg = (e.error ?? e.detail?.error ?? e.detail)?.message ?? JSON.stringify(e.error ?? e.detail ?? e);
+        } catch {}
+        why = `${status}: ${String(msg).slice(0, 160)}`;
       }
       break;
     }
-  } catch {
+  } catch (e) {
     status = status || 599; // timeout or network
+    why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
   } finally {
     await budget.finish({
       kind,
@@ -83,10 +94,15 @@ export async function tf<T>(
     });
   }
   const ms = Date.now() - t0;
-  if (status !== 200) return { data: null, live: true, ms, fallback: "error" };
+  if (status !== 200) {
+    console.warn("tf failed", kind, model, why);
+    return { data: null, live: true, ms, fallback: "error", why };
+  }
   try {
     return { data: parseJson<T>(content), live: true, ms };
   } catch {
-    return { data: null, live: true, ms, fallback: "error" };
+    why = content ? "model didn't return JSON" : "model returned nothing";
+    console.warn("tf failed", kind, model, why, content.slice(0, 200));
+    return { data: null, live: true, ms, fallback: "error", why };
   }
 }

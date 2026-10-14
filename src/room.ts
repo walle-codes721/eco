@@ -418,8 +418,9 @@ export class Room extends DurableObject<Env> {
       },
     });
     if (r.data === null) {
-      this.send(["host"], { type: "notice", level: "warn", text: `Translation paused (${r.fallback}).` });
-      return json({ fallback: r.fallback }, 503);
+      const why = "why" in r && r.why ? `${r.fallback}, ${r.why}` : r.fallback;
+      this.send(["host"], { type: "notice", level: "warn", text: `Translation paused (${why}).` });
+      return json({ fallback: why }, 503);
     }
     if (!r.data.src?.trim()) return json({ empty: true });
     if (r.live && isEcho(this.lines, speaker, r.data.src, Date.now())) return json({ dup: true });
