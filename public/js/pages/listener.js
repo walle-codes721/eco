@@ -2,6 +2,7 @@ import { h, icon, api, roomId, who, toast, fmtTime, langName, phoneLang, keepAwa
 import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { t } from "/js/i18n.js";
+import { nearBottom, nextNewCount } from "/js/caps.js";
 
 const id = roomId();
 let meta;
@@ -18,6 +19,8 @@ let lines = [];
 let summary = null; // { text: { en, it, ... } } once the speaker has made one
 const myQs = store(`eco:qs:${id}`) ?? [];
 let live = null;
+let atBottom = true; // smart follow: pinned to live unless the listener scrolls up
+let newCount = 0; // lines that arrived while reading history
 const T = (k) => t(lang, k);
 const textOf = (l) => (lang === "en" ? l.src : l.out?.[lang] ?? l.src);
 
@@ -29,6 +32,8 @@ const bar = h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "
 const statusRow = h("div.status-row");
 const caps = h("div.captions", { "aria-live": "polite" });
 const summaryBox = h("section", { hidden: true });
+const jumpBtn = h("button.caps-jump", { type: "button" });
+const capsWrap = h("div.caps-wrap", {}, caps, jumpBtn);
 const qInput = h("input", { type: "text", maxlength: 300, enterkeyhint: "send" });
 const qSend = h("button.send", { type: "submit", "aria-label": "Send" }, icon("up"));
 const qForm = h("form.ask-box", {}, qInput, qSend);
@@ -36,7 +41,7 @@ const qList = h("div");
 const askHead = h("h2", { style: { fontSize: "20px" } });
 const askSub = h("p.small.muted");
 const main = h("main.phone", {},
-  statusRow, caps,
+  statusRow, capsWrap,
   h("section", { style: { padding: "28px 0 48px" } },
     h("div.divider"),
     h("div.row", { style: { alignItems: "baseline", marginBottom: "4px" } }, askHead),
@@ -73,13 +78,58 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-5).map((l) => h("p", {}, who(meta, l), textOf(l))));
+  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", { onclick: () => showMsg(l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)), textOf(l))));
+  if (atBottom) caps.scrollTop = caps.scrollHeight;
 }
 
+// Tap a caption to read it comfortably: same overlay as the welcome sheet, centered.
+function showMsg(l) {
+  const textLang = lang === "en" || !l.out?.[lang] ? "en" : lang;
+  const close = h("button.btn.ghost", { type: "button" }, icon("x"), T("close"));
+  const wrap = h("div.sheet-wrap.msg-wrap", { onclick: (e) => { if (e.target === wrap) done(); } },
+    h("div.msg-modal", {},
+      h("p.msg-meta", {}, who(meta, l), h("span.when", {}, fmtTime(l.at)), h("span.msg-lang", {}, langName(textLang, textLang))),
+      h("p.msg-text", {}, textOf(l)),
+      h("div.msg-end", {}, close),
+    ));
+  const onKey = (e) => { if (e.key === "Escape") done(); };
+  function done() { wrap.remove(); removeEventListener("keydown", onKey); }
+  close.onclick = done;
+  addEventListener("keydown", onKey);
+  document.body.append(wrap);
+}
+
+function drawJump() {
+  jumpBtn.replaceChildren(`${newCount} ${T("newLines")}`, icon("down"));
+  jumpBtn.classList.toggle("show", !atBottom && newCount > 0);
+}
+
+function snapToLive() {
+  atBottom = true;
+  newCount = 0;
+  drawJump();
+  if (caps.scrollTo) caps.scrollTo({ top: caps.scrollHeight, behavior: "smooth" });
+  else caps.scrollTop = caps.scrollHeight;
+}
+
+caps.onscroll = () => {
+  const was = atBottom;
+  atBottom = nearBottom(caps);
+  // Scrolling only ever clears the pill (the reset half of nextNewCount);
+  // counting up is addLine's job, so mere scrolling never bumps the count.
+  if (atBottom) newCount = 0;
+  if (atBottom !== was) drawJump();
+};
+
+jumpBtn.onclick = snapToLive;
+
 function addLine(l) {
+  atBottom = nearBottom(caps); // re-derive: programmatic scrollTop changes also fire onscroll
   lines.push(l);
   lines = lines.slice(-50);
   drawCaps();
+  newCount = nextNewCount(newCount, atBottom);
+  drawJump();
   caps.lastElementChild?.classList.add("new");
   // A speaker with a voice sample: wait briefly for their cloned clip, else the phone speaks.
   const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
@@ -139,6 +189,7 @@ langSel.onchange = () => {
   labels();
   drawCaps();
   drawSummary();
+  drawJump();
   drawStatus();
 };
 soundBtn.onclick = () => {
@@ -233,6 +284,7 @@ if (meta.status === "ended") {
     if (m.type === "hello") {
       Object.assign(meta, m.meta);
       lines = m.lines ?? [];
+      snapToLive(); // (re)connect: anchor on the newest line, clear any stale pill
       drawCaps();
       if (meta.status === "ended") return recap();
     }
@@ -241,7 +293,7 @@ if (meta.status === "ended") {
     if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") meta.slide = m.n;
-    if (m.type === "reset") (lines = []), (summary = null), drawCaps(), drawSummary();
+    if (m.type === "reset") { lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); }
     if (m.type === "summary") (summary = m.summary), drawSummary();
     if (m.type === "status") {
       meta.status = m.status;
