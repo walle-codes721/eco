@@ -7,6 +7,7 @@ export interface Env {
   ROOM: DurableObjectNamespace<Room>;
   BUDGET: DurableObjectNamespace<Budget>;
   ACCOUNT: DurableObjectNamespace<Account>;
+  FILES: R2Bucket; // slide PDFs and voice samples
   ECO_LIVE?: string;
   ECO_MAX_CALLS?: string;
   ECO_PUBLIC_HOURLY?: string;

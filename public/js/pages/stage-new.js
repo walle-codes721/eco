@@ -1,5 +1,5 @@
 import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName } from "/js/eco.js";
-import { openPdf, pdfPages, renderPage, saveDeck } from "/js/slides.js";
+import { openPdf, pdfPages, renderPage, saveDeck, uploadDeck } from "/js/slides.js";
 
 const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
 const state = { langs: ["it", "es", "hi"], pages: [], bytes: null };
@@ -12,7 +12,7 @@ const thumbs = h("div.thumbs");
 const deckInfo = h("p.small.muted");
 const drop = h("div.drop", { role: "button", tabindex: 0 },
   icon("doc"), h("p", { style: { marginTop: "8px", fontWeight: 600, color: "var(--ink)" } }, "Drop your slides (PDF)"),
-  h("p.small", {}, "Export from Keynote, PowerPoint or Google Slides. The file stays on this laptop; only the text goes to Eco."),
+  h("p.small", {}, "Export from Keynote, PowerPoint or Google Slides. Eco keeps the PDF so the projector and any laptop you present from show your real slides."),
 );
 
 drop.onclick = () => file.click();
@@ -92,7 +92,11 @@ form.onsubmit = async (e) => {
       method: "POST",
       body: { mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs, pages: state.pages, notes: notes.value },
     });
-    if (state.bytes) await saveDeck(id, state.bytes);
+    if (state.bytes) {
+      await saveDeck(id, state.bytes);
+      create.firstChild.textContent = "Uploading slides…";
+      if (!(await uploadDeck(id, state.bytes, hostKey))) toast("Slides didn't upload: this laptop will still show them", 4000);
+    }
     try { localStorage.setItem(`eco:host:${id}`, hostKey); } catch {}
     ready(id, hostKey);
   } catch (err) {
@@ -118,7 +122,7 @@ function ready(id, key) {
         h("a.btn.big", { href: `/${id}/screen`, target: "_blank" }, icon("ext"), "Open projector window"),
       ),
       h("div.row", { style: { justifyContent: "center", flexWrap: "wrap" } }, copy(fullUrl(listen), "Listener link"), copy(fullUrl(presenter), "Presenter link")),
-      h("p.small.muted", { style: { marginTop: "24px" } }, "Keep the presenter link private: it controls the talk. Open the projector window on the same laptop so it shows your PDF; drag it to the projector and press F for full screen."),
+      h("p.small.muted", { style: { marginTop: "24px" } }, "Keep the presenter link private: it controls the talk. Drag the projector window to the projector and press F for full screen."),
     ),
   );
 }

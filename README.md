@@ -70,7 +70,7 @@ Budget (Durable Object): limits + call log for every live call, voice included
 ```
 
 - Cloudflare Workers + Durable Objects. Static pages in `public/`, plain JS, no build step.
-- Slides never leave the speaker's laptop: pdf.js reads them in the browser, and only the text is sent.
+- Slides: pdf.js reads the PDF in the browser and only the text goes to the model. The PDF itself is stored in Eco's own R2 bucket so the projector and other devices can show it; it is never sent to Token Factory.
 - Voice: each speaker records a 30 s sample with an explicit consent checkbox, and only that sample is cloned. Nobody in Counter is ever cloned. `src/voice.ts` is where the cloned-voice call plugs in. Until then, phones use their own speech synthesis.
 
 ## Tests
