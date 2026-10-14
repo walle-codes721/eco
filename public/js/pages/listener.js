@@ -74,8 +74,24 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", {}, h("span.when", {}, fmtTime(l.at)), textOf(l))));
+  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", { onclick: () => showMsg(l) }, h("span.when", {}, fmtTime(l.at)), textOf(l))));
   if (atBottom) caps.scrollTop = caps.scrollHeight;
+}
+
+// Tap a caption to read it comfortably: same overlay as the welcome sheet, centered.
+function showMsg(l) {
+  const close = h("button.btn.ghost", { type: "button" }, icon("x"), T("close"));
+  const wrap = h("div.sheet-wrap.msg-wrap", { onclick: (e) => { if (e.target === wrap) done(); } },
+    h("div.msg-modal", {},
+      h("p", {}, h("span.when", {}, fmtTime(l.at))),
+      h("p.msg-text", {}, textOf(l)),
+      h("div.msg-end", {}, close),
+    ));
+  const onKey = (e) => { if (e.key === "Escape") done(); };
+  function done() { wrap.remove(); removeEventListener("keydown", onKey); }
+  close.onclick = done;
+  addEventListener("keydown", onKey);
+  document.body.append(wrap);
 }
 
 function drawJump() {
