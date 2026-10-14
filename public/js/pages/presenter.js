@@ -1,11 +1,13 @@
-import { h, icon, api, roomId, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
+import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic } from "/js/mic.js";
+import { phraseMic, speakingSignal } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
+import { voiceCard } from "/js/sample.js";
 
 const id = roomId();
 const key = hostKey(id);
-let meta, deck, stopMic = null, inflight = 0, lastLatency = null;
+let meta, deck, stopMic = null, inflight = 0, lastLatency = null, drawSpeakers = () => {};
+const speaking = new Set();
 let lines = [];
 let board = null;
 
@@ -83,6 +85,8 @@ const left = h("div.col-left", {},
     h("div", { style: { width: "70%", margin: "0 auto" } }, qrSvg(fullUrl(`/${id}`))),
     h("p.url", { style: { marginTop: "10px", fontSize: "14px" } }, shortUrl(`/${id}`)),
   ),
+  speakersCard(),
+  host && !demo ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
 );
 
 // ---------- middle: what you said ----------
@@ -132,8 +136,8 @@ function drawLines() {
   const last = lines.at(-1);
   if (!last) return now.replaceChildren(h("p.empty", {}, demo ? "Waiting for the replay…" : "Turn the mic on and start talking. Your words and their translations appear here."));
   now.replaceChildren(
-    ...lines.slice(-4, -1).map((l) => h("p.past", {}, l.src)),
-    h("p.now", {}, last.src),
+    ...lines.slice(-4, -1).map((l) => h("p.past", {}, who(meta, l), l.src)),
+    h("p.now", {}, who(meta, last), last.src),
     ...meta.langs.map((l) => h("div.tr", {}, h("span.chip", { title: langName(l) }, l.toUpperCase()), h("span", {}, last.out[l] ?? "", last.flags?.includes(l) ? h("span.tiny.muted", {}, "  · literal") : null))),
   );
 }
@@ -194,11 +198,12 @@ async function toggleMic() {
   try {
     const end = await phraseMic({
       maxTotalMs: demo ? 30000 : Infinity,
-      onLevel: (l) => (level.style.width = `${Math.round(l * 100)}%`),
+      onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)),
       onPhrase: send,
     });
     stopMic = () => {
       end();
+      live.send({ type: "speaking", on: false });
       stopMic = null;
       micBtn.classList.remove("on");
       micState.textContent = "Off";
@@ -274,8 +279,24 @@ function replaceSlides() {
   return h("div", { style: { marginTop: "10px" } }, btn, file);
 }
 
+/** Who is talking, and (host) a QR for a co-speaker to join from their own phone. */
+function speakersCard() {
+  const list = h("div.row", { style: { flexWrap: "wrap", gap: "8px" } });
+  drawSpeakers = () => list.replaceChildren(...meta.speakers.map((s) =>
+    h(`span.chip${speaking.has(s.id) ? ".speaking" : ""}`, {}, speaking.has(s.id) ? h("span.dot.live") : null, s.name, s.voice ? h("span.faint", { title: "Voice sample saved" }, " · voice") : null)));
+  drawSpeakers();
+  const joinUrl = meta.joinKey ? fullUrl(`/${id}/join#j=${meta.joinKey}`) : null;
+  const qr = h("div", { hidden: true, style: { width: "60%", margin: "12px auto 0" } }, joinUrl ? qrSvg(joinUrl) : null);
+  return h("div.card", {},
+    h("div.card-head", {}, h("span.eyebrow", {}, "Speakers"), h("span.spacer"),
+      joinUrl ? h("button.btn.sm", { type: "button", onclick: () => (qr.hidden = !qr.hidden) }, icon("plus"), "Add a speaker") : null),
+    list,
+    joinUrl ? h("div", {}, qr, h("p.tiny.muted", { style: { marginTop: "8px" } }, "Each co-speaker scans this with their own phone and uses its mic. Eco shows who is talking.")) : null,
+  );
+}
+
 // ---------- live ----------
-connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
+const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
   if (m.type === "deck" || m.type === "slides") return location.reload(); // new slides: simplest to start fresh
   if (m.type === "hello") {
     Object.assign(meta, m.meta);
@@ -288,6 +309,9 @@ connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
   if (m.type === "board") board = m.board;
   if (m.type === "notice") toast(m.text, 4000);
   if (m.type === "reset") (Object.assign(meta, m.meta), (lines = []));
+  if (m.type === "speakers") meta.speakers = m.speakers;
+  if (m.type === "speaking") m.on ? speaking.add(m.speaker) : speaking.delete(m.speaker);
+  if (["hello", "speakers", "speaking", "reset"].includes(m.type)) drawSpeakers();
   if (["hello", "slide", "reset"].includes(m.type)) drawSlides();
   if (["hello", "status", "reset"].includes(m.type)) drawStatus();
   if (["hello", "line", "reset"].includes(m.type)) drawLines();

@@ -21,7 +21,7 @@ document.body.replaceChildren(
   h("main.report", {},
     h("p.eyebrow", {}, "After the talk"),
     h("h1", {}, c.title),
-    h("p.muted", { style: { marginTop: "8px" } }, [c.speaker, new Date().toLocaleDateString(undefined, { dateStyle: "long" })].filter(Boolean).join(" · ")),
+    h("p.muted", { style: { marginTop: "8px" } }, [c.speakers?.length > 1 ? c.speakers.map((s) => `${s.name} (${s.lines} lines)`).join(", ") : c.speaker, new Date().toLocaleDateString(undefined, { dateStyle: "long" })].filter(Boolean).join(" · ")),
     h("div.big-num", {},
       num(fmtTime(c.duration), "duration"),
       num(String(c.peak), "peak listeners"),

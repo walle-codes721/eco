@@ -429,3 +429,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 /* Account */
 .avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
 .account:empty { display: none; }
+
+/* Speakers: name on captions, "now speaking" */
+.who { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--muted); margin-right: 6px; vertical-align: 0.15em; }
+.captions > p:last-child .who { font-size: 13px; color: var(--red); }
+.chip.speaking { color: var(--ink); border-color: var(--red); }
