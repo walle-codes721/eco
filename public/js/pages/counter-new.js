@@ -1,4 +1,4 @@
-import { h, icon, api, qrSvg, fullUrl, shortUrl, toast, langName, phoneLang } from "/js/eco.js";
+import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, phoneLang } from "/js/eco.js";
 import { openPdf, pdfPages } from "/js/slides.js";
 
 const HOURS = ["hours", "Opening hours", "Every day 12:00–23:00. Closed Mondays in November."];
@@ -99,11 +99,12 @@ async function shrink(file, max = 1600) {
 }
 
 const consent = h("input", { type: "checkbox" });
+const link = linkField("counter", name);
 const section = (head, sub, ...body) => h("section.form-section", {}, h("header", {}, h("h2", {}, head), h("p", {}, sub)), h("div.stack", {}, ...body));
 const create = h("button.btn.primary.big", { type: "submit" }, "Create my counter", icon("right"));
 
 const form = h("form", {},
-  section("Your business", "Customers see this name when they scan.", h("label.field", {}, "Name", name), h("div.field", {}, h("span", { style: { fontSize: "14px", fontWeight: 600 } }, "Type"), seg)),
+  section("Your business", "Customers see this name when they scan.", h("label.field", {}, "Name", name), link.el, h("div.field", {}, h("span", { style: { fontSize: "14px", fontWeight: 600 } }, "Type"), seg)),
   section("The basics", "All optional. Eco answers customers from what you write here.", fieldsEl),
   section("More info", "Add as many as you need: a menu, a price list, services, policies.",
     h("div.row", { style: { flexWrap: "wrap" } },
@@ -133,7 +134,7 @@ form.onsubmit = async (e) => {
   if (!pages.length && !confirm("You haven't added any info, so Eco can only translate, not answer. Continue?")) return;
   create.disabled = true;
   try {
-    const { id, hostKey } = await api("/api/rooms", { method: "POST", body: { mode: "counter", title: name.value, bizType: type, ownerLang: ownerLang.value, pages } });
+    const { id, hostKey } = await api("/api/rooms", { method: "POST", body: { mode: "counter", slug: link.value(), title: name.value, bizType: type, ownerLang: ownerLang.value, pages } });
     try { localStorage.setItem(`eco:host:${id}`, hostKey); } catch {}
     ready(id, hostKey);
   } catch (err) {
@@ -143,16 +144,16 @@ form.onsubmit = async (e) => {
 };
 
 function ready(id, key) {
-  const owner = `/o/${id}#k=${key}`;
+  const owner = `/${id}/owner#k=${key}`;
   document.querySelector("main").replaceChildren(h("section.ready.narrow", {},
     h("span.pill.ok", {}, h("span.dot"), "Counter ready"),
     h("h1", { style: { fontSize: "clamp(32px,5vw,48px)", margin: "18px 0 8px", letterSpacing: "-0.04em" } }, name.value),
     h("p.muted", {}, "Print the sticker and put it on the counter. Customers scan it with their phone camera."),
-    h("div", { style: { margin: "28px 0 12px" } }, qrSvg(fullUrl(`/c/${id}`))),
-    h("p.url", { style: { fontSize: "20px" } }, shortUrl(`/c/${id}`)),
+    h("div", { style: { margin: "28px 0 12px" } }, qrSvg(fullUrl(`/${id}`))),
+    h("p.url", { style: { fontSize: "20px" } }, shortUrl(`/${id}`)),
     h("div.row", { style: { justifyContent: "center", flexWrap: "wrap", margin: "32px 0 12px" } },
       h("a.btn.primary.big", { href: owner }, icon("store"), "Open my counter"),
-      h("a.btn.big", { href: `/o/${id}/sticker`, target: "_blank" }, icon("print"), "Print sticker"),
+      h("a.btn.big", { href: `/${id}/sticker`, target: "_blank" }, icon("print"), "Print sticker"),
     ),
     h("button.btn", { type: "button", onclick: () => navigator.clipboard.writeText(fullUrl(owner)).then(() => toast("Counter link copied")) }, icon("copy"), "Copy counter link"),
     h("p.small.muted", { style: { marginTop: "24px" } }, "Open the counter link on the iPad by the till, then use Share → Add to Home Screen. Keep the link private: it's the owner's view."),
@@ -160,7 +161,7 @@ function ready(id, key) {
 }
 
 document.body.replaceChildren(
-  h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), h("span.title.muted", {}, "New counter"))),
+  h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), h("span.title.muted", {}, "New counter"), h("span.spacer"), accountLink())),
   h("main.wrap", { style: { maxWidth: "900px" } },
     h("div.page-head", {}, h("p.eyebrow", {}, "Counter"), h("h1", {}, "Set up your business")),
     form,

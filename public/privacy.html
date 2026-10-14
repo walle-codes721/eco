@@ -8,33 +8,41 @@
 <title>Privacy policy · Eco</title>
 <link rel="icon" href="/favicon.svg">
 <link rel="stylesheet" href="/css/eco.css">
+<style>.legal h2{font-size:21px;margin:32px 0 8px} .legal p,.legal li{color:var(--ink-2,var(--ink));margin:8px 0} .legal ul{padding-left:20px}</style>
 </head>
 <body>
-<header class="bar">
-  <div class="inner">
-    <a class="brand" href="/">Eco</a>
-  </div>
-</header>
-<main class="narrow" style="padding-block:clamp(40px,8vw,88px) 64px;line-height:1.55">
-<h1 style="font-size:clamp(32px,5vw,48px);letter-spacing:-0.045em;line-height:1.05">Privacy policy</h1>
-<p class="muted" style="margin-top:12px">Last updated 14 October 2026. Eco is a hackathon project by Lino Labs, run on a trial basis.</p>
-<h2 style="font-size:20px;margin:36px 0 8px">What we collect</h2>
-<p style="margin-top:8px">When you sign in with Google we receive your name and email address, and nothing else from your Google account. We use them only to identify you and to put your name in your talk and shop links.</p>
-<p style="margin-top:8px">We also store what you create: talk slides and transcripts, shop sources and files, questions asked, and answers given. Listeners and customers who do not sign in are not identified.</p>
-<h2 style="font-size:20px;margin:36px 0 8px">Where it goes</h2>
-<p style="margin-top:8px">To translate and answer, text you provide is sent to AMD Token Factory, which runs open models. AMD logs prompts for about two days under its own terms. Eco is hosted on Cloudflare. We do not sell your data, share it for advertising, or use it to train models.</p>
-<h2 style="font-size:20px;margin:36px 0 8px">Keeping and deleting</h2>
-<p style="margin-top:8px">Content stays until you ask us to delete it. Email us from the address you signed in with and we will remove your account and its content.</p>
-<p style="margin-top:8px">Questions: <a href="mailto:w72861313@gmail.com">w72861313@gmail.com</a>.</p>
-</main>
+<header class="bar"><div class="inner"><a class="brand" href="/">Eco</a><span class="title muted">Privacy policy</span></div></header>
+<main class="wrap legal" style="max-width:760px;padding-bottom:80px">
+<div class="page-head"><p class="eyebrow">Last updated 14 October 2026</p><h1>Privacy policy</h1></div>
+<p>Eco is a hackathon project by Lino Labs, built for the AMD Developer Hackathon ACT III. It translates talks and shop counters live. This page says what it stores and why. Eco has no ads and sells nothing about you.</p>
 
-<footer class="footer">
-  <div class="wrap row" style="flex-wrap:wrap">
-    <span class="brand" style="font-size:15px">Eco</span>
-    <span class="spacer"></span>
-    <a href="/terms">Terms</a>
-    <a href="/">Home</a>
-  </div>
-</footer>
+<h2>If you listen to a talk or talk to a shop</h2>
+<ul>
+<li>You don't need an account. Eco stores no name or email for you.</li>
+<li>Questions you type to a talk, and what you say or type at a shop counter, are stored with that talk or shop so the speaker or owner can see them, together with your chosen language.</li>
+<li>Your phone keeps your language, your questions and your conversation id in its own browser storage. Eco sets no tracking cookies.</li>
+</ul>
+
+<h2>If you give a talk or run a shop</h2>
+<ul>
+<li><b>Google sign-in.</b> If you sign in, Eco receives your name, email address, profile photo and Google account id from Google. It uses them only to keep your talks and shops in your account and to show you who is signed in. Eco does not see your Google password and asks for no other Google data.</li>
+<li><b>Sign-in cookie.</b> One cookie keeps you signed in for 30 days. Signing out deletes it.</li>
+<li><b>Your content.</b> Your slides (PDF and text), notes and shop information are stored so Eco can show the slides and answer questions from them.</li>
+<li><b>Your voice sample.</b> Only if you tick the consent box, Eco stores a short recording of your voice and uses it to speak your talk in other languages in your voice. You can delete it at any time from the speaker page.</li>
+</ul>
+
+<h2>Who processes the data</h2>
+<ul>
+<li><b>Cloudflare</b> hosts Eco and stores the data above.</li>
+<li><b>AMD Token Factory</b> transcribes and translates speech and answers questions. It receives the audio of each spoken phrase and the relevant text. AMD logs prompts for about two days.</li>
+<li><b>The voice service</b> (currently a Hugging Face Space) receives your voice sample and the translated text to produce the spoken audio.</li>
+<li><b>Google</b> handles sign-in for speakers and shop owners.</li>
+</ul>
+
+<h2>How long it's kept</h2>
+<p>Your content stays until you ask us to delete it, or until the project ends. Email <a href="mailto:w72861313@gmail.com">w72861313@gmail.com</a> from the address you signed in with and we will remove your account and its content. You can delete your voice sample yourself at any time. Eco does not use your data to train models.</p>
+
+</main>
+<footer class="footer"><div class="wrap row" style="flex-wrap:wrap"><span class="brand" style="font-size:15px">Eco</span><span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span><span class="spacer"></span><span>MIT</span></div></footer>
 </body>
 </html>

@@ -40,7 +40,7 @@ docker build -t eco . && docker run -p 8787:8787 eco
 
 Mock mode replays recorded sample responses and makes no API calls. Every page shows **Mock**, **Live** or **Replay**, so you always know which mode is running.
 
-Try `/s/demo` (speaker console with a replaying demo talk), `/r/demo` (listener), `/o/gelato` (owner counter) and `/c/gelato` (customer).
+Try `/stage/eco/demo/speak` (speaker console with a replaying demo talk), `/stage/eco/demo` (listener), `/counter/eco/gelato/owner` (owner counter) and `/counter/eco/gelato` (customer). Speakers and owners sign in with Google (`/me` lists their talks and shops); everyone else needs no account.
 
 ## Live mode
 

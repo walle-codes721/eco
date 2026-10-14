@@ -15,6 +15,7 @@ export interface Meta {
   title: string;
   speaker: string;
   hostKey: string;
+  owner: string; // Google sub of the signed-in creator, "" for guest rooms
   langs: string[]; // stage: target languages
   created: number;
   status: Status;
@@ -32,7 +33,7 @@ export interface Convo { id: string; lang: string; started: number; open: boolea
 type Answer = { covered: boolean; answer: string; cite: string; q_en: string };
 type CustomerTurn = { src: string; lang: string; to_owner: string; answer: { covered: boolean; text: string; text_owner: string; cite: string } };
 
-const DEMOS: Record<string, "stage" | "counter"> = { demo: "stage", gelato: "counter" };
+export const DEMOS: Record<string, "stage" | "counter"> = { "stage/eco/demo": "stage", "counter/eco/gelato": "counter" };
 const LIMITS = { ask: [3, 10], voice: [4, 40], turn: [8, 60] } as const; // per visitor per hour: [demo, normal]
 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
@@ -82,9 +83,9 @@ export class Room extends DurableObject<Env> {
 
   // ---------- creation ----------
 
-  async init(id: string, body: any): Promise<{ id: string; hostKey: string } | null> {
+  async init(id: string, body: any, owner = ""): Promise<{ id: string; hostKey: string } | null> {
     if (this.meta) return null;
-    const mode = body.mode === "counter" ? "counter" : "stage";
+    const mode = id.startsWith("counter/") ? "counter" : "stage";
     const s = (v: unknown, n: number) => String(v ?? "").slice(0, n).trim();
     this.meta = {
       id,
@@ -92,6 +93,7 @@ export class Room extends DurableObject<Env> {
       title: s(body.title, 120) || (mode === "stage" ? "Untitled talk" : "My business"),
       speaker: s(body.speaker, 80),
       hostKey: crypto.randomUUID().replaceAll("-", ""),
+      owner,
       langs: (Array.isArray(body.langs) ? body.langs : ["it", "es", "hi"]).map((l: string) => s(l, 5)).slice(0, 3),
       created: Date.now(),
       status: "lobby",
@@ -147,14 +149,15 @@ export class Room extends DurableObject<Env> {
     const id = req.headers.get("x-room") ?? "";
     const action = url.pathname.slice(1);
     if (action === "init") {
-      const made = await this.init(id, await req.json());
+      const made = await this.init(id, await req.json(), req.headers.get("x-user") ?? "");
       return made ? json(made) : json({ error: "exists" }, 409);
     }
     await this.ensureDemo(id);
     if (!this.meta) return json({ error: "Room not found" }, 404);
 
     const m = this.meta;
-    const isHost = req.headers.get("x-key") === m.hostKey || url.searchParams.get("key") === m.hostKey;
+    const user = req.headers.get("x-user");
+    const isHost = req.headers.get("x-key") === m.hostKey || url.searchParams.get("key") === m.hostKey || (!!user && user === m.owner);
     const ip = req.headers.get("x-ip") ?? "?";
 
     switch (`${req.method} ${action}`) {

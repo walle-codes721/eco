@@ -95,3 +95,25 @@ describe("phrase cutter", () => {
     expect(resample(new Float32Array(48000), 48000).length).toBe(16000);
   });
 });
+
+import { signSub, signedSub } from "../src/auth";
+import { nameOk, slugify } from "../src/names";
+
+describe("accounts", () => {
+  it("signs a session and rejects forged or expired ones", async () => {
+    const v = await signSub("secret", "123", 1000);
+    expect(await signedSub("secret", v, 2000)).toBe("123");
+    expect(await signedSub("other", v, 2000)).toBeNull();
+    expect(await signedSub("secret", v.replace("123", "124"), 2000)).toBeNull();
+    expect(await signedSub("secret", v, 1000 + 31 * 86_400_000)).toBeNull();
+    expect(await signedSub("secret", undefined)).toBeNull();
+  });
+  it("makes URL names", () => {
+    expect(slugify("Gelateria Luna – Città")).toBe("gelateria-luna-citta");
+    expect(nameOk("seb")).toBe(true);
+    expect(nameOk("eco")).toBe(false);
+    expect(nameOk("guest-ab12")).toBe(false);
+    expect(nameOk("a")).toBe(false);
+    expect(nameOk("Seb")).toBe(false);
+  });
+});

@@ -19,7 +19,7 @@ npm test
 npm run check
 ```
 
-Demo rooms that work with no key: `/s/demo`, `/r/demo`, `/o/gelato`, `/c/gelato`.
+Demo rooms that work with no key: `/stage/eco/demo/speak`, `/stage/eco/demo`, `/counter/eco/gelato/owner`, `/counter/eco/gelato`.
 
 ## Workflow
 
@@ -51,7 +51,7 @@ Only clone a voice from a sample the speaker recorded themselves, with an explic
 
 - `.dev.vars`, `.env*` and key screenshots are gitignored. Check `git status` before every push.
 - A `.dev.vars.example` shows the variable names with no values.
-- Production secrets (`RADEON_API_KEY`, `ADMIN_KEY`) are set by Seb with `wrangler secret put`.
+- Production secrets (`RADEON_API_KEY`, `ADMIN_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`) are set by Seb with `wrangler secret put`. Without the Google ones, sign-in is hidden and rooms are created as guests.
 
 ## Where things are
 

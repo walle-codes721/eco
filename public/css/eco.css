@@ -425,3 +425,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .sticker .langs { display: flex; flex-direction: column; gap: 2px; font-size: 15px; color: #424245; }
 .sticker .langs b { font-size: 22px; color: #1d1d1f; letter-spacing: -0.03em; }
 @media print { .sticker { box-shadow: none; margin: 0 auto; border: 1px solid #ddd; } }
+
+/* Account */
+.avatar { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.account:empty { display: none; }
