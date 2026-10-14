@@ -320,6 +320,9 @@ export class Room extends DurableObject<Env> {
     if (status === "live") m.endedAt = null;
     await this.save("meta");
     this.send(["listener", "screen", "host"], { type: "status", status, startedAt: m.startedAt, endedAt: m.endedAt });
+    // The talk is over: write the summary now, in the background, so listeners find it on their recap without anyone asking.
+    // A second End with nothing new said is a cache hit (no call), and a failure just leaves the speaker's button.
+    if (status === "ended" && m.mode === "stage") this.ctx.waitUntil(this.summarize(true, "").catch(() => {}));
     return { status };
   }
 
