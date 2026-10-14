@@ -149,3 +149,36 @@ describe("multiple speakers", () => {
     expect(isEcho(said, "s1", "Thanks, and now the prices for tourists.", 2500)).toBe(false);
   });
 });
+
+// @ts-expect-error plain browser module, tested in Node
+import { nearBottom, nextNewCount } from "../public/js/caps.js";
+
+describe("caption scroll position", () => {
+  const view = (scrollTop: number, scrollHeight: number, clientHeight: number) => ({ scrollTop, scrollHeight, clientHeight });
+  it("is at the bottom when within the threshold", () => {
+    expect(nearBottom(view(960, 2000, 1000))).toBe(true);
+  });
+  it("is not at the bottom when scrolled well up", () => {
+    expect(nearBottom(view(400, 2000, 1000))).toBe(false);
+  });
+  it("counts as at the bottom exactly at the threshold", () => {
+    expect(nearBottom(view(952, 2000, 1000))).toBe(true);
+    expect(nearBottom(view(951, 2000, 1000))).toBe(false);
+  });
+  it("counts a view with nothing to scroll as at the bottom", () => {
+    expect(nearBottom(view(0, 800, 1000))).toBe(true);
+  });
+});
+
+describe("new-lines pill counter", () => {
+  it("counts a line that arrives while reading history", () => {
+    expect(nextNewCount(0, false)).toBe(1);
+    expect(nextNewCount(3, false)).toBe(4);
+  });
+  it("resets when a line arrives while following live", () => {
+    expect(nextNewCount(7, true)).toBe(0);
+  });
+  it("resets when the listener taps back to live", () => {
+    expect(nextNewCount(4, true)).toBe(0);
+  });
+});
