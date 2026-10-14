@@ -21,6 +21,8 @@
       { "name": "ACCOUNT", "class_name": "Account" }
     ]
   },
+  // Seb creates it once: npx wrangler r2 bucket create eco-files
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "eco-files" }],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Room", "Budget"] },
     { "tag": "v2", "new_sqlite_classes": ["Account"] }

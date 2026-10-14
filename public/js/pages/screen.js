@@ -70,6 +70,7 @@ addEventListener("keydown", (e) => {
 addEventListener("resize", () => meta.status === "live" && draw());
 
 connect(id, { role: "screen" }, (m) => {
+  if (m.type === "deck" || m.type === "slides") return location.reload(); // new slides: simplest to start fresh
   if (m.type === "hello") Object.assign(meta, m.meta), (last = m.lines?.at(-1) ?? null);
   if (m.type === "slide") meta.slide = m.n;
   if (m.type === "status") Object.assign(meta, { status: m.status });

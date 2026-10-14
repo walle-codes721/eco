@@ -1,7 +1,7 @@
 import { h, icon, api, roomId, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { phraseMic } from "/js/mic.js";
-import { deckFor } from "/js/slides.js";
+import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
 
 const id = roomId();
 const key = hostKey(id);
@@ -69,7 +69,8 @@ const left = h("div.col-left", {},
     slideNow,
     h("p.tiny.muted", { style: { margin: "12px 0 6px" } }, "Next"),
     slideNext,
-    deck.pdf || meta.demo ? null : h("p.tiny.faint", { style: { marginTop: "10px" } }, "Showing text slides: the PDF is on the laptop that created this talk."),
+    deck.pdf || meta.demo ? null : h("p.tiny.faint", { style: { marginTop: "10px" } }, "Showing text slides: no PDF was uploaded for this talk."),
+    host && !meta.demo ? replaceSlides() : null,
   ),
   h("div.card", {},
     h("div.card-head", {}, h("span.eyebrow", {}, demo ? "Your turn" : "Stage input")),
@@ -248,8 +249,34 @@ refreshCalls();
 setInterval(refreshCalls, 15000);
 latency.replaceChildren(h("span.dot"), "— s");
 
+/** Swap the deck before (or between) talks: new PDF to R2, new slide text for answers; notes are kept. */
+function replaceSlides() {
+  const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
+  const btn = h("button.btn.sm", { type: "button", onclick: () => file.click() }, icon("doc"), deck.pdf ? "Replace slides" : "Upload slides (PDF)");
+  file.onchange = async () => {
+    const f = file.files[0];
+    if (!f) return;
+    btn.disabled = true;
+    btn.lastChild.textContent = "Uploading…";
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const pages = await pdfPages(await openPdf(bytes));
+      const { pages: old } = await api(`/api/rooms/${id}/sources`, { key });
+      await api(`/api/rooms/${id}/sources`, { method: "POST", key, body: { pages: [...pages, ...old.filter((p) => p.tag === "notes")] } });
+      await saveDeck(id, bytes);
+      if (!(await uploadDeck(id, bytes, key))) throw new Error("upload");
+    } catch {
+      toast("Couldn't replace the slides");
+      btn.disabled = false;
+      btn.lastChild.textContent = "Replace slides";
+    }
+  };
+  return h("div", { style: { marginTop: "10px" } }, btn, file);
+}
+
 // ---------- live ----------
 connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
+  if (m.type === "deck" || m.type === "slides") return location.reload(); // new slides: simplest to start fresh
   if (m.type === "hello") {
     Object.assign(meta, m.meta);
     lines = m.lines ?? [];
