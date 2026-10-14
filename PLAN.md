@@ -6,8 +6,8 @@ Rules for working here: [CONTRIBUTING.md](CONTRIBUTING.md). Owners are suggestio
 Status as of 13 Oct: Stage and Counter work in mock mode and are deployed at eco.linolabs.co. Not done: first live calls, multiple speakers, cloned voice, the 80% replay switch, device testing, submission material.
 
 1. **Get set up** (everyone, today)
-   a. Clone, `npm install`, `npx wrangler dev`.
-   b. Walk through `/s/demo` + `/r/demo`, then `/o/gelato` + `/c/gelato`, on desktop and on a phone.
+   a. Clone, `npm install`, `npm run dev`.
+   b. Walk through `/stage/eco/demo/speak` + `/stage/eco/demo`, then `/counter/eco/gelato/owner` + `/counter/eco/gelato`, on desktop and on a phone.
    c. Run `npm test` and `npm run check`; read `src/room.ts`, `src/tf.ts`, `src/retrieve.ts`.
    d. Note anything confusing or broken.
 2. **Token Factory spike** (Seb, Tue-Wed, max 10 live calls)
@@ -22,7 +22,7 @@ Status as of 13 Oct: Stage and Counter work in mock mode and are deployed at eco
    c. Late joiners see recent lines; killing the network switches to replay and says so on screen.
 4. **Multiple speakers** (open, Wed-Thu)
    a. `speakers[]` on the room and a `speaker` field on every line (`src/room.ts`).
-   b. `/s/{id}/join`: each co-speaker uses their own device and mic.
+   b. `/stage/{user}/{talk}/join`: each co-speaker uses their own device and mic.
    c. "Now speaking" from the existing pause detector, sent over WebSocket (no API cost).
    d. Name on every caption; board and card split by speaker.
    e. Drop near-duplicate lines when two mics hear the same voice.
@@ -52,7 +52,7 @@ Status as of 13 Oct: Stage and Counter work in mock mode and are deployed at eco
    c. iPad split mode; owner setup and sticker; spoken output.
 10. **Culture adaptations** (open, Thu-Fri, cut first if behind)
     a. One Gemma call per language per deck, cached.
-    b. Approve screen in `/s/new`; only approved swaps used live.
+    b. Approve screen in `/stage/new`; only approved swaps used live.
 11. **Device and browser QA** (Ritik, Wed-Fri)
     a. iOS Safari, Android Chrome, iPad Safari, macOS Chrome with a projector.
     b. Two speakers on two devices; audio after one tap.

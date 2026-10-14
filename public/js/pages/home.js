@@ -1,4 +1,6 @@
-import { $$, icon, qrSvg, fullUrl, api } from "/js/eco.js";
+import { $, $$, icon, qrSvg, fullUrl, api, accountLink } from "/js/eco.js";
+
+$(".bar .inner").append(accountLink());
 
 for (const el of $$("[data-i]")) el.prepend(icon(el.dataset.i));
 for (const el of $$(".qr-slot")) el.append(qrSvg(fullUrl(el.dataset.path)));

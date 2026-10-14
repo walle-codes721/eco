@@ -1,5 +1,5 @@
 // Projector: always dark. Lobby (giant QR) → slides with a QR corner and captions → "Grazie" + recap QR.
-import { h, api, roomId, qrSvg, fullUrl, shortUrl, langName, notFound } from "/js/eco.js";
+import { h, api, roomId, who, qrSvg, fullUrl, shortUrl, langName, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { deckFor } from "/js/slides.js";
 
@@ -12,7 +12,7 @@ try {
   throw new Error("no room");
 }
 const deck = await deckFor(id, meta);
-const url = `/r/${id}`;
+const url = `/${id}`;
 let captions = true;
 let capLangI = 0;
 let last = null;
@@ -60,7 +60,7 @@ function drawCap() {
   cap.hidden = !captions || !last || meta.status !== "live";
   if (cap.hidden) return;
   const l = meta.langs[capLangI % meta.langs.length];
-  cap.replaceChildren(h("span.chip", {}, l.toUpperCase()), last.out[l] ?? last.src);
+  cap.replaceChildren(h("span.chip", {}, l.toUpperCase()), who(meta, last), last.out[l] ?? last.src);
 }
 
 addEventListener("keydown", (e) => {
@@ -70,10 +70,13 @@ addEventListener("keydown", (e) => {
 addEventListener("resize", () => meta.status === "live" && draw());
 
 connect(id, { role: "screen" }, (m) => {
+  if (m.type === "deck" || m.type === "slides") return location.reload(); // new slides: simplest to start fresh
   if (m.type === "hello") Object.assign(meta, m.meta), (last = m.lines?.at(-1) ?? null);
   if (m.type === "slide") meta.slide = m.n;
   if (m.type === "status") Object.assign(meta, { status: m.status });
   if (m.type === "reset") Object.assign(meta, m.meta), (last = null);
+  if (m.type === "speakers") return void (meta.speakers = m.speakers);
+  if (m.type === "speaking") return;
   if (m.type === "line") {
     last = m.line;
     capLangI++; // rotate the projector caption through the room's languages

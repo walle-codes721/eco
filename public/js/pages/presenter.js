@@ -1,11 +1,13 @@
-import { h, icon, api, roomId, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
+import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic } from "/js/mic.js";
-import { deckFor } from "/js/slides.js";
+import { phraseMic, speakingSignal } from "/js/mic.js";
+import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
+import { voiceCard } from "/js/sample.js";
 
 const id = roomId();
 const key = hostKey(id);
-let meta, deck, stopMic = null, inflight = 0, lastLatency = null;
+let meta, deck, stopMic = null, inflight = 0, lastLatency = null, drawSpeakers = () => {};
+const speaking = new Set();
 let lines = [];
 let board = null;
 
@@ -15,7 +17,6 @@ try {
   notFound();
   throw new Error("no room");
 }
-if (meta.mode !== "stage") location.replace(`/o/${id}`);
 const host = meta.host;
 const demo = meta.demo && !host;
 
@@ -25,7 +26,7 @@ if (!host && !meta.demo) {
       h("a.brand", { href: "/" }, "Eco"),
       h("h1", { style: { fontSize: "28px", margin: "24px 0 8px" } }, "This is the speaker's console"),
       h("p.muted", {}, "Open it from the presenter link you got when you created the talk."),
-      h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: `/r/${id}` }, "Join as a listener")),
+      h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: `/${id}` }, "Join as a listener")),
     ),
   );
   throw new Error("not host");
@@ -45,8 +46,8 @@ const bar = h("header.bar", {}, h("div.inner", {},
   modePill(meta), statusPill, timer,
   h("span.spacer"),
   latency, calls,
-  h("a.btn.sm", { href: `/s/${id}/screen`, target: "eco-screen" }, icon("ext"), "Projector"),
-  host ? h("a.btn.sm", { href: `/s/${id}/card` }, "Card") : null,
+  h("a.btn.sm", { href: `/${id}/screen`, target: "eco-screen" }, icon("ext"), "Projector"),
+  host ? h("a.btn.sm", { href: `/${id}/card` }, "Card") : null,
   host ? endBtn : null,
 ));
 
@@ -70,7 +71,8 @@ const left = h("div.col-left", {},
     slideNow,
     h("p.tiny.muted", { style: { margin: "12px 0 6px" } }, "Next"),
     slideNext,
-    deck.pdf || meta.demo ? null : h("p.tiny.faint", { style: { marginTop: "10px" } }, "Showing text slides: the PDF is on the laptop that created this talk."),
+    deck.pdf || meta.demo ? null : h("p.tiny.faint", { style: { marginTop: "10px" } }, "Showing text slides: no PDF was uploaded for this talk."),
+    host && !meta.demo ? replaceSlides() : null,
   ),
   h("div.card", {},
     h("div.card-head", {}, h("span.eyebrow", {}, demo ? "Your turn" : "Stage input")),
@@ -80,9 +82,11 @@ const left = h("div.col-left", {},
   ),
   h("div.card.center", {},
     h("div.card-head", {}, h("span.eyebrow", {}, "Audience link")),
-    h("div", { style: { width: "70%", margin: "0 auto" } }, qrSvg(fullUrl(`/r/${id}`))),
-    h("p.url", { style: { marginTop: "10px", fontSize: "14px" } }, shortUrl(`/r/${id}`)),
+    h("div", { style: { width: "70%", margin: "0 auto" } }, qrSvg(fullUrl(`/${id}`))),
+    h("p.url", { style: { marginTop: "10px", fontSize: "14px" } }, shortUrl(`/${id}`)),
   ),
+  speakersCard(),
+  host && !demo ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
 );
 
 // ---------- middle: what you said ----------
@@ -132,8 +136,8 @@ function drawLines() {
   const last = lines.at(-1);
   if (!last) return now.replaceChildren(h("p.empty", {}, demo ? "Waiting for the replay…" : "Turn the mic on and start talking. Your words and their translations appear here."));
   now.replaceChildren(
-    ...lines.slice(-4, -1).map((l) => h("p.past", {}, l.src)),
-    h("p.now", {}, last.src),
+    ...lines.slice(-4, -1).map((l) => h("p.past", {}, who(meta, l), l.src)),
+    h("p.now", {}, who(meta, last), last.src),
     ...meta.langs.map((l) => h("div.tr", {}, h("span.chip", { title: langName(l) }, l.toUpperCase()), h("span", {}, last.out[l] ?? "", last.flags?.includes(l) ? h("span.tiny.muted", {}, "  · literal") : null))),
   );
 }
@@ -194,11 +198,12 @@ async function toggleMic() {
   try {
     const end = await phraseMic({
       maxTotalMs: demo ? 30000 : Infinity,
-      onLevel: (l) => (level.style.width = `${Math.round(l * 100)}%`),
+      onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)),
       onPhrase: send,
     });
     stopMic = () => {
       end();
+      live.send({ type: "speaking", on: false });
       stopMic = null;
       micBtn.classList.remove("on");
       micState.textContent = "Off";
@@ -249,8 +254,50 @@ refreshCalls();
 setInterval(refreshCalls, 15000);
 latency.replaceChildren(h("span.dot"), "— s");
 
+/** Swap the deck before (or between) talks: new PDF to R2, new slide text for answers; notes are kept. */
+function replaceSlides() {
+  const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
+  const btn = h("button.btn.sm", { type: "button", onclick: () => file.click() }, icon("doc"), deck.pdf ? "Replace slides" : "Upload slides (PDF)");
+  file.onchange = async () => {
+    const f = file.files[0];
+    if (!f) return;
+    btn.disabled = true;
+    btn.lastChild.textContent = "Uploading…";
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const pages = await pdfPages(await openPdf(bytes));
+      const { pages: old } = await api(`/api/rooms/${id}/sources`, { key });
+      await api(`/api/rooms/${id}/sources`, { method: "POST", key, body: { pages: [...pages, ...old.filter((p) => p.tag === "notes")] } });
+      await saveDeck(id, bytes);
+      if (!(await uploadDeck(id, bytes, key))) throw new Error("upload");
+    } catch {
+      toast("Couldn't replace the slides");
+      btn.disabled = false;
+      btn.lastChild.textContent = "Replace slides";
+    }
+  };
+  return h("div", { style: { marginTop: "10px" } }, btn, file);
+}
+
+/** Who is talking, and (host) a QR for a co-speaker to join from their own phone. */
+function speakersCard() {
+  const list = h("div.row", { style: { flexWrap: "wrap", gap: "8px" } });
+  drawSpeakers = () => list.replaceChildren(...meta.speakers.map((s) =>
+    h(`span.chip${speaking.has(s.id) ? ".speaking" : ""}`, {}, speaking.has(s.id) ? h("span.dot.live") : null, s.name, s.voice ? h("span.faint", { title: "Voice sample saved" }, " · voice") : null)));
+  drawSpeakers();
+  const joinUrl = meta.joinKey ? fullUrl(`/${id}/join#j=${meta.joinKey}`) : null;
+  const qr = h("div", { hidden: true, style: { width: "60%", margin: "12px auto 0" } }, joinUrl ? qrSvg(joinUrl) : null);
+  return h("div.card", {},
+    h("div.card-head", {}, h("span.eyebrow", {}, "Speakers"), h("span.spacer"),
+      joinUrl ? h("button.btn.sm", { type: "button", onclick: () => (qr.hidden = !qr.hidden) }, icon("plus"), "Add a speaker") : null),
+    list,
+    joinUrl ? h("div", {}, qr, h("p.tiny.muted", { style: { marginTop: "8px" } }, "Each co-speaker scans this with their own phone and uses its mic. Eco shows who is talking.")) : null,
+  );
+}
+
 // ---------- live ----------
-connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
+const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
+  if (m.type === "deck" || m.type === "slides") return location.reload(); // new slides: simplest to start fresh
   if (m.type === "hello") {
     Object.assign(meta, m.meta);
     lines = m.lines ?? [];
@@ -262,6 +309,9 @@ connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
   if (m.type === "board") board = m.board;
   if (m.type === "notice") toast(m.text, 4000);
   if (m.type === "reset") (Object.assign(meta, m.meta), (lines = []));
+  if (m.type === "speakers") meta.speakers = m.speakers;
+  if (m.type === "speaking") m.on ? speaking.add(m.speaker) : speaking.delete(m.speaker);
+  if (["hello", "speakers", "speaking", "reset"].includes(m.type)) drawSpeakers();
   if (["hello", "slide", "reset"].includes(m.type)) drawSlides();
   if (["hello", "status", "reset"].includes(m.type)) drawStatus();
   if (["hello", "line", "reset"].includes(m.type)) drawLines();

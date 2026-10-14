@@ -1,5 +1,5 @@
-// Slides never leave the speaker's laptop: the PDF lives in IndexedDB, rendered with pdf.js.
-// Other devices (or a missing PDF) fall back to text slides built from the room's page text.
+// Slides: the speaker's PDF, uploaded to Eco (R2) and cached in IndexedDB, rendered with pdf.js.
+// Rooms without an uploaded PDF fall back to text slides built from the room's page text.
 import { h } from "/js/eco.js";
 
 let pdfjs;
@@ -89,9 +89,17 @@ export function textSlide(page, n) {
   );
 }
 
-/** A deck abstraction used by presenter and projector: PDF if this browser has it, text otherwise. */
+/** Uploads the PDF so the projector and other devices show it. Host only. */
+export const uploadDeck = (id, bytes, key) =>
+  fetch(`/api/rooms/${id}/deck`, { method: "PUT", headers: { "content-type": "application/pdf", ...(key ? { "x-key": key } : {}) }, body: bytes }).then((r) => r.ok);
+
+/** A deck abstraction used by presenter and projector: the uploaded PDF if there is one, text otherwise. */
 export async function deckFor(id, meta) {
-  const bytes = await loadDeck(id);
+  let bytes = await loadDeck(id);
+  if (!bytes && meta.deck) {
+    bytes = await fetch(`/api/rooms/${id}/deck`).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => b && new Uint8Array(b)).catch(() => null);
+    if (bytes) saveDeck(id, bytes);
+  }
   const pdf = bytes ? await openPdf(bytes).catch(() => null) : null;
   const count = pdf ? pdf.numPages : Math.max(1, meta.slides.length);
   return {

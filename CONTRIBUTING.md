@@ -14,18 +14,18 @@ Read this before you touch the code or the API. Eco is a hackathon project with 
 
 ```sh
 npm install
-npx wrangler dev        # http://localhost:8787, mock mode, no key needed
+npm run dev             # http://localhost:8787, always mock, even with a key in .dev.vars
 npm test
 npm run check
 ```
 
-Demo rooms that work with no key: `/s/demo`, `/r/demo`, `/o/gelato`, `/c/gelato`.
+Demo rooms that work with no key: `/stage/eco/demo/speak`, `/stage/eco/demo`, `/counter/eco/gelato/owner`, `/counter/eco/gelato`.
 
 ## Workflow
 
 1. Branch from `main`, one branch per task (see [PLAN.md](PLAN.md)).
 2. Run `npm test` and `npm run check` before you open a PR.
-3. Open a PR. Seb merges and deploys. Don't run `wrangler deploy` yourself.
+3. Open a PR. Seb merges. Every merge to `main` deploys to eco.linolabs.co automatically (Cloudflare Workers Builds), so `main` must always work. Don't run `wrangler deploy` yourself.
 4. The repo goes **public (MIT) on Sunday 18 Oct**. Treat every commit as public.
 
 ## Token rules
@@ -51,7 +51,7 @@ Only clone a voice from a sample the speaker recorded themselves, with an explic
 
 - `.dev.vars`, `.env*` and key screenshots are gitignored. Check `git status` before every push.
 - A `.dev.vars.example` shows the variable names with no values.
-- Production secrets (`RADEON_API_KEY`, `ADMIN_KEY`) are set by Seb with `wrangler secret put`.
+- Production secrets (`RADEON_API_KEY`, `ADMIN_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_SECRET`) are set by Seb with `wrangler secret put`. Without the Google ones, sign-in is hidden and rooms are created as guests.
 
 ## Where things are
 

@@ -2,10 +2,10 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt } from "./prompts";
-import { bestSentence, chunkPages, normalize, selectContext, terms, type Chunk } from "./retrieve";
-import { voiceFor } from "./voice";
-import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS } from "./fixtures/demo";
+import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt } from "./prompts";
+import { bestSentence, chunkPages, isEcho, normalize, selectContext, terms, type Chunk } from "./retrieve";
+import { voiceFor, SAMPLE_TEXT } from "./voice";
+import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
 type Status = "lobby" | "live" | "ended";
 
@@ -15,6 +15,7 @@ export interface Meta {
   title: string;
   speaker: string;
   hostKey: string;
+  owner: string; // Google sub of the signed-in creator, "" for guest rooms
   langs: string[]; // stage: target languages
   created: number;
   status: Status;
@@ -24,17 +25,24 @@ export interface Meta {
   demo: boolean;
   bizType: string; // counter
   ownerLang: string; // counter
+  deck?: boolean; // stage: the speaker's PDF is in R2, so every screen can show it
+  speakers?: Speaker[]; // stage: s0 is the host; co-speakers join from their own device
+  joinKey?: string; // stage: in the host's "add a speaker" QR
 }
-export interface Line { seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string> }
+/** One device = one speaker. `key` authorises that device; `voice` = a consented sample is stored. */
+export interface Speaker { id: string; name: string; key: string; voice: boolean }
+export interface Line { speaker?: string; seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string> }
 export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null }
 export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean }
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
 type Answer = { covered: boolean; answer: string; cite: string; q_en: string };
 type CustomerTurn = { src: string; lang: string; to_owner: string; answer: { covered: boolean; text: string; text_owner: string; cite: string } };
 
-const DEMOS: Record<string, "stage" | "counter"> = { demo: "stage", gelato: "counter" };
+export const DEMOS: Record<string, "stage" | "counter"> = { "stage/eco/demo": "stage", "counter/eco/gelato": "counter" };
 const LIMITS = { ask: [3, 10], voice: [4, 40], turn: [8, 60] } as const; // per visitor per hour: [demo, normal]
 
+const rid = () => crypto.randomUUID().replaceAll("-", "");
+const MOCK_LINE = "(Mock mode: Eco heard you. Real transcripts and translations need live mode.)";
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const uid = () => crypto.randomUUID().slice(0, 8);
 
@@ -56,6 +64,8 @@ export class Room extends DurableObject<Env> {
   peak = 0;
   private visitors = new Map<string, number>();
   private mockI = 0;
+  private cloning = 0;
+  private samples = new Map<string, ArrayBuffer>();
   private replayI = 0;
   private replayPausedUntil = 0;
 
@@ -82,9 +92,9 @@ export class Room extends DurableObject<Env> {
 
   // ---------- creation ----------
 
-  async init(id: string, body: any): Promise<{ id: string; hostKey: string } | null> {
+  async init(id: string, body: any, owner = ""): Promise<{ id: string; hostKey: string } | null> {
     if (this.meta) return null;
-    const mode = body.mode === "counter" ? "counter" : "stage";
+    const mode = id.startsWith("counter/") ? "counter" : "stage";
     const s = (v: unknown, n: number) => String(v ?? "").slice(0, n).trim();
     this.meta = {
       id,
@@ -92,6 +102,7 @@ export class Room extends DurableObject<Env> {
       title: s(body.title, 120) || (mode === "stage" ? "Untitled talk" : "My business"),
       speaker: s(body.speaker, 80),
       hostKey: crypto.randomUUID().replaceAll("-", ""),
+      owner,
       langs: (Array.isArray(body.langs) ? body.langs : ["it", "es", "hi"]).map((l: string) => s(l, 5)).slice(0, 3),
       created: Date.now(),
       status: "lobby",
@@ -137,6 +148,9 @@ export class Room extends DurableObject<Env> {
       startedAt: m.startedAt, endedAt: m.endedAt, slide: m.slide, demo: m.demo, bizType: m.bizType, ownerLang: m.ownerLang,
       live: isLive(this.env),
       slides: m.mode === "stage" ? this.pages.filter((p) => p.tag !== "notes") : [],
+      deck: !!m.deck,
+      speakers: (m.speakers ?? []).map(({ id, name, voice }) => ({ id, name, voice })),
+      voice: !!this.env.VOICE_URL,
     };
   }
 
@@ -147,26 +161,35 @@ export class Room extends DurableObject<Env> {
     const id = req.headers.get("x-room") ?? "";
     const action = url.pathname.slice(1);
     if (action === "init") {
-      const made = await this.init(id, await req.json());
+      const made = await this.init(id, await req.json(), req.headers.get("x-user") ?? "");
       return made ? json(made) : json({ error: "exists" }, 409);
     }
     await this.ensureDemo(id);
     if (!this.meta) return json({ error: "Room not found" }, 404);
 
     const m = this.meta;
-    const isHost = req.headers.get("x-key") === m.hostKey || url.searchParams.get("key") === m.hostKey;
+    if (m.mode === "stage" && !m.speakers) {
+      // Also runs once on rooms made before speakers existed, including the live demo room.
+      m.speakers = m.demo ? DEMO_SPEAKERS.map((name, i) => ({ id: `s${i}`, name, key: "", voice: false })) : [{ id: "s0", name: m.speaker || "Speaker", key: "", voice: false }];
+      if (!m.demo) m.joinKey = rid();
+      await this.save("meta");
+    }
+    const user = req.headers.get("x-user");
+    const isHost = req.headers.get("x-key") === m.hostKey || url.searchParams.get("key") === m.hostKey || (!!user && user === m.owner);
     const ip = req.headers.get("x-ip") ?? "?";
+    const sk = req.headers.get("x-speaker-key") ?? url.searchParams.get("sk");
+    const me = isHost ? m.speakers?.[0] : m.speakers?.find((s) => s.key && s.key === sk);
 
     switch (`${req.method} ${action}`) {
       case "GET meta":
-        return json({ ...this.publicMeta(), host: isHost });
+        return json({ ...this.publicMeta(), host: isHost, me: me?.id ?? null, ...(me ? { sampleText: SAMPLE_TEXT } : {}), ...(isHost ? { joinKey: m.joinKey } : {}) });
       case "GET ws":
-        return this.openSocket(url, isHost);
+        return this.openSocket(url, isHost, me);
       case "GET transcript":
         return json({ meta: this.publicMeta(), lines: this.lines });
       case "POST utterance": {
-        if (!isHost && !(m.demo && this.allow(ip, "voice"))) return json({ error: "Not allowed" }, 403);
-        return this.utterance(req, m.demo && !isHost);
+        if (!me && !(m.demo && this.allow(ip, "voice"))) return json({ error: "Not allowed" }, 403);
+        return this.utterance(req, m.demo && !isHost, me?.id ?? "s0");
       }
       case "POST ask":
         return this.ask(await req.json(), ip);
@@ -176,10 +199,62 @@ export class Room extends DurableObject<Env> {
         return isHost || m.demo ? json(this.board()) : json({ error: "Not allowed" }, 403);
       case "GET card":
         return isHost || m.demo ? json(m.mode === "stage" ? this.stageCard() : this.counterCard()) : json({ error: "Not allowed" }, 403);
+      case "GET deck": {
+        const obj = m.deck ? await this.env.FILES.get(`${m.id}/deck.pdf`) : null;
+        return obj ? new Response(obj.body, { headers: { "content-type": "application/pdf", "cache-control": "private, max-age=300" } }) : json({ error: "No slides" }, 404);
+      }
+      case "GET audio": {
+        const obj = await this.env.FILES.get(`${m.id}/audio/${(url.searchParams.get("k") ?? "").replace(/[^a-z0-9-]/g, "")}.wav`);
+        return obj ? new Response(obj.body, { headers: { "content-type": "audio/wav", "cache-control": "public, max-age=86400" } }) : json({ error: "No clip" }, 404);
+      }
+      case "POST join": {
+        // A co-speaker: anyone holding the host's join QR, on their own device.
+        if (m.mode !== "stage" || m.demo || !m.joinKey || req.headers.get("x-join") !== m.joinKey) return json({ error: "Not allowed" }, 403);
+        const body: any = await req.json().catch(() => ({}));
+        if (m.speakers!.length >= 6) return json({ error: "Up to 6 speakers" }, 409);
+        const sp: Speaker = { id: `s${m.speakers!.length}`, name: String(body.name ?? "").trim().slice(0, 60) || `Speaker ${m.speakers!.length + 1}`, key: rid(), voice: false };
+        m.speakers!.push(sp);
+        await this.save("meta");
+        this.sendSpeakers();
+        return json({ id: sp.id, name: sp.name, key: sp.key });
+      }
+      case "PUT voice": {
+        // The speaker's own sample, only with their consent. Stored in R2; deleted with DELETE voice.
+        if (!me || m.demo) return json({ error: "Not allowed" }, 403);
+        if (req.headers.get("x-consent") !== "yes") return json({ error: "Consent needed" }, 400);
+        const wav = await req.arrayBuffer();
+        if (wav.byteLength < 20_000 || wav.byteLength > 1_500_000) return json({ error: "Record about 10 seconds" }, 413);
+        await this.env.FILES.put(`${m.id}/voice/${me.id}.wav`, wav, { httpMetadata: { contentType: "audio/wav" } });
+        this.samples.set(me.id, wav);
+        me.voice = true;
+        await this.save("meta");
+        this.sendSpeakers();
+        return json({ ok: true });
+      }
+      case "DELETE voice": {
+        if (!me) return json({ error: "Not allowed" }, 403);
+        await this.env.FILES.delete(`${m.id}/voice/${me.id}.wav`);
+        this.samples.delete(me.id);
+        me.voice = false;
+        await this.save("meta");
+        this.sendSpeakers();
+        return json({ ok: true });
+      }
       case "GET convos":
         return isHost || m.demo ? json({ convos: this.convos }) : json({ error: "Not allowed" }, 403);
     }
     if (!isHost) return json({ error: "Not allowed" }, 403);
+    if (`${req.method} ${action}` === "PUT deck") {
+      if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
+      const len = Number(req.headers.get("content-length") ?? 0);
+      if (!len || len > 25_000_000) return json({ error: "Send a PDF under 25 MB" }, 413);
+      await this.env.FILES.put(`${m.id}/deck.pdf`, req.body, { httpMetadata: { contentType: "application/pdf" } });
+      m.deck = true;
+      await this.save("meta");
+      this.send(["listener", "screen", "host"], { type: "deck" });
+      return json({ ok: true });
+    }
+    if (`${req.method} ${action}` === "GET sources") return json({ pages: this.pages });
     const body: any = await req.json().catch(() => ({}));
     switch (`${req.method} ${action}`) {
       case "POST slide": {
@@ -200,10 +275,12 @@ export class Room extends DurableObject<Env> {
         return json({ ok: true });
       }
       case "POST sources": {
-        if (m.mode !== "counter") break;
-        this.pages = (Array.isArray(body.pages) ? body.pages : []).map((p: any) => ({ tag: String(p.tag).slice(0, 40), text: String(p.text).slice(0, 8000) }));
+        if (m.demo) return json({ error: "The demo can't be edited" }, 400);
+        this.pages = (Array.isArray(body.pages) ? body.pages : []).slice(0, 200).map((p: any) => ({ tag: String(p.tag ?? "info").slice(0, 40), text: String(p.text ?? "").slice(0, p.tag === "notes" ? 20000 : 8000) })).filter((p: { text: string }) => p.text.trim());
         this.chunks = chunkPages(this.pages);
-        await this.save("pages", "chunks");
+        this.cache = {}; // answers came from the old info
+        await this.save("pages", "chunks", "cache");
+        if (m.mode === "stage") this.send(["listener", "screen", "host"], { type: "slides", slides: this.publicMeta().slides });
         return json({ ok: true, chunks: this.chunks.length });
       }
     }
@@ -239,15 +316,16 @@ export class Room extends DurableObject<Env> {
 
   // ---------- WebSockets (hibernation API) ----------
 
-  private openSocket(url: URL, isHost: boolean): Response {
+  private openSocket(url: URL, isHost: boolean, me?: Speaker): Response {
     const role = url.searchParams.get("role") ?? "listener";
     if ((role === "host" || role === "owner") && !isHost && !this.meta!.demo) return json({ error: "Not allowed" }, 403);
+    if (role === "speaker" && !me) return json({ error: "Not allowed" }, 403);
     const lang = (url.searchParams.get("lang") ?? "en").slice(0, 5);
     const cid = (url.searchParams.get("cid") ?? "").slice(0, 40);
     const pair = new WebSocketPair();
     const tags = [role, `lang:${lang}`, ...(cid ? [`c:${cid}`] : [])];
     this.ctx.acceptWebSocket(pair[1], tags);
-    pair[1].serializeAttachment({ role, lang, cid });
+    pair[1].serializeAttachment({ role, lang, cid, speaker: role === "host" || role === "speaker" ? me?.id ?? "s0" : null });
 
     const m = this.meta!;
     const hello: Record<string, unknown> = { type: "hello", meta: this.publicMeta() };
@@ -271,6 +349,9 @@ export class Room extends DurableObject<Env> {
       return;
     }
     if (d.type === "ping") ws.send('{"type":"pong"}');
+    // "Now speaking": the speaker's own mic level decides, sent by their device. No API call.
+    const sid = ws.deserializeAttachment()?.speaker;
+    if (d.type === "speaking" && sid) this.send(["listener", "screen", "host", "speaker"], { type: "speaking", speaker: sid, on: !!d.on });
     if (d.type === "lang" && typeof d.lang === "string") {
       ws.serializeAttachment({ ...ws.deserializeAttachment(), lang: d.lang.slice(0, 5) });
       this.presence();
@@ -289,6 +370,10 @@ export class Room extends DurableObject<Env> {
           ws.send(s);
         } catch {}
       }
+  }
+
+  private sendSpeakers() {
+    this.send(["listener", "screen", "host", "speaker"], { type: "speakers", speakers: this.publicMeta().speakers });
   }
 
   private listenerLangs(): Record<string, number> {
@@ -315,7 +400,7 @@ export class Room extends DurableObject<Env> {
 
   // ---------- Stage ----------
 
-  private async utterance(req: Request, tryVoice: boolean): Promise<Response> {
+  private async utterance(req: Request, tryVoice: boolean, speaker: string): Promise<Response> {
     const m = this.meta!;
     if (m.status === "ended") return json({ error: "Talk ended" }, 409);
     const buf = await req.arrayBuffer();
@@ -327,6 +412,7 @@ export class Room extends DurableObject<Env> {
     const r = await tf(this.env, "utterance", MODELS.audio, utterancePrompt(b64(buf), m.langs, prev), {
       pub: m.demo,
       mock: () => {
+        if (!m.demo) return { src: MOCK_LINE, out: Object.fromEntries(m.langs.map((l) => [l, MOCK_LINE])), flags: ["mock"] };
         const d = DEMO_TALK[this.mockI++ % DEMO_TALK.length];
         return { src: d.src, out: Object.fromEntries(m.langs.map((l) => [l, d.out[l] ?? d.src])), flags: [] as string[] };
       },
@@ -336,20 +422,51 @@ export class Room extends DurableObject<Env> {
       return json({ fallback: r.fallback }, 503);
     }
     if (!r.data.src?.trim()) return json({ empty: true });
+    if (r.live && isEcho(this.lines, speaker, r.data.src, Date.now())) return json({ dup: true });
     if (m.status === "lobby") await this.setStatus("live");
-    const line = await this.addLine({ src: r.data.src, out: r.data.out ?? {}, flags: r.data.flags ?? [], ms: Date.now() - t0, live: r.live });
+    const line = await this.addLine({ speaker, src: r.data.src, out: r.data.out ?? {}, flags: r.data.flags ?? [], ms: Date.now() - t0, live: r.live });
     return json({ line });
   }
 
-  private async addLine(p: Pick<Line, "src" | "out" | "flags" | "ms" | "live">): Promise<Line> {
+  private async addLine(p: Pick<Line, "speaker" | "src" | "out" | "flags" | "ms" | "live">): Promise<Line> {
     const line: Line = { seq: (this.lines.at(-1)?.seq ?? 0) + 1, t: Date.now(), at: this.elapsed(), slide: this.meta!.slide, ...p };
-    const audio = await voiceFor(this.env, line.out);
-    if (audio) line.audio = audio;
     this.lines.push(line);
     if (this.lines.length > 600) this.lines.splice(0, this.lines.length - 600);
     await this.save("lines");
-    this.send(["listener", "screen", "host"], { type: "line", line });
+    this.send(["listener", "screen", "host", "speaker"], { type: "line", line });
+    this.ctx.waitUntil(this.clone(line));
     return line;
+  }
+
+  /** The line in its speaker's cloned voice, one clip per language that has listeners right now. */
+  private async clone(line: Line) {
+    const sp = this.meta!.speakers?.find((s) => s.id === line.speaker);
+    if (!this.env.VOICE_URL || !sp?.voice || this.cloning >= 2) return; // busy: phones fall back to their own voice
+    const langs = Object.keys(this.listenerLangs()).filter((l) => line.out[l]);
+    if (!langs.length) return;
+    this.cloning++;
+    try {
+      let sample = this.samples.get(sp.id);
+      if (!sample) {
+        sample = await (await this.env.FILES.get(`${this.meta!.id}/voice/${sp.id}.wav`))?.arrayBuffer();
+        if (!sample) return;
+        this.samples.set(sp.id, sample);
+      }
+      const audio: Record<string, string> = {};
+      await Promise.all(langs.map(async (lang) => {
+        const wav = await voiceFor(this.env, sample!, line.out[lang], lang);
+        if (!wav) return;
+        const k = `${line.seq}-${lang}`;
+        await this.env.FILES.put(`${this.meta!.id}/audio/${k}.wav`, wav);
+        audio[lang] = `/api/rooms/${this.meta!.id}/audio?k=${k}`;
+      }));
+      if (!Object.keys(audio).length) return;
+      const stored = this.lines.find((l) => l.seq === line.seq);
+      if (stored) (stored.audio = { ...stored.audio, ...audio }), await this.save("lines");
+      this.send(["listener"], { type: "audio", seq: line.seq, audio });
+    } finally {
+      this.cloning--;
+    }
   }
 
   /** Deck chunks plus what the speaker has said so far, ~150 words per transcript chunk. */
@@ -452,6 +569,7 @@ export class Room extends DurableObject<Env> {
       worstSlide: worst ? { slide: Number(worst[0]), count: worst[1], title: this.pages[Number(worst[0]) - 1]?.text.split("\n")[0] ?? "" } : null,
       unanswered: b.queue.filter((g) => !g.answeredAt).map((g) => ({ q: g.q, count: g.count })),
       p50: b.p50,
+      speakers: (m.speakers ?? []).map((s) => ({ name: s.name, lines: this.lines.filter((l) => (l.speaker ?? "s0") === s.id).length })),
     };
   }
 
@@ -480,7 +598,10 @@ export class Room extends DurableObject<Env> {
       await this.save("meta");
       this.send(["listener", "screen", "host"], { type: "slide", n: d.slide });
     }
-    await this.addLine({ src: d.src, out: d.out, flags: [], ms: 0, live: false });
+    if (d.speaker !== this.lines.at(-1)?.speaker) {
+      for (const s of m.speakers ?? []) this.send(["listener", "screen", "host"], { type: "speaking", speaker: s.id, on: s.id === d.speaker });
+    }
+    await this.addLine({ speaker: d.speaker, src: d.src, out: d.out, flags: [], ms: 0, live: false });
     const next = DEMO_TALK[this.replayI];
     await this.ctx.storage.setAlarm(Date.now() + (next ? next.delay : 9000));
   }
@@ -514,10 +635,11 @@ export class Room extends DurableObject<Env> {
 
     if (side === "customer") {
       const { picked } = selectContext(this.chunks, text);
-      const r = await tf<CustomerTurn>(this.env, "turn", MODELS.audio, customerTurnPrompt({ name: m.title, type: m.bizType, ownerLang: m.ownerLang }, picked, input), {
+      const r = await tf<CustomerTurn>(this.env, "turn", turnModel(input), customerTurnPrompt({ name: m.title, type: m.bizType, ownerLang: m.ownerLang }, picked, input), {
         pub: m.demo,
         mock: () => {
-          const seed = text ? DEMO_CONVOS.find((c) => normalize(c.customer) === normalize(text)) : DEMO_CONVOS[this.mockI++ % DEMO_CONVOS.length];
+          if (!text && !m.demo) return { src: MOCK_LINE, lang: hint, to_owner: MOCK_LINE, answer: { covered: false, text: "", text_owner: "", cite: "" } };
+          const seed = !m.demo ? null : text ? DEMO_CONVOS.find((c) => normalize(c.customer) === normalize(text)) : DEMO_CONVOS[this.mockI++ % DEMO_CONVOS.length];
           if (seed) return { src: seed.customer, lang: seed.lang, to_owner: seed.to_owner, answer: seed.answer };
           const b = bestSentence(text, selectContext(this.chunks, text).best);
           return { src: text, lang: hint, to_owner: text, answer: { covered: b.covered, text: b.text, text_owner: b.text, cite: b.cite } };
@@ -531,7 +653,7 @@ export class Room extends DurableObject<Env> {
       if (covered) added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: d.answer.text, out: d.answer.text_owner || d.answer.text, cite: d.answer.cite, live: r.live });
       convo.open = !covered;
     } else {
-      const r = await tf<{ src: string; out: string }>(this.env, "turn", MODELS.audio, ownerTurnPrompt(m.ownerLang, convo.lang, input), {
+      const r = await tf<{ src: string; out: string }>(this.env, "turn", turnModel(input), ownerTurnPrompt(m.ownerLang, convo.lang, input), {
         pub: m.demo,
         mock: () => ({ src: text || "(audio)", out: text || "(audio)" }),
       });
@@ -576,3 +698,4 @@ export class Room extends DurableObject<Env> {
     };
   }
 }
+

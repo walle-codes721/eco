@@ -2,3 +2,7 @@
 # Only Seb sets real values. Never commit .dev.vars.
 RADEON_API_KEY=
 ADMIN_KEY=
+# Google sign-in (OAuth client "Web", redirect http://localhost:8787/auth/callback). Any long random SESSION_SECRET.
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+SESSION_SECRET=
