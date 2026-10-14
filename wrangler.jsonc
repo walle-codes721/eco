@@ -12,20 +12,24 @@
     "directory": "public",
     "binding": "ASSETS",
     "html_handling": "drop-trailing-slash",
-    "run_worker_first": ["/api/*", "/s/*", "/r/*", "/o/*", "/c/*"]
+    "run_worker_first": ["/api/*", "/auth/*", "/me", "/stage/*", "/counter/*", "/s/*", "/r/*", "/o/*", "/c/*"]
   },
   "durable_objects": {
     "bindings": [
       { "name": "ROOM", "class_name": "Room" },
-      { "name": "BUDGET", "class_name": "Budget" }
+      { "name": "BUDGET", "class_name": "Budget" },
+      { "name": "ACCOUNT", "class_name": "Account" }
     ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Budget"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Room", "Budget"] },
+    { "tag": "v2", "new_sqlite_classes": ["Account"] }
+  ],
   // Live needs ECO_LIVE="1" AND the RADEON_API_KEY secret; without the key it stays mock. Seb sets the key.
   "vars": {
     "ECO_LIVE": "1",
     "ECO_MAX_CALLS": "50",
     "ECO_PUBLIC_HOURLY": "30"
   }
-  // Secrets (set by Seb, never in this file): RADEON_API_KEY, ADMIN_KEY
+  // Secrets (set by Seb, never in this file): RADEON_API_KEY, ADMIN_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SESSION_SECRET
 }

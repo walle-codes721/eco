@@ -12,7 +12,7 @@ try {
   throw new Error("no room");
 }
 const deck = await deckFor(id, meta);
-const url = `/r/${id}`;
+const url = `/${id}`;
 let captions = true;
 let capLangI = 0;
 let last = null;

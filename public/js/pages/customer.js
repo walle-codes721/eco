@@ -12,7 +12,6 @@ try {
   notFound();
   throw new Error("no room");
 }
-if (meta.mode !== "counter") location.replace(`/r/${id}`);
 
 const cid = store(`eco:cid:${id}`) ?? (store(`eco:cid:${id}`, `c${crypto.randomUUID().slice(0, 10)}`), store(`eco:cid:${id}`));
 let lang = store(`eco:clang:${id}`) ?? phoneLang();

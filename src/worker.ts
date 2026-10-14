@@ -1,31 +1,41 @@
 import type { Env } from "./env";
 import { tf } from "./tf";
 import { MODELS, extractPrompt } from "./prompts";
+import { authRoute, sessionSub } from "./auth";
+import { NAME, slugify } from "./names";
 
 export { Room } from "./room";
 export { Budget } from "./budget";
+export { Account } from "./account";
 
-const ID = /^[a-z0-9]{3,12}$/;
-const ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
-const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => ALPHABET[b % ALPHABET.length]).join("");
+const N = "[a-z0-9][a-z0-9-]{1,46}"; // a user, talk or shop name in a URL
+const ROOM = new RegExp(`^(stage|counter)/${N}/${N}$`);
 
-/** URL path → static page. Order matters: "new" before "{id}". */
+/** URL path → static page. Order matters: "new" before "{user}". */
 const PAGES: [RegExp, string][] = [
-  [/^\/s\/new$/, "/stage-new"],
-  [/^\/s\/([a-z0-9]+)\/screen$/, "/screen"],
-  [/^\/s\/([a-z0-9]+)\/card$/, "/stage-card"],
-  [/^\/s\/([a-z0-9]+)$/, "/presenter"],
-  [/^\/r\/([a-z0-9]+)$/, "/listener"],
-  [/^\/o\/new$/, "/counter-new"],
-  [/^\/o\/([a-z0-9]+)\/card$/, "/counter-card"],
-  [/^\/o\/([a-z0-9]+)\/sticker$/, "/sticker"],
-  [/^\/o\/([a-z0-9]+)$/, "/owner"],
-  [/^\/c\/([a-z0-9]+)$/, "/customer"],
+  [/^\/me$/, "/me"],
+  [/^\/stage\/new$/, "/stage-new"],
+  [/^\/counter\/new$/, "/counter-new"],
+  [new RegExp(`^/stage/${N}/${N}/speak$`), "/presenter"],
+  [new RegExp(`^/stage/${N}/${N}/screen$`), "/screen"],
+  [new RegExp(`^/stage/${N}/${N}/card$`), "/stage-card"],
+  [new RegExp(`^/stage/${N}/${N}$`), "/listener"],
+  [new RegExp(`^/counter/${N}/${N}/owner$`), "/owner"],
+  [new RegExp(`^/counter/${N}/${N}/card$`), "/counter-card"],
+  [new RegExp(`^/counter/${N}/${N}/sticker$`), "/sticker"],
+  [new RegExp(`^/counter/${N}/${N}$`), "/customer"],
 ];
+
+/** Links printed before the rename keep working for the two demo rooms. */
+export const OLD: Record<string, string> = {
+  "/s/demo": "/stage/eco/demo/speak", "/s/demo/screen": "/stage/eco/demo/screen", "/s/demo/card": "/stage/eco/demo/card", "/r/demo": "/stage/eco/demo",
+  "/o/gelato": "/counter/eco/gelato/owner", "/o/gelato/card": "/counter/eco/gelato/card", "/o/gelato/sticker": "/counter/eco/gelato/sticker", "/c/gelato": "/counter/eco/gelato",
+  "/s/new": "/stage/new", "/o/new": "/counter/new",
+};
 
 const SECURITY = {
   "content-security-policy":
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; " +
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://lh3.googleusercontent.com; " +
     "media-src 'self' blob: data:; connect-src 'self' wss: ws:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
@@ -48,6 +58,8 @@ export default {
     const ip = req.headers.get("cf-connecting-ip") ?? "local";
 
     if (path.startsWith("/api/")) return secure(await api(req, env, url, path, ip));
+    if (path.startsWith("/auth/")) return secure((await authRoute(req, env, url, path)) ?? new Response("Not found", { status: 404 }));
+    if (OLD[path]) return Response.redirect(new URL(OLD[path], url).toString(), 301);
 
     for (const [re, page] of PAGES) {
       if (re.test(path)) {
@@ -62,12 +74,31 @@ export default {
 async function api(req: Request, env: Env, url: URL, path: string, ip: string): Promise<Response> {
   const budget = () => env.BUDGET.get(env.BUDGET.idFromName("global"));
 
+  const sub = await sessionSub(req, env);
+  const account = (key: string) => env.ACCOUNT.get(env.ACCOUNT.idFromName(key));
+
+  if (path === "/api/me") {
+    if (!sub) return json({ user: null, signin: !!env.GOOGLE_CLIENT_ID });
+    if (req.method === "POST") {
+      const { name } = (await req.json().catch(() => ({}))) as { name?: string };
+      const r = await account(`u:${sub}`).rename(String(name ?? "").toLowerCase());
+      return json(r, r.ok ? 200 : 400);
+    }
+    return json({ user: await account(`u:${sub}`).me() });
+  }
+
   if (path === "/api/rooms" && req.method === "POST") {
     const body = await req.text();
     if (body.length > 400_000) return json({ error: "Too large" }, 413);
+    const b = JSON.parse(body || "{}");
+    const kind = b.mode === "counter" ? "counter" : "stage";
+    const me = sub ? await account(`u:${sub}`).me() : null;
     for (let i = 0; i < 5; i++) {
-      const id = newId();
-      const res = await room(env, id, "init", new Request("https://room/init", { method: "POST", body }), ip);
+      // Signed in: /stage/{you}/{talk}, saved to your account. Guest: /stage/guest-xxxx/{talk}, host key only.
+      const user = me?.handle ?? `guest-${crypto.randomUUID().slice(0, 6)}`;
+      const slug = me ? await account(`u:${sub}`).addRoom(kind, String(b.slug ?? ""), String(b.title ?? "")) : slugify(String(b.slug || b.title || "")).slice(0, 36).replace(/-+$/, "") || kind;
+      const id = `${kind}/${user}/${NAME.test(slug) ? slug : `${kind}-1`}`;
+      const res = await room(env, id, "init", new Request("https://room/init", { method: "POST", body }), ip, sub);
       if (res.status !== 409) return res;
     }
     return json({ error: "Try again" }, 503);
@@ -93,17 +124,18 @@ async function api(req: Request, env: Env, url: URL, path: string, ip: string): 
     if (path === "/api/admin/reset" && req.method === "POST") return (await budget().reset(), json({ ok: true }));
   }
 
-  const m = path.match(/^\/api\/rooms\/([a-z0-9]+)\/([a-z]+)$/);
-  if (m && ID.test(m[1])) {
+  const m = path.match(/^\/api\/rooms\/(.+)\/([a-z]+)$/);
+  if (m && ROOM.test(m[1])) {
     const inner = new Request(`https://room/${m[2]}${url.search}`, req);
-    return room(env, m[1], m[2], inner, ip);
+    return room(env, m[1], m[2], inner, ip, sub);
   }
   return json({ error: "Not found" }, 404);
 }
 
-function room(env: Env, id: string, _action: string, req: Request, ip: string): Promise<Response> {
+function room(env: Env, id: string, _action: string, req: Request, ip: string, sub: string | null): Promise<Response> {
   const headers = new Headers(req.headers);
   headers.set("x-room", id);
   headers.set("x-ip", ip);
+  headers.set("x-user", sub ?? ""); // always overwritten: a browser can't claim to be someone
   return env.ROOM.get(env.ROOM.idFromName(id)).fetch(new Request(req, { headers }));
 }

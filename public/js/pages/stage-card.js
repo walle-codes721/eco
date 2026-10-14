@@ -16,7 +16,7 @@ const num = (n, label) => h("div.card", {}, h("div.stat", {}, n), h("p.small.mut
 document.body.replaceChildren(
   h("header.bar.no-print", {}, h("div.inner", {},
     h("a.brand", { href: "/" }, "Eco"), h("span.spacer"),
-    h("a.btn.sm", { href: `/s/${id}` }, "Back to console"),
+    h("a.btn.sm", { href: `/${id}/speak` }, "Back to console"),
     h("button.btn.sm.primary", { type: "button", onclick: () => print() }, icon("print"), "Print"))),
   h("main.report", {},
     h("p.eyebrow", {}, "After the talk"),

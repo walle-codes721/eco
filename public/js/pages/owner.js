@@ -12,13 +12,12 @@ try {
   notFound();
   throw new Error("no room");
 }
-if (meta.mode !== "counter") location.replace(`/s/${id}`);
 if (!meta.host && !meta.demo) {
   document.body.replaceChildren(h("main.narrow.center", { style: { paddingTop: "20vh" } },
     h("a.brand", { href: "/" }, "Eco"),
     h("h1", { style: { fontSize: "28px", margin: "24px 0 8px" } }, "This is the owner's counter"),
     h("p.muted", {}, "Open it from the counter link you got at setup."),
-    h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: `/c/${id}` }, "Open the customer view"))));
+    h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: `/${id}` }, "Open the customer view"))));
   throw new Error("not host");
 }
 
@@ -60,8 +59,8 @@ document.body.replaceChildren(
     h("a.brand", { href: "/" }, "Eco"), h("span.title.truncate", {}, meta.title), modePill(meta),
     h("span.spacer"), soundBtn,
     h("button.btn.sm", { type: "button", onclick: () => faceToFace() }, icon("split"), L.f2f),
-    h("a.btn.sm", { href: `/o/${id}/sticker`, target: "_blank" }, icon("qr"), L.sticker),
-    h("a.btn.sm", { href: `/o/${id}/card` }, L.card))),
+    h("a.btn.sm", { href: `/${id}/sticker`, target: "_blank" }, icon("qr"), L.sticker),
+    h("a.btn.sm", { href: `/${id}/card` }, L.card))),
   h("div.owner", {}, listEl, h("main", {}, threadWrap, replyBar)),
 );
 
@@ -86,7 +85,7 @@ function drawList() {
     ...(open.length ? [h("p.eyebrow", { style: { padding: "4px 14px" } }, L.needs), ...open.map(item)] : []),
     h("p.eyebrow", { style: { padding: "12px 14px 4px" } }, L.convos),
     ...(sorted.filter((c) => !c.open).map(item)),
-    convos.length ? null : h("div.empty", {}, h("p", {}, L.empty), h("div", { style: { width: "140px", margin: "18px auto 6px" } }, qrSvg(fullUrl(`/c/${id}`))), h("p.url.tiny", {}, shortUrl(`/c/${id}`))),
+    convos.length ? null : h("div.empty", {}, h("p", {}, L.empty), h("div", { style: { width: "140px", margin: "18px auto 6px" } }, qrSvg(fullUrl(`/${id}`))), h("p.url.tiny", {}, shortUrl(`/${id}`))),
   ].filter(Boolean));
 }
 

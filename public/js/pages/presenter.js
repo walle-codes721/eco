@@ -15,7 +15,6 @@ try {
   notFound();
   throw new Error("no room");
 }
-if (meta.mode !== "stage") location.replace(`/o/${id}`);
 const host = meta.host;
 const demo = meta.demo && !host;
 
@@ -25,7 +24,7 @@ if (!host && !meta.demo) {
       h("a.brand", { href: "/" }, "Eco"),
       h("h1", { style: { fontSize: "28px", margin: "24px 0 8px" } }, "This is the speaker's console"),
       h("p.muted", {}, "Open it from the presenter link you got when you created the talk."),
-      h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: `/r/${id}` }, "Join as a listener")),
+      h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: `/${id}` }, "Join as a listener")),
     ),
   );
   throw new Error("not host");
@@ -45,8 +44,8 @@ const bar = h("header.bar", {}, h("div.inner", {},
   modePill(meta), statusPill, timer,
   h("span.spacer"),
   latency, calls,
-  h("a.btn.sm", { href: `/s/${id}/screen`, target: "eco-screen" }, icon("ext"), "Projector"),
-  host ? h("a.btn.sm", { href: `/s/${id}/card` }, "Card") : null,
+  h("a.btn.sm", { href: `/${id}/screen`, target: "eco-screen" }, icon("ext"), "Projector"),
+  host ? h("a.btn.sm", { href: `/${id}/card` }, "Card") : null,
   host ? endBtn : null,
 ));
 
@@ -80,8 +79,8 @@ const left = h("div.col-left", {},
   ),
   h("div.card.center", {},
     h("div.card-head", {}, h("span.eyebrow", {}, "Audience link")),
-    h("div", { style: { width: "70%", margin: "0 auto" } }, qrSvg(fullUrl(`/r/${id}`))),
-    h("p.url", { style: { marginTop: "10px", fontSize: "14px" } }, shortUrl(`/r/${id}`)),
+    h("div", { style: { width: "70%", margin: "0 auto" } }, qrSvg(fullUrl(`/${id}`))),
+    h("p.url", { style: { marginTop: "10px", fontSize: "14px" } }, shortUrl(`/${id}`)),
   ),
 );
 

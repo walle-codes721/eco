@@ -11,7 +11,6 @@ try {
   notFound();
   throw new Error("no room");
 }
-if (meta.mode !== "stage") location.replace(`/c/${id}`);
 
 const choices = [...meta.langs, "en"];
 let lang = store(`eco:lang:${id}`) ?? (choices.includes(phoneLang()) ? phoneLang() : meta.langs[0]);
