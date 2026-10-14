@@ -251,7 +251,9 @@ export class Room extends DurableObject<Env> {
 
     const m = this.meta!;
     const hello: Record<string, unknown> = { type: "hello", meta: this.publicMeta() };
-    if (m.mode === "stage") hello.lines = this.lines.slice(role === "listener" ? -5 : -50);
+    // 50 = the client's line buffer (public/js/pages/listener.js); the two must stay in lockstep,
+    // otherwise a late joiner can't scroll back through everything a long-time listener has.
+    if (m.mode === "stage") hello.lines = this.lines.slice(-50);
     if (role === "host") hello.board = this.board();
     if (role === "owner") hello.convos = this.convos;
     if (role === "customer") hello.convo = this.convos.find((c) => c.id === cid) ?? null;

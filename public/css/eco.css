@@ -210,7 +210,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .url { font-family: var(--mono); font-weight: 600; letter-spacing: 0; }
 
 /* ---------- captions (stepped fade from the Stitch Audience Room) ---------- */
-.captions { display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; min-height: 40vh; }
+.captions { display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; min-height: 40vh; max-height: 46vh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.captions::-webkit-scrollbar { display: none; }
 .captions > p { color: var(--faint); font-size: 15px; transition: all 0.5s var(--ease); }
 .captions > p:nth-last-child(5) { opacity: 0.35; font-size: 14px; }
 .captions > p:nth-last-child(4) { opacity: 0.5; }
@@ -219,7 +220,20 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .captions > p:last-child { color: var(--ink); font-size: clamp(24px, 6.4vw, 34px); line-height: 1.25; font-weight: 600; letter-spacing: -0.025em; }
 .captions > p.new { animation: rise 0.6s var(--ease); }
 .captions .flag { font-size: 12px; color: var(--muted); font-weight: 500; }
+.captions .when { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; margin-right: 7px; }
 @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+/* jump-to-live pill, floats at the bottom edge of the captions area */
+.caps-wrap { position: relative; }
+.caps-jump {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 10px; z-index: 2;
+  display: none; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line-2); cursor: pointer;
+  background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  color: var(--ink); font-size: 13px; font-weight: 600;
+}
+.caps-jump.show { display: inline-flex; }
+.caps-jump svg { width: 14px; height: 14px; }
 
 /* ---------- hold to talk ---------- */
 .hold {

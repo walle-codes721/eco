@@ -2,6 +2,7 @@ import { h, icon, api, roomId, toast, fmtTime, langName, phoneLang, keepAwake, s
 import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { t } from "/js/i18n.js";
+import { nearBottom, nextNewCount } from "/js/caps.js";
 
 const id = roomId();
 let meta;
@@ -18,6 +19,8 @@ let lang = store(`eco:lang:${id}`) ?? (choices.includes(phoneLang()) ? phoneLang
 let lines = [];
 const myQs = store(`eco:qs:${id}`) ?? [];
 let live = null;
+let atBottom = true; // smart follow: pinned to live unless the listener scrolls up
+let newCount = 0; // lines that arrived while reading history
 const T = (k) => t(lang, k);
 const textOf = (l) => (lang === "en" ? l.src : l.out?.[lang] ?? l.src);
 
@@ -28,6 +31,8 @@ const titleEl = h("span.title.truncate", {}, meta.title);
 const bar = h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), titleEl, h("span.spacer"), langSel, soundBtn));
 const statusRow = h("div.status-row");
 const caps = h("div.captions", { "aria-live": "polite" });
+const jumpBtn = h("button.caps-jump", { type: "button" });
+const capsWrap = h("div.caps-wrap", {}, caps, jumpBtn);
 const qInput = h("input", { type: "text", maxlength: 300, enterkeyhint: "send" });
 const qSend = h("button.send", { type: "submit", "aria-label": "Send" }, icon("up"));
 const qForm = h("form.ask-box", {}, qInput, qSend);
@@ -35,7 +40,7 @@ const qList = h("div");
 const askHead = h("h2", { style: { fontSize: "20px" } });
 const askSub = h("p.small.muted");
 const main = h("main.phone", {},
-  statusRow, caps,
+  statusRow, capsWrap,
   h("section", { style: { padding: "28px 0 48px" } },
     h("div.divider"),
     h("div.row", { style: { alignItems: "baseline", marginBottom: "4px" } }, askHead),
@@ -69,13 +74,41 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-5).map((l) => h("p", {}, textOf(l))));
+  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", {}, h("span.when", {}, fmtTime(l.at)), textOf(l))));
+  if (atBottom) caps.scrollTop = caps.scrollHeight;
 }
 
+function drawJump() {
+  jumpBtn.replaceChildren(`${newCount} ${T("newLines")}`, icon("down"));
+  jumpBtn.classList.toggle("show", !atBottom && newCount > 0);
+}
+
+function snapToLive() {
+  atBottom = true;
+  newCount = 0;
+  drawJump();
+  if (caps.scrollTo) caps.scrollTo({ top: caps.scrollHeight, behavior: "smooth" });
+  else caps.scrollTop = caps.scrollHeight;
+}
+
+caps.onscroll = () => {
+  const was = atBottom;
+  atBottom = nearBottom(caps);
+  // Scrolling only ever clears the pill (the reset half of nextNewCount);
+  // counting up is addLine's job, so mere scrolling never bumps the count.
+  if (atBottom) newCount = 0;
+  if (atBottom !== was) drawJump();
+};
+
+jumpBtn.onclick = snapToLive;
+
 function addLine(l) {
+  atBottom = nearBottom(caps); // re-derive: programmatic scrollTop changes also fire onscroll
   lines.push(l);
   lines = lines.slice(-50);
   drawCaps();
+  newCount = nextNewCount(newCount, atBottom);
+  drawJump();
   caps.lastElementChild?.classList.add("new");
   voice.say(textOf(l), lang === "en" ? "en" : lang, l.audio?.[lang]);
 }
@@ -119,6 +152,7 @@ langSel.onchange = () => {
   live?.send({ type: "lang", lang });
   labels();
   drawCaps();
+  drawJump();
   drawStatus();
 };
 soundBtn.onclick = () => {
@@ -199,12 +233,13 @@ if (meta.status === "ended") {
     if (m.type === "hello") {
       Object.assign(meta, m.meta);
       lines = m.lines ?? [];
+      snapToLive(); // (re)connect: anchor on the newest line, clear any stale pill
       drawCaps();
       if (meta.status === "ended") return recap();
     }
     if (m.type === "line") addLine(m.line);
     if (m.type === "slide") meta.slide = m.n;
-    if (m.type === "reset") (lines = []), drawCaps();
+    if (m.type === "reset") { lines = []; drawCaps(); snapToLive(); }
     if (m.type === "status") {
       meta.status = m.status;
       if (m.status === "ended") return recap();
