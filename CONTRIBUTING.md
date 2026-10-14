@@ -25,7 +25,7 @@ Demo rooms that work with no key: `/stage/eco/demo/speak`, `/stage/eco/demo`, `/
 
 1. Branch from `main`, one branch per task (see [PLAN.md](PLAN.md)).
 2. Run `npm test` and `npm run check` before you open a PR.
-3. Open a PR. Seb merges and deploys. Don't run `wrangler deploy` yourself.
+3. Open a PR. Seb merges. Every merge to `main` deploys to eco.linolabs.co automatically (Cloudflare Workers Builds), so `main` must always work. Don't run `wrangler deploy` yourself.
 4. The repo goes **public (MIT) on Sunday 18 Oct**. Treat every commit as public.
 
 ## Token rules
