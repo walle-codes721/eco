@@ -80,10 +80,11 @@ function drawCaps() {
 
 // Tap a caption to read it comfortably: same overlay as the welcome sheet, centered.
 function showMsg(l) {
-  const close = h("button.btn.ghost.icon-btn", { type: "button", "aria-label": "Close" }, icon("x"));
+  const textLang = lang === "en" || !l.out?.[lang] ? "en" : lang;
+  const close = h("button.btn.ghost", { type: "button" }, icon("x"), T("close"));
   const wrap = h("div.sheet-wrap.msg-wrap", { onclick: (e) => { if (e.target === wrap) done(); } },
     h("div.msg-modal", {},
-      h("p", {}, h("span.when", {}, fmtTime(l.at))),
+      h("p.msg-meta", {}, h("span.when", {}, fmtTime(l.at)), h("span.msg-lang", {}, langName(textLang, textLang))),
       h("p.msg-text", {}, textOf(l)),
       h("div.msg-end", {}, close),
     ));

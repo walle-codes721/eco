@@ -229,7 +229,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
   background: var(--bg); border-radius: 28px; padding: 24px 28px;
   width: min(560px, calc(100% - 32px)); margin-inline: auto; animation: up 0.5s var(--ease);
 }
+.msg-modal .msg-meta { display: flex; justify-content: space-between; align-items: baseline; }
 .msg-modal .when { font-size: 12px; }
+.msg-modal .msg-lang { font-size: 12px; color: var(--muted); }
 .msg-modal .msg-text { color: var(--ink); font-size: 19px; line-height: 1.45; margin: 12px 0 18px; overflow-wrap: break-word; }
 .msg-modal .msg-end { display: flex; justify-content: flex-end; }
 
