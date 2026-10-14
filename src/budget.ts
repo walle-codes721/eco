@@ -28,6 +28,7 @@ export class Budget extends DurableObject<Env> {
     );
     ctx.blockConcurrencyWhile(async () => {
       this.tripped = (await ctx.storage.get<boolean>("tripped")) ?? false;
+      this.fails = (await ctx.storage.get<number>("fails")) ?? 0;
     });
   }
 
@@ -77,6 +78,7 @@ export class Budget extends DurableObject<Env> {
       Date.now(), rec.kind, rec.model, rec.ms, rec.status, rec.tin, rec.tout, rec.pub ? 1 : 0,
     );
     this.fails = rec.status === 200 ? 0 : this.fails + 1;
+    await this.ctx.storage.put("fails", this.fails); // survives the DO being evicted between calls
     if (this.fails >= 3) {
       this.tripped = true; // token rule 8: stop after 3 failures in a row
       await this.ctx.storage.put("tripped", true);
@@ -122,6 +124,6 @@ export class Budget extends DurableObject<Env> {
   async reset(): Promise<void> {
     this.tripped = false;
     this.fails = 0;
-    await this.ctx.storage.put("tripped", false);
+    await this.ctx.storage.put({ tripped: false, fails: 0 });
   }
 }
