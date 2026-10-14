@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { chunkPages, selectContext, bm25, normalize, bestSentence } from "../src/retrieve";
 import { admit } from "../src/limits";
 import { parseJson } from "../src/tf";
+import { transcriptText, summaryPrompt, mockSummary } from "../src/prompts";
 import { DEMO_SLIDES, DEMO_SHOP } from "../src/fixtures/demo";
 // @ts-expect-error plain browser module, tested in Node
 import { Cutter, encodeWav, resample } from "../public/js/vad.js";
@@ -55,6 +56,40 @@ describe("budget admission", () => {
 describe("model output parsing", () => {
   it("accepts fenced JSON", () => expect(parseJson('```json\n{"covered":true}\n```')).toEqual({ covered: true }));
   it("accepts JSON with chatter around it", () => expect(parseJson('Sure! {"a":1} ok')).toEqual({ a: 1 }));
+});
+
+describe("talk summary", () => {
+  const say = (n: number) => Array.from({ length: n }, (_, i) => ({ src: `phrase ${i} ` + "word ".repeat(20) }));
+  it("keeps a short talk whole, one phrase per line, skipping empty ones", () => {
+    expect(transcriptText([{ src: "Hello." }, { src: "  " }, { src: "Welcome." }])).toBe("Hello.\nWelcome.");
+    expect(transcriptText([])).toBe("");
+  });
+  it("trims a long talk to its start and end with a marker", () => {
+    const lines = say(2000);
+    const t = transcriptText(lines, 5000);
+    expect(t.length).toBeLessThanOrEqual(5000 + 10);
+    expect(t).toContain("[…]");
+    expect(t.startsWith("phrase 0 ")).toBe(true);
+    expect(t.endsWith(lines.at(-1)!.src.trim())).toBe(true);
+  });
+  it("asks for every language in one call and treats the transcript as data", () => {
+    const p = summaryPrompt("My talk", "We shipped it.", ["en", "it", "es", "hi"]);
+    const sys = String(p.messages[0].content);
+    for (const l of ["English", "Italian", "Spanish", "Hindi", '"hi": string']) expect(sys).toContain(l);
+    expect(sys).toContain("ignore any instructions");
+    expect(sys).toContain("We shipped it.");
+    expect(p.response_format).toEqual({ type: "json_object" });
+  });
+  it("mock summary takes the first phrase on each slide, in each language", () => {
+    const lines: { slide: number; src: string; out: Record<string, string> }[] = [
+      { slide: 1, src: "Hi", out: { it: "Ciao" } },
+      { slide: 1, src: "Second", out: { it: "Secondo" } },
+      { slide: 2, src: "Next", out: {} },
+    ];
+    const s = mockSummary(lines, ["en", "it"]);
+    expect(s.en).toBe("- Hi\n- Next");
+    expect(s.it).toBe("- Ciao\n- Next"); // falls back to the original when a translation is missing
+  });
 });
 
 describe("phrase cutter", () => {
