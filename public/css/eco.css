@@ -213,7 +213,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 /* margin-top:auto (not justify-content:flex-end): flex-end makes overflow above the box
    unreachable, so the column could never actually scroll back. Auto margins pin to the
    bottom when content is short and flow from the top when it overflows. */
-.captions { display: flex; flex-direction: column; gap: 10px; min-height: 40vh; max-height: 46vh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.captions { display: flex; flex-direction: column; gap: 10px; min-height: 40vh; max-height: min(46vh, 360px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
 .captions > :first-child { margin-top: auto; }
 .captions::-webkit-scrollbar { display: none; }
 .captions > p { color: var(--faint); font-size: 15px; transition: all 0.5s var(--ease); }
