@@ -1,5 +1,5 @@
 // Admission rules for live calls, kept free of Workers imports so they can be unit tested.
-export type Kind = "utterance" | "turn" | "ask" | "extract";
+export type Kind = "utterance" | "turn" | "ask" | "extract" | "summary";
 export type Denied = "ceiling" | "rpm" | "busy" | "tripped" | "public-hourly";
 
 const RPM = 12;

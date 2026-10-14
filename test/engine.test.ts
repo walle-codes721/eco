@@ -51,6 +51,16 @@ describe("budget admission", () => {
     expect(admit({ ...base, pubHour: 30 }, "ask", true)).toBe("public-hourly");
     expect(admit({ ...base, pubHour: 30 }, "ask", false)).toBeNull();
   });
+  it("treats a summary like a question: admitted with room, never ahead of translation", () => {
+    expect(admit(base, "summary", false)).toBeNull();
+    expect(admit({ ...base, window: 10 }, "summary", false)).toBe("rpm");
+    expect(admit({ ...base, window: 10 }, "utterance", false)).toBeNull(); // translation still gets the last slots
+  });
+  it("counts a summary against the daily ceiling, the breaker and concurrency", () => {
+    expect(admit({ ...base, today: 50 }, "summary", false)).toBe("ceiling");
+    expect(admit({ ...base, tripped: true }, "summary", false)).toBe("tripped");
+    expect(admit({ ...base, inflight: 3 }, "summary", false)).toBe("busy");
+  });
 });
 
 describe("model output parsing", () => {

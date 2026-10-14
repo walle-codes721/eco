@@ -105,7 +105,7 @@ export class Budget extends DurableObject<Env> {
       today: rows.length,
       max: Number(this.env.ECO_MAX_CALLS ?? 50),
       tripped: this.tripped,
-      p50: { utterance: p50("utterance"), ask: p50("ask"), turn: p50("turn") },
+      p50: { utterance: p50("utterance"), ask: p50("ask"), turn: p50("turn"), summary: p50("summary") },
       tokens: { in: ok.reduce((s, r) => s + r.tin, 0), out: ok.reduce((s, r) => s + r.tout, 0) },
       points: Math.round(points * 1e4) / 1e4,
     };
