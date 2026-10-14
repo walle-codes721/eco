@@ -210,7 +210,11 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .url { font-family: var(--mono); font-weight: 600; letter-spacing: 0; }
 
 /* ---------- captions (stepped fade from the Stitch Audience Room) ---------- */
-.captions { display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; min-height: 40vh; max-height: 46vh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+/* margin-top:auto (not justify-content:flex-end): flex-end makes overflow above the box
+   unreachable, so the column could never actually scroll back. Auto margins pin to the
+   bottom when content is short and flow from the top when it overflows. */
+.captions { display: flex; flex-direction: column; gap: 10px; min-height: 40vh; max-height: 46vh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.captions > :first-child { margin-top: auto; }
 .captions::-webkit-scrollbar { display: none; }
 .captions > p { color: var(--faint); font-size: 15px; transition: all 0.5s var(--ease); }
 .captions > p:nth-last-child(5) { opacity: 0.35; font-size: 14px; }
