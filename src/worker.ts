@@ -19,6 +19,7 @@ const PAGES: [RegExp, string][] = [
   [new RegExp(`^/stage/${N}/${N}/speak$`), "/presenter"],
   [new RegExp(`^/stage/${N}/${N}/screen$`), "/screen"],
   [new RegExp(`^/stage/${N}/${N}/card$`), "/stage-card"],
+  [new RegExp(`^/stage/${N}/${N}/join$`), "/join"],
   [new RegExp(`^/stage/${N}/${N}$`), "/listener"],
   [new RegExp(`^/counter/${N}/${N}/owner$`), "/owner"],
   [new RegExp(`^/counter/${N}/${N}/card$`), "/counter-card"],

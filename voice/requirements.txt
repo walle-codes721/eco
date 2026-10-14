@@ -1,0 +1,6 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+python-multipart==0.0.20
+soundfile==0.12.1
+omnivoice
+# ENGINE=chatterbox instead: pip install chatterbox-tts

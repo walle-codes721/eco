@@ -134,3 +134,18 @@ describe("model routing", () => {
     expect((customerTurnPrompt(biz, [], { wavB64: "x" }).response_format as { type: string }).type).toBe("json_schema");
   });
 });
+
+import { isEcho, overlap } from "../src/retrieve";
+
+describe("multiple speakers", () => {
+  const said = [{ speaker: "s0", t: 1000, src: "The second room is the counter, a sticker at a shop." }];
+  it("drops the same phrase heard by another speaker's mic", () => {
+    expect(overlap("The second room is the counter", "the second room is the counter")).toBe(1);
+    expect(isEcho(said, "s1", "The second room is the counter, a sticker at the shop.", 2500)).toBe(true);
+  });
+  it("keeps real lines", () => {
+    expect(isEcho(said, "s0", said[0].src, 2500)).toBe(false); // same speaker repeating themselves
+    expect(isEcho(said, "s1", said[0].src, 9000)).toBe(false); // too late to be an echo
+    expect(isEcho(said, "s1", "Thanks, and now the prices for tourists.", 2500)).toBe(false);
+  });
+});

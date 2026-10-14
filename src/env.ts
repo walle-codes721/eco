@@ -16,4 +16,6 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string; // secret
   GOOGLE_CLIENT_SECRET?: string; // secret
   SESSION_SECRET?: string; // secret
+  VOICE_URL?: string; // secret: the voice service (Hugging Face Space now, AMD later)
+  VOICE_TOKEN?: string; // secret
 }

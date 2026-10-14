@@ -97,3 +97,19 @@ export function bindHold(btn, { onBlob, onError = () => {}, key = false }) {
     addEventListener("keyup", (e) => e.code === "Space" && up());
   }
 }
+
+/** "Now speaking" from the mic level, with hysteresis so a breath doesn't flicker it. Wrap phraseMic's onLevel. */
+export function speakingSignal(send, onLevel = () => {}) {
+  let on = false, quietSince = 0;
+  return (level) => {
+    onLevel(level);
+    const now = performance.now();
+    if (level > 0.25) {
+      quietSince = 0;
+      if (!on) send({ type: "speaking", on: (on = true) });
+    } else if (on) {
+      quietSince ||= now;
+      if (now - quietSince > 1500) send({ type: "speaking", on: (on = false) });
+    }
+  };
+}

@@ -199,3 +199,9 @@ export function linkField(kind, titleInput) {
   const el = h("label.field", {}, "Link", h("div.row", { style: { gap: "4px", alignItems: "center", flexWrap: "wrap" } }, prefix, slug), note);
   return { el, value: () => slug.value || slugify(titleInput.value) };
 }
+
+/** Speaker name before a caption, only when the talk has more than one speaker. */
+export function who(meta, line) {
+  if ((meta.speakers?.length ?? 0) < 2) return null;
+  return h("span.who", {}, meta.speakers.find((s) => s.id === (line.speaker ?? "s0"))?.name ?? "");
+}
