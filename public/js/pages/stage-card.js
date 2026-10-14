@@ -1,4 +1,4 @@
-import { h, icon, api, roomId, hostKey, fmtTime, langName, notFound } from "/js/eco.js";
+import { h, icon, api, roomId, hostKey, fmtTime, langName, toast, notFound } from "/js/eco.js";
 
 const id = roomId();
 const key = hostKey(id);
@@ -13,6 +13,39 @@ const stats = await api("/api/stats").catch(() => null);
 const totalQ = Object.values(c.qLangs).reduce((a, b) => a + b, 0);
 const num = (n, label) => h("div.card", {}, h("div.stat", {}, n), h("p.small.muted", { style: { marginTop: "6px" } }, label));
 
+// ---------- summary: one AI call, in every language of the room ----------
+let summary = (await api(`/api/rooms/${id}/summary`).catch(() => ({}))).summary ?? null;
+let sumLang = "en";
+const sumBody = h("div");
+const sumBtn = h("button.btn.sm.no-print", { type: "button", onclick: () => makeSummary() });
+
+async function makeSummary() {
+  sumBtn.disabled = true;
+  sumBtn.textContent = "Writing…";
+  try {
+    const r = await api(`/api/rooms/${id}/summary`, { method: "POST", key });
+    summary = r.summary;
+    if (r.cached) toast("Already up to date");
+  } catch (err) {
+    toast(err.status === 400 ? "Say a few more phrases first." : err.status === 403 ? "Only the speaker can do this." : "Eco is busy. Try again in a moment.");
+  }
+  drawSummary();
+}
+
+function drawSummary() {
+  sumBtn.disabled = false;
+  sumBtn.textContent = summary ? "Refresh summary" : "Generate summary";
+  if (!summary) return sumBody.replaceChildren(h("p.muted.small", {}, "A short summary of what was said, in every language of the room."));
+  if (!summary.text[sumLang]) sumLang = "en";
+  sumBody.replaceChildren(
+    h("div.row.no-print", { style: { gap: "6px", marginBottom: "10px", flexWrap: "wrap" } },
+      ...Object.keys(summary.text).map((l) => h("button.toggle", { type: "button", "aria-pressed": String(l === sumLang), onclick: () => ((sumLang = l), drawSummary()) }, langName(l)))),
+    ...summary.text[sumLang].split("\n").filter(Boolean).map((p) => h("p", { style: { margin: "6px 0" } }, p.replace(/^-\s*/, "• "))),
+    summary.live ? null : h("p.tiny.faint", { style: { marginTop: "8px" } }, "Sample summary: mock mode, no AI was used."),
+  );
+}
+drawSummary();
+
 document.body.replaceChildren(
   h("header.bar.no-print", {}, h("div.inner", {},
     h("a.brand", { href: "/" }, "Eco"), h("span.spacer"),
@@ -22,6 +55,10 @@ document.body.replaceChildren(
     h("p.eyebrow", {}, "After the talk"),
     h("h1", {}, c.title),
     h("p.muted", { style: { marginTop: "8px" } }, [c.speakers?.length > 1 ? c.speakers.map((s) => `${s.name} (${s.lines} lines)`).join(", ") : c.speaker, new Date().toLocaleDateString(undefined, { dateStyle: "long" })].filter(Boolean).join(" · ")),
+    h("div.card", { style: { marginBottom: "16px" } },
+      h("div.card-head", {}, h("span.eyebrow", {}, "Summary"), h("span.spacer"), sumBtn),
+      sumBody,
+    ),
     h("div.big-num", {},
       num(fmtTime(c.duration), "duration"),
       num(String(c.peak), "peak listeners"),
