@@ -209,7 +209,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .qr svg { width: 100%; height: auto; display: block; }
 .url { font-family: var(--mono); font-weight: 600; letter-spacing: 0; }
 
-/* ---------- captions (stepped fade from the Stitch Audience Room) ---------- */
+/* ---------- captions: uniform history, live line stands out ---------- */
 /* margin-top:auto (not justify-content:flex-end): flex-end makes overflow above the box
    unreachable, so the column could never actually scroll back. Auto margins pin to the
    bottom when content is short and flow from the top when it overflows. */
@@ -217,10 +217,6 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .captions > :first-child { margin-top: auto; }
 .captions::-webkit-scrollbar { display: none; }
 .captions > p { color: var(--faint); font-size: 15px; transition: all 0.5s var(--ease); }
-.captions > p:nth-last-child(5) { opacity: 0.55; }
-.captions > p:nth-last-child(4) { opacity: 0.7; }
-.captions > p:nth-last-child(3) { opacity: 0.85; }
-.captions > p:nth-last-child(2) { color: var(--muted); font-size: 17px; }
 .captions > p:last-child { color: var(--ink); font-size: clamp(24px, 6.4vw, 34px); line-height: 1.25; font-weight: 600; letter-spacing: -0.025em; }
 .captions > p.new { animation: rise 0.6s var(--ease); }
 .captions .flag { font-size: 12px; color: var(--muted); font-weight: 500; }
