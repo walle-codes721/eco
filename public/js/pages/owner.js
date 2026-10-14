@@ -12,13 +12,12 @@ try {
   notFound();
   throw new Error("no room");
 }
-if (meta.mode !== "counter") location.replace(`/s/${id}`);
 if (!meta.host && !meta.demo) {
   document.body.replaceChildren(h("main.narrow.center", { style: { paddingTop: "20vh" } },
     h("a.brand", { href: "/" }, "Eco"),
     h("h1", { style: { fontSize: "28px", margin: "24px 0 8px" } }, "This is the owner's counter"),
     h("p.muted", {}, "Open it from the counter link you got at setup."),
-    h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: `/c/${id}` }, "Open the customer view"))));
+    h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: `/${id}` }, "Open the customer view"))));
   throw new Error("not host");
 }
 
@@ -37,6 +36,13 @@ const L = {
   pick: it ? "Scegli una conversazione" : "Pick a conversation",
   answered: it ? "Eco ha risposto dalle tue informazioni" : "Eco answered from your info",
   exit: it ? "Esci" : "Exit",
+  edit: it ? "Modifica info" : "Edit info",
+  editSub: it ? "Eco risponde ai clienti solo da queste informazioni. Le modifiche valgono subito." : "Eco answers customers only from this. Changes apply right away.",
+  addSection: it ? "Aggiungi sezione" : "Add section",
+  addFile: it ? "Carica file" : "Upload a file",
+  cancel: it ? "Annulla" : "Cancel",
+  save: it ? "Salva" : "Save",
+  saved: it ? "Info salvate" : "Info saved",
 };
 
 let convos = [];
@@ -60,8 +66,9 @@ document.body.replaceChildren(
     h("a.brand", { href: "/" }, "Eco"), h("span.title.truncate", {}, meta.title), modePill(meta),
     h("span.spacer"), soundBtn,
     h("button.btn.sm", { type: "button", onclick: () => faceToFace() }, icon("split"), L.f2f),
-    h("a.btn.sm", { href: `/o/${id}/sticker`, target: "_blank" }, icon("qr"), L.sticker),
-    h("a.btn.sm", { href: `/o/${id}/card` }, L.card))),
+    meta.host && !meta.demo ? h("button.btn.sm", { type: "button", onclick: () => editInfo() }, icon("doc"), L.edit) : null,
+    h("a.btn.sm", { href: `/${id}/sticker`, target: "_blank" }, icon("qr"), L.sticker),
+    h("a.btn.sm", { href: `/${id}/card` }, L.card))),
   h("div.owner", {}, listEl, h("main", {}, threadWrap, replyBar)),
 );
 
@@ -86,7 +93,7 @@ function drawList() {
     ...(open.length ? [h("p.eyebrow", { style: { padding: "4px 14px" } }, L.needs), ...open.map(item)] : []),
     h("p.eyebrow", { style: { padding: "12px 14px 4px" } }, L.convos),
     ...(sorted.filter((c) => !c.open).map(item)),
-    convos.length ? null : h("div.empty", {}, h("p", {}, L.empty), h("div", { style: { width: "140px", margin: "18px auto 6px" } }, qrSvg(fullUrl(`/c/${id}`))), h("p.url.tiny", {}, shortUrl(`/c/${id}`))),
+    convos.length ? null : h("div.empty", {}, h("p", {}, L.empty), h("div", { style: { width: "140px", margin: "18px auto 6px" } }, qrSvg(fullUrl(`/${id}`))), h("p.url.tiny", {}, shortUrl(`/${id}`))),
   ].filter(Boolean));
 }
 
@@ -204,3 +211,47 @@ connect(id, { role: "owner", ...(key ? { key } : {}) }, (m) => {
 });
 drawList();
 drawThread();
+
+/** Edit what Eco answers from. One textarea per section; files (PDF, TXT, CSV) become new sections. */
+async function editInfo() {
+  const { pages } = await api(`/api/rooms/${id}/sources`, { key }).catch(() => ({ pages: null }));
+  if (!pages) return toast("Couldn't load your info");
+  const list = h("div.stack", { style: { gap: "10px", maxHeight: "55vh", overflow: "auto" } });
+  const add = (tag = "info", text = "") => {
+    const tagIn = h("input", { type: "text", value: tag, maxlength: 40, style: { fontWeight: 600 } });
+    const ta = h("textarea", { rows: 4 });
+    ta.value = text;
+    const el = h("div.source", {}, h("div.row", {}, tagIn, h("button.btn.ghost.icon-btn", { type: "button", "aria-label": "Remove", onclick: () => el.remove() }, icon("trash"))), ta);
+    el._get = () => ({ tag: tagIn.value.trim() || "info", text: ta.value.trim() });
+    list.append(el);
+  };
+  pages.forEach((p) => add(p.tag, p.text));
+  const fileIn = h("input", { type: "file", accept: ".pdf,.txt,.csv,.md,text/plain,text/csv,application/pdf", multiple: true, hidden: true });
+  fileIn.onchange = async () => {
+    for (const f of fileIn.files) {
+      if (/pdf$/i.test(f.type) || /\.pdf$/i.test(f.name)) {
+        const { openPdf, pdfPages } = await import("/js/slides.js");
+        add(f.name.replace(/\.[^.]+$/, ""), (await pdfPages(await openPdf(new Uint8Array(await f.arrayBuffer())))).map((p) => p.text).join("\n"));
+      } else add(f.name.replace(/\.[^.]+$/, ""), (await f.text()).slice(0, 8000));
+    }
+  };
+  const save = h("button.btn.primary", { type: "button" }, L.save);
+  const wrap = h("div.sheet-wrap", {}, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "720px", width: "100%" } },
+    h("h2", {}, L.edit), h("p.small.muted", {}, L.editSub), list,
+    h("div.row", { style: { flexWrap: "wrap" } },
+      h("button.btn.sm", { type: "button", onclick: () => add() }, icon("plus"), L.addSection),
+      h("button.btn.sm", { type: "button", onclick: () => fileIn.click() }, icon("doc"), L.addFile), fileIn,
+      h("span.spacer"), h("button.btn", { type: "button", onclick: () => wrap.remove() }, L.cancel), save)));
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await api(`/api/rooms/${id}/sources`, { method: "POST", key, body: { pages: [...list.children].map((el) => el._get()).filter((p) => p.text) } });
+      toast(L.saved);
+      wrap.remove();
+    } catch {
+      toast("Couldn't save");
+      save.disabled = false;
+    }
+  };
+  document.body.append(wrap);
+}

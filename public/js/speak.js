@@ -3,10 +3,14 @@ const synth = window.speechSynthesis;
 const LOCALE = { it: "it-IT", es: "es-ES", hi: "hi-IN", en: "en-US", fr: "fr-FR", de: "de-DE", pt: "pt-PT", zh: "zh-CN", ja: "ja-JP" };
 let audioEl = null;
 
-function voiceFor(lang) {
+/** Best voice for the language; speaker n > 0 gets a different voice when the phone has one. */
+function voiceFor(lang, n = 0) {
   const all = synth?.getVoices() ?? [];
   const mine = all.filter((v) => v.lang.toLowerCase().startsWith(lang));
-  return mine.find((v) => /premium|enhanced|natural|neural/i.test(v.name)) ?? mine.find((v) => v.localService) ?? mine[0] ?? null;
+  const best = mine.find((v) => /premium|enhanced|natural|neural/i.test(v.name)) ?? mine.find((v) => v.localService) ?? mine[0] ?? null;
+  if (!n || mine.length < 2) return best;
+  const others = mine.filter((v) => v !== best);
+  return others[(n - 1) % others.length];
 }
 
 export const voice = {
@@ -24,7 +28,7 @@ export const voice = {
     audioEl?.pause();
   },
   /** Speaks text; drops older lines if the phone falls 2+ lines behind (latency over completeness). */
-  say(text, lang, url) {
+  say(text, lang, url, speaker = 0) {
     if (!this.on || !text) return;
     if (url) {
       audioEl.src = url;
@@ -36,8 +40,9 @@ export const voice = {
     }
     const u = new SpeechSynthesisUtterance(text);
     u.lang = LOCALE[lang] ?? lang;
-    const v = voiceFor(lang);
+    const v = voiceFor(lang, speaker);
     if (v) u.voice = v;
+    if (speaker && v === voiceFor(lang)) u.pitch = [1, 0.85, 1.15][speaker % 3]; // same voice: shift pitch so speakers differ
     u.rate = 1.04;
     u.onend = () => (this._queued = Math.max(0, (this._queued ?? 1) - 1));
     synth.speak(u);

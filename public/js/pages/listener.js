@@ -1,4 +1,4 @@
-import { h, icon, api, roomId, toast, fmtTime, langName, phoneLang, keepAwake, store, notFound } from "/js/eco.js";
+import { h, icon, api, roomId, who, toast, fmtTime, langName, phoneLang, keepAwake, store, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { t } from "/js/i18n.js";
@@ -12,7 +12,6 @@ try {
   notFound();
   throw new Error("no room");
 }
-if (meta.mode !== "stage") location.replace(`/c/${id}`);
 
 const choices = [...meta.langs, "en"];
 let lang = store(`eco:lang:${id}`) ?? (choices.includes(phoneLang()) ? phoneLang() : meta.langs[0]);
@@ -60,12 +59,15 @@ function labels() {
   soundBtn.setAttribute("aria-label", voice.on ? T("soundOn") : T("soundOff"));
 }
 
+const speakingNow = new Set();
 function drawStatus(conn) {
   const parts = [];
   if (conn === "offline") parts.push(h("span.pill.mock", {}, h("span.dot"), T("reconnecting")));
   else if (meta.status === "live") parts.push(h("span.pill.live", {}, h("span.dot"), "Live"));
   if (meta.status === "live") parts.push(h("span.chip", {}, `${T("slide")} ${meta.slide}`));
   if (meta.demo) parts.push(h("span.pill.replay", {}, h("span.dot"), "Replay"));
+  if ((meta.speakers?.length ?? 0) > 1)
+    for (const s of meta.speakers) if (speakingNow.has(s.id)) parts.push(h("span.chip.speaking", {}, h("span.dot.live"), s.name));
   statusRow.replaceChildren(...parts);
 }
 
@@ -74,7 +76,7 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", { onclick: () => showMsg(l) }, h("span.when", {}, fmtTime(l.at)), textOf(l))));
+  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", { onclick: () => showMsg(l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)), textOf(l))));
   if (atBottom) caps.scrollTop = caps.scrollHeight;
 }
 
@@ -84,7 +86,7 @@ function showMsg(l) {
   const close = h("button.btn.ghost", { type: "button" }, icon("x"), T("close"));
   const wrap = h("div.sheet-wrap.msg-wrap", { onclick: (e) => { if (e.target === wrap) done(); } },
     h("div.msg-modal", {},
-      h("p.msg-meta", {}, h("span.when", {}, fmtTime(l.at)), h("span.msg-lang", {}, langName(textLang, textLang))),
+      h("p.msg-meta", {}, who(meta, l), h("span.when", {}, fmtTime(l.at)), h("span.msg-lang", {}, langName(textLang, textLang))),
       h("p.msg-text", {}, textOf(l)),
       h("div.msg-end", {}, close),
     ));
@@ -127,7 +129,22 @@ function addLine(l) {
   newCount = nextNewCount(newCount, atBottom);
   drawJump();
   caps.lastElementChild?.classList.add("new");
-  voice.say(textOf(l), lang === "en" ? "en" : lang, l.audio?.[lang]);
+  // A speaker with a voice sample: wait briefly for their cloned clip, else the phone speaks.
+  const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
+  const idx = Math.max(0, meta.speakers?.indexOf(sp) ?? 0);
+  if (meta.voice && sp?.voice && !l.audio?.[lang]) {
+    pendingVoice = { seq: l.seq, timer: setTimeout(() => ((pendingVoice = null), voice.say(textOf(l), lang, null, idx)), 4000) };
+  } else voice.say(textOf(l), lang === "en" ? "en" : lang, l.audio?.[lang], idx);
+}
+let pendingVoice = null;
+function onAudio(m) {
+  const l = lines.find((x) => x.seq === m.seq);
+  if (l) l.audio = { ...l.audio, ...m.audio };
+  if (pendingVoice?.seq === m.seq && m.audio[lang]) {
+    clearTimeout(pendingVoice.timer);
+    pendingVoice = null;
+    voice.say(textOf(l ?? {}), lang, m.audio[lang]);
+  }
 }
 
 function drawQs() {
@@ -255,6 +272,9 @@ if (meta.status === "ended") {
       if (meta.status === "ended") return recap();
     }
     if (m.type === "line") addLine(m.line);
+    if (m.type === "audio") onAudio(m);
+    if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
+    if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") meta.slide = m.n;
     if (m.type === "reset") { lines = []; drawCaps(); snapToLive(); }
     if (m.type === "status") {

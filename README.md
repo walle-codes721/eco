@@ -13,13 +13,16 @@ Built for the lablab.ai **AMD Developer Hackathon ACT III**. Runs on **AMD Token
 |---|---|---|
 | Speech → transcript + every language | `MiMo-V2.6-Flash` (audio in, strict JSON schema) | 1 per phrase, for all listeners and languages |
 | Answers from the source | `Gemma-4-31B-IT` | 1 per new question (cached) |
-| Counter turn: translate + answer from the info | `MiMo-V2.6-Flash` | 1 per turn |
+| Counter turn, typed: translate + answer from the info | `Gemma-4-31B-IT` | 1 per turn |
+| Counter turn, spoken: transcript + translate + answer | `MiMo-V2.6-Flash` (audio in) | 1 per turn |
 | Menu photo → text | `MiMo-V2.6-Flash` (image in) | 1 per photo, once |
-| Speaker's cloned voice in each language | OmniVoice (k2-fsa), backup Chatterbox Multilingual (Resemble AI). *Hosting on AMD pending* | 1 clip per phrase per language with listeners |
+| Speaker's cloned voice in each language | OmniVoice (k2-fsa), backup Chatterbox Multilingual (Resemble AI), from a 10 s consented sample. On a Hugging Face Space (`voice/`) until AMD hosts it | 1 clip per phrase per language with listeners |
+
+Gemma (Google DeepMind's open model, running on AMD GPUs through Token Factory) does every text-in job; MiMo is used only where the input is audio or a photo, which Gemma on Token Factory doesn't take.
 
 Retrieval is local BM25 keyword scoring, so it costs zero tokens. Knowing who is speaking costs nothing either: each speaker uses their own device and mic, so every line is tagged by the device it came from.
 
-**Status.** Captions, ask the talk, the board and Counter work in mock mode. Two things are in progress: **multiple speakers** (the speaker join link and the "now speaking" indicator) and the **cloned voice** (waiting for AMD to confirm it can host the voice model). Until the voice model is hosted, listeners hear the phone's built-in voice.
+**Status.** Captions, ask the talk, the board, Counter, multiple speakers (a co-speaker QR, "now speaking", names on captions) and voice samples work in mock mode. The cloned voice runs once the voice service in [`voice/`](voice/) is deployed (a Hugging Face Space until AMD can host the model) and `VOICE_URL` is set; until then listeners hear the phone's built-in voice, a different one per speaker.
 
 **Contributing:** read [CONTRIBUTING.md](CONTRIBUTING.md) first (stack, workflow, and the rules that protect our shared API key). Open work is in [PLAN.md](PLAN.md).
 
@@ -29,7 +32,7 @@ Retrieval is local BM25 keyword scoring, so it costs zero tokens. Knowing who is
 
 ```sh
 npm install
-npx wrangler dev          # http://localhost:8787
+npm run dev              # http://localhost:8787, always mock (npm run dev:live only with Seb's go)
 ```
 
 or with Docker:
@@ -40,7 +43,7 @@ docker build -t eco . && docker run -p 8787:8787 eco
 
 Mock mode replays recorded sample responses and makes no API calls. Every page shows **Mock**, **Live** or **Replay**, so you always know which mode is running.
 
-Try `/s/demo` (speaker console with a replaying demo talk), `/r/demo` (listener), `/o/gelato` (owner counter) and `/c/gelato` (customer).
+Try `/stage/eco/demo/speak` (speaker console with a replaying demo talk), `/stage/eco/demo` (listener), `/counter/eco/gelato/owner` (owner counter) and `/counter/eco/gelato` (customer). Speakers and owners sign in with Google (`/me` lists their talks and shops); everyone else needs no account.
 
 ## Live mode
 
@@ -63,14 +66,14 @@ mic → VAD (600 ms pause) → 16 kHz WAV                   ▲  captions labell
         ▼                                               │
 Room (Durable Object, one per room) ────────────────────┘
         │
-        ├─▶ tf.ts ─▶ AMD Token Factory (MiMo: transcript + every language · Gemma: answers)
+        ├─▶ tf.ts ─▶ AMD Token Factory (MiMo: speech + photos · Gemma: answers + typed turns)
         └─▶ voice.ts ─▶ voice clone (OmniVoice, backup Chatterbox; hosting pending)
 
 Budget (Durable Object): limits + call log for every live call, voice included
 ```
 
 - Cloudflare Workers + Durable Objects. Static pages in `public/`, plain JS, no build step.
-- Slides never leave the speaker's laptop: pdf.js reads them in the browser, and only the text is sent.
+- Slides: pdf.js reads the PDF in the browser and only the text goes to the model. The PDF itself is stored in Eco's own R2 bucket so the projector and other devices can show it; it is never sent to Token Factory.
 - Voice: each speaker records a 30 s sample with an explicit consent checkbox, and only that sample is cloned. Nobody in Counter is ever cloned. `src/voice.ts` is where the cloned-voice call plugs in. Until then, phones use their own speech synthesis.
 
 ## Tests

@@ -30,7 +30,9 @@ const T: [number, number, string, string, string, string][] = [
   [1, 7000, "Eco. Your voice, their language. Grazie.", "Eco. La tua voce, la loro lingua. Grazie.", "Eco. Tu voz, su idioma. Grazie.", "इको। आपकी आवाज़, उनकी भाषा। ग्रात्सिए।"],
 ];
 
-export const DEMO_TALK = T.map(([slide, delay, src, it, es, hi]) => ({ slide, delay, src, out: { it, es, hi } as Record<string, string> }));
+/** Two speakers on two devices: the counter slide is presented by the co-speaker. */
+export const DEMO_SPEAKERS = ["Seb", "Ritik"];
+export const DEMO_TALK = T.map(([slide, delay, src, it, es, hi]) => ({ slide, delay, src, speaker: slide === 4 ? "s1" : "s0", out: { it, es, hi } as Record<string, string> }));
 
 export const DEMO_SHOP = {
   name: "Gelateria Luna",

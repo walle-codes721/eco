@@ -1,5 +1,5 @@
-import { h, icon, api, qrSvg, fullUrl, shortUrl, toast, langName } from "/js/eco.js";
-import { openPdf, pdfPages, renderPage, saveDeck } from "/js/slides.js";
+import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName } from "/js/eco.js";
+import { openPdf, pdfPages, renderPage, saveDeck, uploadDeck } from "/js/slides.js";
 
 const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
 const state = { langs: ["it", "es", "hi"], pages: [], bytes: null };
@@ -12,7 +12,7 @@ const thumbs = h("div.thumbs");
 const deckInfo = h("p.small.muted");
 const drop = h("div.drop", { role: "button", tabindex: 0 },
   icon("doc"), h("p", { style: { marginTop: "8px", fontWeight: 600, color: "var(--ink)" } }, "Drop your slides (PDF)"),
-  h("p.small", {}, "Export from Keynote, PowerPoint or Google Slides. The file stays on this laptop; only the text goes to Eco."),
+  h("p.small", {}, "Export from Keynote, PowerPoint or Google Slides. Eco keeps the PDF so the projector and any laptop you present from show your real slides."),
 );
 
 drop.onclick = () => file.click();
@@ -65,18 +65,19 @@ const option = (name, desc, checked, disabled) =>
   h("div.option", { role: "radio", "aria-checked": String(checked), "aria-disabled": String(!!disabled) },
     h("span.radio"), h("div", {}, h("div", { style: { fontWeight: 600 } }, name), h("div.small.muted", {}, desc)));
 
+const link = linkField("stage", title);
 const section = (head, sub, ...body) =>
   h("section.form-section", {}, h("header", {}, h("h2", {}, head), h("p", {}, sub)), h("div.stack", {}, ...body));
 
 const create = h("button.btn.primary.big", { type: "submit" }, "Create the room", icon("right"));
 const form = h("form", {},
-  section("Your talk", "Shown on every listener's phone.", h("label.field", {}, "Title", title), h("label.field", {}, "Speaker", speaker)),
+  section("Your talk", "Shown on every listener's phone.", h("label.field", {}, "Title", title), h("label.field", {}, "Speaker", speaker), link.el),
   section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs),
   section("Notes", "Optional. Also used to answer questions.", notes),
   section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
   section("Voice", "What listeners hear when they turn sound on.",
-    option("Phone voice", "Each phone reads the translation aloud in a natural voice. Works today.", true),
-    option("Your own voice", "Coming soon: your cloned voice in every language, waiting on AMD to host the model.", false, true),
+    option("Your own voice", "Record a 10-second sample from the presenter page (and each co-speaker from theirs). Listeners hear each speaker's cloned voice in their language.", true),
+    option("Phone voice", "The fallback: each phone reads the translation aloud, a different voice per speaker.", false),
   ),
   h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end" } }, create),
 );
@@ -89,9 +90,13 @@ form.onsubmit = async (e) => {
   try {
     const { id, hostKey } = await api("/api/rooms", {
       method: "POST",
-      body: { mode: "stage", title: title.value, speaker: speaker.value, langs: state.langs, pages: state.pages, notes: notes.value },
+      body: { mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs, pages: state.pages, notes: notes.value },
     });
-    if (state.bytes) await saveDeck(id, state.bytes);
+    if (state.bytes) {
+      await saveDeck(id, state.bytes);
+      create.firstChild.textContent = "Uploading slides…";
+      if (!(await uploadDeck(id, state.bytes, hostKey))) toast("Slides didn't upload: this laptop will still show them", 4000);
+    }
     try { localStorage.setItem(`eco:host:${id}`, hostKey); } catch {}
     ready(id, hostKey);
   } catch (err) {
@@ -102,8 +107,8 @@ form.onsubmit = async (e) => {
 };
 
 function ready(id, key) {
-  const listen = `/r/${id}`;
-  const presenter = `/s/${id}#k=${key}`;
+  const listen = `/${id}`;
+  const presenter = `/${id}/speak#k=${key}`;
   const copy = (text, label) => h("button.btn", { type: "button", onclick: () => navigator.clipboard.writeText(text).then(() => toast(`${label} copied`)) }, icon("copy"), label);
   document.querySelector("main").replaceChildren(
     h("section.ready.narrow", {},
@@ -114,16 +119,16 @@ function ready(id, key) {
       h("p.url", { style: { fontSize: "20px" } }, shortUrl(listen)),
       h("div.row", { style: { justifyContent: "center", flexWrap: "wrap", margin: "32px 0 12px" } },
         h("a.btn.primary.big", { href: presenter }, icon("stage"), "Open presenter"),
-        h("a.btn.big", { href: `/s/${id}/screen`, target: "_blank" }, icon("ext"), "Open projector window"),
+        h("a.btn.big", { href: `/${id}/screen`, target: "_blank" }, icon("ext"), "Open projector window"),
       ),
       h("div.row", { style: { justifyContent: "center", flexWrap: "wrap" } }, copy(fullUrl(listen), "Listener link"), copy(fullUrl(presenter), "Presenter link")),
-      h("p.small.muted", { style: { marginTop: "24px" } }, "Keep the presenter link private: it controls the talk. Open the projector window on the same laptop so it shows your PDF; drag it to the projector and press F for full screen."),
+      h("p.small.muted", { style: { marginTop: "24px" } }, "Keep the presenter link private: it controls the talk. Drag the projector window to the projector and press F for full screen."),
     ),
   );
 }
 
 document.body.replaceChildren(
-  h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), h("span.title.muted", {}, "New talk"))),
+  h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), h("span.title.muted", {}, "New talk"), h("span.spacer"), accountLink())),
   h("main.wrap", { style: { maxWidth: "900px" } },
     h("div.page-head", {}, h("p.eyebrow", {}, "Stage"), h("h1", {}, "Create a talk")),
     form,

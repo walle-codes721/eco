@@ -61,8 +61,8 @@ export function icon(name, cls = "i") {
   return svg;
 }
 
-/** Room id from /x/{id}/... */
-export const roomId = () => location.pathname.split("/")[2];
+/** Room id "stage/{user}/{talk}" or "counter/{user}/{shop}" from the page URL. Links are `/${id}/...`. */
+export const roomId = () => location.pathname.split("/").slice(1, 4).join("/");
 
 /** Host key arrives once in the URL fragment (#k=...), then lives in localStorage. */
 export function hostKey(id) {
@@ -162,4 +162,47 @@ export function notFound(msg = "This room doesn't exist or has expired.") {
       h("p", { style: { marginTop: "24px" } }, h("a.btn.primary", { href: "/" }, "Go to Eco")),
     ),
   );
+}
+
+/** The signed-in speaker or owner, or null. One fetch per page. */
+let mePromise;
+export const me = () => (mePromise ??= api("/api/me").catch(() => ({ user: null, signin: false })));
+
+/** Header link: "Sign in" (back to this page after Google) or your name, linking to /me. */
+export function accountLink() {
+  const slot = h("span.account");
+  me().then(({ user, signin }) => {
+    if (user) slot.append(h("a.btn.ghost.sm", { href: "/me" }, user.picture ? h("img.avatar", { src: user.picture, alt: "", referrerpolicy: "no-referrer" }) : icon("users"), user.handle));
+    else if (signin) slot.append(h("a.btn.ghost.sm", { href: `/auth/google?next=${encodeURIComponent(location.pathname)}` }, "Sign in"));
+  });
+  return slot;
+}
+
+export const slugify = (s) =>
+  s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36).replace(/-+$/, "");
+
+/** "Link" field on the create pages: eco.linolabs.co/{kind}/{you}/[name], filled from the title until edited. */
+export function linkField(kind, titleInput) {
+  const slug = h("input", { type: "text", maxlength: 36, autocomplete: "off", spellcheck: "false", placeholder: kind === "stage" ? "my-talk" : "my-shop" });
+  const prefix = h("span.mono.muted.small", {}, `${location.host}/${kind}/…/`);
+  const note = h("p.tiny.muted");
+  let edited = false;
+  slug.oninput = () => ((edited = true), (slug.value = slug.value.toLowerCase().replace(/[^a-z0-9-]/g, "-")));
+  titleInput.addEventListener("input", () => edited || (slug.value = slugify(titleInput.value)));
+  me().then(({ user, signin }) => {
+    prefix.textContent = `${location.host}/${kind}/${user?.handle ?? "guest-…"}/`;
+    note.replaceChildren(
+      user ? `Saved to your account. Find it later in My ${kind === "stage" ? "talks" : "shops"}.`
+      : signin ? h("span", {}, h("a", { href: `/auth/google?next=${encodeURIComponent(location.pathname)}` }, "Sign in with Google"), " to save it and find it later. Without signing in you get a private link that only works on this device.")
+      : "Without signing in you get a private link that only works on this device.",
+    );
+  });
+  const el = h("label.field", {}, "Link", h("div.row", { style: { gap: "4px", alignItems: "center", flexWrap: "wrap" } }, prefix, slug), note);
+  return { el, value: () => slug.value || slugify(titleInput.value) };
+}
+
+/** Speaker name before a caption, only when the talk has more than one speaker. */
+export function who(meta, line) {
+  if ((meta.speakers?.length ?? 0) < 2) return null;
+  return h("span.who", {}, meta.speakers.find((s) => s.id === (line.speaker ?? "s0"))?.name ?? "");
 }

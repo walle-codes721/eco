@@ -16,7 +16,7 @@ const num = (n, label) => h("div.card", {}, h("div.stat", {}, n), h("p.small.mut
 document.body.replaceChildren(
   h("header.bar.no-print", {}, h("div.inner", {},
     h("a.brand", { href: "/" }, "Eco"), h("span.spacer"),
-    h("a.btn.sm", { href: `/o/${id}` }, it ? "Torna al bancone" : "Back to counter"),
+    h("a.btn.sm", { href: `/${id}/owner` }, it ? "Torna al bancone" : "Back to counter"),
     h("button.btn.sm.primary", { type: "button", onclick: () => print() }, icon("print"), it ? "Stampa" : "Print"))),
   h("main.report", {},
     h("p.eyebrow", {}, it ? "La tua settimana" : "Your week"),

@@ -102,3 +102,17 @@ export function bestSentence(question: string, chunk: Chunk | null): { covered: 
   }
   return score ? { covered: true, text: best, cite: chunk.tag } : { covered: false, text: "", cite: "" };
 }
+
+/** Word overlap (Jaccard) of two phrases: two mics hearing the same voice give > 0.8. */
+export function overlap(a: string, b: string): number {
+  const A = new Set(terms(a)), B = new Set(terms(b));
+  if (!A.size || !B.size) return 0;
+  let n = 0;
+  for (const w of A) if (B.has(w)) n++;
+  return n / (A.size + B.size - n);
+}
+
+/** Two mics in one room hear the same voice: drop a line that repeats another speaker's line from the last 4 s. */
+export function isEcho(lines: { speaker?: string; t: number; src: string }[], speaker: string, src: string, now: number): boolean {
+  return lines.some((l) => (l.speaker ?? "s0") !== speaker && now - l.t < 4000 && overlap(l.src, src) > 0.8);
+}
