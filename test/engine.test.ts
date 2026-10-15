@@ -223,7 +223,7 @@ describe("accounts", () => {
   });
 });
 
-import { customerTurnPrompt, ownerTurnPrompt, turnModel, MODELS } from "../src/prompts";
+import { customerTurnPrompt, ownerTurnPrompt, utterancePrompt, turnModel, MODELS } from "../src/prompts";
 
 describe("model routing", () => {
   const biz = { name: "Bar", type: "cafe", ownerLang: "it" };
@@ -234,9 +234,19 @@ describe("model routing", () => {
     expect(String(p.messages[0].content)).toContain('"to_owner": string');
     expect(ownerTurnPrompt("it", "en", { text: "ciao" }).response_format).toEqual({ type: "json_object" });
   });
-  it("keeps spoken turns on MiMo with a strict schema", () => {
+  it("keeps spoken turns on MiMo with json_object (the gateway rejects json_schema)", () => {
     expect(turnModel({ wavB64: "x" })).toBe(MODELS.audio);
-    expect((customerTurnPrompt(biz, [], { wavB64: "x" }).response_format as { type: string }).type).toBe("json_schema");
+    expect(customerTurnPrompt(biz, [], { wavB64: "x" }).response_format).toEqual({ type: "json_object" });
+    const u = utterancePrompt({ wavB64: "x" }, ["it", "hi"], []);
+    expect(u.response_format).toEqual({ type: "json_object" });
+    expect(String(u.messages[0].content)).toContain('"out": {"it": string, "hi": string}');
+  });
+  it("sends browser-recognised phrases to the text model as text, all languages in one call", () => {
+    expect(turnModel({ text: "hello" } as { wavB64?: string })).toBe(MODELS.answer);
+    const u = utterancePrompt({ text: "hello everyone" }, ["it", "es"], ["earlier"]);
+    expect(JSON.stringify(u.messages[1].content)).toContain("hello everyone");
+    expect(JSON.stringify(u.messages[1].content)).not.toContain("input_audio");
+    expect(String(u.messages[0].content)).toContain('"out": {"it": string, "es": string}');
   });
 });
 
