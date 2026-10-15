@@ -22,6 +22,10 @@ Gemma (Google DeepMind's open model, running on AMD GPUs through Token Factory) 
 
 Retrieval is local BM25 keyword scoring, so it costs zero tokens. Knowing who is speaking costs nothing either: each speaker uses their own device and mic, so every line is tagged by the device it came from.
 
+**Questions across languages.** Stage searches both the original transcript and its existing translated captions. For example, a Hindi question such as “यह कंपनी कितने देशों में काम करती है?” can find the English phrase “We operate in 15 countries” through its Hindi caption, even when earlier slides fill the context window. Only the original source text is sent as evidence to the answer model, which is asked to answer in the listener's selected language. This adds no translation call and keeps the existing context allowance. Answers are cached while the transcript is unchanged; new speech makes earlier answers eligible for retrieval again.
+
+This is keyword retrieval across available captions, not universal semantic search. English-only slides and notes without a matching translated caption still rely on English matches or the small-source fallback; missing translations and different wording can still cause misses. Mock mode quotes the matching stored caption (or original text when that translation is missing), rather than generating a new translation. Live answer quality needs a separately approved live test.
+
 **Status.** Captions, ask the talk, the board, Counter, multiple speakers (a co-speaker QR, "now speaking", names on captions) and voice samples work in mock mode. The cloned voice runs once the voice service in [`voice/`](voice/) is deployed (a Hugging Face Space until AMD can host the model) and `VOICE_URL` is set; until then listeners hear the phone's built-in voice, a different one per speaker.
 
 **Contributing:** read [CONTRIBUTING.md](CONTRIBUTING.md) first (stack, workflow, and the rules that protect our shared API key). Open work is in [PLAN.md](PLAN.md).
@@ -81,6 +85,8 @@ Budget (Durable Object): limits + call log for every live call, voice included
 ```sh
 npm test
 ```
+
+`test/multilingual.test.ts` covers Hindi, Italian, Spanish and English questions against a source larger than the context window, preserving the original evidence and Hindi character marks. `test/stage-questions.test.ts` exercises the room's question handler in mock mode, including answer language, cache reuse and rechecking after new speech. Neither makes live API calls.
 
 ## License
 

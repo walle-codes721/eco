@@ -4,6 +4,7 @@ export interface Chunk {
   tag: string; // "slide 6", "menu", "hours"... shown to users as the citation
   title: string; // first line, used as the board topic
   text: string;
+  translations?: Record<string, string>; // aligned caption lines, used locally for search only
 }
 
 const STOP = new Set(
@@ -20,11 +21,17 @@ const STOP = new Set(
 );
 
 export function terms(s: string): string[] {
-  return (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1 && !STOP.has(t));
+  // Marks belong to their letters: splitting them breaks Hindi words such as देशों.
+  return (s.normalize("NFC").toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu) ?? []).filter((t) => t.length > 1 && !STOP.has(t));
 }
 
 export function normalize(q: string): string {
   return terms(q).join(" ");
+}
+
+/** Answer identity must preserve negation, Hindi vowel marks and other meaningful words. */
+export function questionKey(q: string, lang: string): string {
+  return JSON.stringify(["qa-v2", lang, q.normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim()]);
 }
 
 export const tokensOf = (s: string) => Math.ceil(s.length / 4);
@@ -42,10 +49,44 @@ export function chunkPages(pages: { tag: string; text: string }[], words = 300):
   return out;
 }
 
+/** Keep each phrase aligned with its existing translations; never generate new ones for retrieval. */
+export function transcriptChunks(lines: { at: number; slide: number; src: string; out?: Record<string, string> }[]): Chunk[] {
+  const chunks: Chunk[] = [];
+  let buf: typeof lines = [];
+  let words = 0;
+  const flush = () => {
+    if (!buf.length) return;
+    const at = buf[0].at;
+    const langs = [...new Set(buf.flatMap((l) => Object.entries(l.out ?? {})
+      .filter(([, text]) => typeof text === "string" && text.trim()).map(([lang]) => lang)))];
+    chunks.push({
+      tag: `said at ${Math.floor(at / 60)}:${String(at % 60).padStart(2, "0")}`,
+      title: `Slide ${buf[0].slide}`,
+      text: buf.map((l) => l.src.replace(/\s+/g, " ").trim()).join("\n"),
+      translations: Object.fromEntries(langs.map((lang) => [lang,
+        buf.map((l) => {
+          const translated = l.out?.[lang];
+          return (typeof translated === "string" && translated.trim() ? translated : l.src).replace(/\s+/g, " ").trim();
+        }).join("\n"),
+      ])),
+    });
+    buf = [];
+    words = 0;
+  };
+  for (const line of lines) {
+    if (!line.src.trim()) continue;
+    if (buf.length && (buf[0].slide !== line.slide || words + line.src.split(/\s+/).length > 150)) flush();
+    buf.push(line);
+    words += line.src.split(/\s+/).length;
+  }
+  flush();
+  return chunks;
+}
+
 /** BM25 scores for every chunk, same order as `chunks`. */
 export function bm25(chunks: Chunk[], query: string, k1 = 1.2, b = 0.75): number[] {
   const q = [...new Set(terms(query))];
-  const docs = chunks.map((c) => terms(c.title + " " + c.text));
+  const docs = chunks.map((c) => terms([c.title, c.text, ...Object.values(c.translations ?? {})].join(" ")));
   const avg = docs.reduce((n, d) => n + d.length, 0) / (docs.length || 1);
   const df = new Map<string, number>();
   for (const d of docs) for (const t of new Set(d)) df.set(t, (df.get(t) ?? 0) + 1);
@@ -64,7 +105,8 @@ export function bm25(chunks: Chunk[], query: string, k1 = 1.2, b = 0.75): number
 /**
  * Context for one answer call, at most `budget` tokens.
  * Top-3 keyword hits first; then the rest of the source in order, so a question asked in
- * Hindi about an English deck still gets context (small decks fit whole).
+ * Hindi about an English-only deck still gets context (small decks fit whole).
+ * Transcript translations participate in ranking; only the original text consumes model context.
  */
 export function selectContext(chunks: Chunk[], query: string, budget = 1500): { picked: Chunk[]; best: Chunk | null } {
   const scores = bm25(chunks, query);
@@ -90,15 +132,17 @@ export function selectContext(chunks: Chunk[], query: string, budget = 1500): { 
 }
 
 /** Mock answers: the sentence of the best chunk that shares the most words with the question. */
-export function bestSentence(question: string, chunk: Chunk | null): { covered: boolean; text: string; cite: string } {
+export function bestSentence(question: string, chunk: Chunk | null, lang?: string): { covered: boolean; text: string; cite: string } {
   if (!chunk) return { covered: false, text: "", cite: "" };
   const q = new Set(terms(question));
   let best = "";
   let score = 0;
-  const units = chunk.text.split("\n").flatMap((l) => (l.length > 200 ? l.split(/(?<=[.!?])\s+/) : [l]));
-  for (const s of units) {
-    const n = terms(s).filter((t) => q.has(t)).length;
-    if (n > score) [best, score] = [s.trim(), n];
+  const translations = Object.values(chunk.translations ?? {}).map((t) => t.split("\n"));
+  const target = lang ? chunk.translations?.[lang]?.split("\n") : undefined;
+  const units = chunk.text.split("\n").flatMap((l) => (!translations.length && l.length > 200 ? l.split(/(?<=[.!?])\s+/) : [l]));
+  for (const [i, s] of units.entries()) {
+    const n = Math.max(...[s, ...translations.map((t) => t[i] ?? "")].map((t) => terms(t).filter((w) => q.has(w)).length));
+    if (n > score) [best, score] = [(target?.[i] || s).trim(), n];
   }
   return score ? { covered: true, text: best, cite: chunk.tag } : { covered: false, text: "", cite: "" };
 }

@@ -3,7 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
 import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary } from "./prompts";
-import { bestSentence, chunkPages, isEcho, normalize, selectContext, terms, type Chunk } from "./retrieve";
+import { bestSentence, chunkPages, isEcho, normalize, questionKey, selectContext, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT } from "./voice";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
@@ -37,7 +37,7 @@ export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
 /** The talk's summary. `n` is the seq of the last line it covers: a newer line makes it stale. */
 export interface Summary { n: number; text: Record<string, string>; live: boolean; at: number }
-type Answer = { covered: boolean; answer: string; cite: string; q_en: string };
+type Answer = { covered: boolean; answer: string; cite: string; q_en: string; sourceSeq?: number };
 type CustomerTurn = { src: string; lang: string; to_owner: string; answer: { covered: boolean; text: string; text_owner: string; cite: string } };
 
 export const DEMOS: Record<string, "stage" | "counter"> = { "stage/eco/demo": "stage", "counter/eco/gelato": "counter" };
@@ -486,20 +486,7 @@ export class Room extends DurableObject<Env> {
 
   /** Deck chunks plus what the speaker has said so far, ~150 words per transcript chunk. */
   private sourceChunks(): Chunk[] {
-    const said: Chunk[] = [];
-    let buf: Line[] = [];
-    const flush = () => {
-      if (!buf.length) return;
-      const at = buf[0].at;
-      said.push({ tag: `said at ${Math.floor(at / 60)}:${String(at % 60).padStart(2, "0")}`, title: `Slide ${buf[0].slide}`, text: buf.map((l) => l.src).join(" ") });
-      buf = [];
-    };
-    for (const l of this.lines) {
-      buf.push(l);
-      if (buf.reduce((n, x) => n + x.src.split(" ").length, 0) > 150) flush();
-    }
-    flush();
-    return [...this.chunks, ...said];
+    return [...this.chunks, ...transcriptChunks(this.lines)];
   }
 
   private async ask(body: any, ip: string): Promise<Response> {
@@ -507,8 +494,10 @@ export class Room extends DurableObject<Env> {
     const text = String(body.text ?? "").trim().slice(0, 300);
     const lang = String(body.lang ?? "en").slice(0, 5);
     if (!text) return json({ error: "Empty question" }, 400);
-    const key = `${normalize(text)}|${lang}`;
-    let a = this.cache[key];
+    const key = questionKey(text, lang);
+    const sourceSeq = this.lines.at(-1)?.seq ?? 0;
+    let a: Answer | undefined = this.cache[key];
+    if (m.mode === "stage" && a?.sourceSeq !== sourceSeq) a = undefined;
     let fromCache = !!a;
     if (!a) {
       if (!this.allow(ip, "ask")) return json({ error: "limit" }, 429);
@@ -517,14 +506,14 @@ export class Room extends DurableObject<Env> {
       const r = await tf<Answer>(this.env, "ask", MODELS.answer, answerPrompt(picked, text, lang), {
         pub: m.demo,
         mock: () => {
-          const b = bestSentence(text, best);
+          const b = bestSentence(text, best, lang);
           return { covered: b.covered, answer: b.text, cite: b.cite, q_en: text };
         },
       });
       if (r.data === null) return json({ error: "busy", fallback: r.fallback }, 503);
       const tags = new Set(chunks.map((c) => c.tag));
       const cite = tags.has(r.data.cite) ? r.data.cite : r.data.covered ? best?.tag ?? "" : "";
-      a = { covered: !!r.data.covered && !!r.data.answer, answer: String(r.data.answer ?? ""), cite, q_en: String(r.data.q_en || text) };
+      a = { covered: !!r.data.covered && !!r.data.answer, answer: String(r.data.answer ?? ""), cite, q_en: String(r.data.q_en || text), sourceSeq };
       this.cache[key] = a;
       fromCache = false;
     }
