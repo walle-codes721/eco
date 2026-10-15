@@ -46,6 +46,9 @@ export function chunkPages(pages: { tag: string; text: string }[], words = 300):
 export const TAUGHT_TAG = "answers";
 const TAUGHT_MAX = 8000; // one page, same ceiling as the rest of the list
 
+/** One line of at most `n` characters: all whitespace and line breaks become single spaces. */
+export const oneLine = (s: unknown, n: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+
 /**
  * Teach Eco: add one owner-approved answer to the list's "answers" page.
  * `q` is the question in the owner's language, `asked` the customer's own words (helps keyword search in their language).
@@ -56,7 +59,7 @@ export function teach(
   e: { q: string; asked?: string; a: string },
 ): { pages: { tag: string; text: string }[]; added: boolean; reason?: "empty" | "duplicate" | "full" } {
   // One line per field, so a customer's words can never start a second entry or fake a "Q:" line.
-  const one = (s: unknown, n: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+  const one = oneLine;
   const q = one(e.q, 200);
   const a = one(e.a, 500);
   const asked = one(e.asked, 200);

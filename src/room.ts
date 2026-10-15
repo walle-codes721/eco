@@ -3,7 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
 import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary } from "./prompts";
-import { bestSentence, chunkPages, isEcho, normalize, selectContext, slidePages, teach, terms, type Chunk } from "./retrieve";
+import { bestSentence, chunkPages, isEcho, normalize, oneLine, selectContext, slidePages, teach, terms, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT } from "./voice";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
@@ -32,7 +32,7 @@ export interface Meta {
 /** One device = one speaker. `key` authorises that device; `voice` = a consented sample is stored. */
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
 export interface Line { speaker?: string; seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string> }
-export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null }
+export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null; taught?: string /* the speaker's typed answer (Teach Eco) */ }
 export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean; taught?: boolean /* owner turn already added to the list (Teach Eco) */ }
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
 /** The talk's summary. `n` is the seq of the last line it covers: a newer line makes it stale. */
@@ -293,7 +293,7 @@ export class Room extends DurableObject<Env> {
         return json({ ok: true, chunks: this.chunks.length });
       }
       case "POST addanswer":
-        return this.teachAnswer(body);
+        return m.mode === "stage" ? this.teachQuestion(body) : this.teachAnswer(body);
     }
     return json({ error: "Unknown action" }, 404);
   }
@@ -731,6 +731,39 @@ export class Room extends DurableObject<Env> {
     const msg = { type: "turns", cid, lang: convo.lang, open: convo.open, turns: added };
     this.send(["owner"], msg, [`c:${cid}`]);
     return json(msg);
+  }
+
+  /**
+   * Teach Eco on the Stage: the speaker (already past the host check) types an answer to questions the talk didn't cover.
+   * It becomes a source, the stale "not covered" answers are dropped, and the listeners who asked get the text.
+   * The speaker has reviewed `q` and `a` on their screen. Nothing here calls the AI.
+   */
+  private async teachQuestion(body: any): Promise<Response> {
+    const m = this.meta!;
+    if (m.demo) return json({ error: "The demo can't be edited" }, 400);
+    const ids: string[] = Array.isArray(body.qids) ? body.qids.map(String) : [];
+    const asked = this.questions.filter((q) => ids.includes(q.id) && !q.covered); // only questions the talk couldn't answer
+    if (!asked.length) return json({ error: "No such question" }, 404);
+    if (asked.every((q) => q.taught)) return json({ error: "Already added" }, 409);
+
+    const r = teach(this.pages, { q: body.q, asked: body.asked, a: body.a });
+    if (r.reason === "empty") return json({ error: "Write the question and the answer" }, 400);
+    if (r.reason === "full") return json({ error: "The answers section is full. Tidy it in your notes." }, 409);
+    if (r.added) {
+      this.pages = r.pages;
+      this.chunks = chunkPages(this.pages);
+      this.cache = {}; // "not covered" came from the old sources
+    }
+    const answer = oneLine(body.a, 500);
+    const at = this.elapsed();
+    for (const q of asked) {
+      q.taught = answer;
+      q.answeredAt ??= at; // teaching it also counts as answering it
+    }
+    await this.save("pages", "chunks", "cache", "questions");
+    this.send(["listener"], { type: "answered", qids: asked.map((q) => q.id), at, answer });
+    this.pushBoard();
+    return json({ ok: true, added: r.added, answered: asked.length, chunks: this.chunks.length });
   }
 
   /**
