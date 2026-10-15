@@ -3,7 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
 import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary } from "./prompts";
-import { bestSentence, chunkPages, isEcho, normalize, selectContext, teach, terms, type Chunk } from "./retrieve";
+import { bestSentence, chunkPages, isEcho, normalize, selectContext, slidePages, teach, terms, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT } from "./voice";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
@@ -152,7 +152,7 @@ export class Room extends DurableObject<Env> {
       id: m.id, mode: m.mode, title: m.title, speaker: m.speaker, langs: m.langs, status: m.status,
       startedAt: m.startedAt, endedAt: m.endedAt, slide: m.slide, demo: m.demo, bizType: m.bizType, ownerLang: m.ownerLang,
       live: isLive(this.env),
-      slides: m.mode === "stage" ? this.pages.filter((p) => p.tag !== "notes") : [],
+      slides: m.mode === "stage" ? slidePages(this.pages) : [],
       deck: !!m.deck,
       speakers: (m.speakers ?? []).map(({ id, name, voice }) => ({ id, name, voice })),
       voice: !!this.env.VOICE_URL,
@@ -267,7 +267,7 @@ export class Room extends DurableObject<Env> {
     const body: any = await req.json().catch(() => ({}));
     switch (`${req.method} ${action}`) {
       case "POST slide": {
-        m.slide = Math.max(1, Math.min(Number(body.n) || 1, Math.max(1, this.pages.length)));
+        m.slide = Math.max(1, Math.min(Number(body.n) || 1, Math.max(1, slidePages(this.pages).length)));
         await this.save("meta");
         this.send(["listener", "screen", "host"], { type: "slide", n: m.slide });
         return json({ slide: m.slide });
@@ -630,7 +630,7 @@ export class Room extends DurableObject<Env> {
       duration: m.startedAt ? Math.round(((m.endedAt ?? Date.now()) - m.startedAt) / 1000) : 0,
       peak: this.peak, lines: this.lines.length, liveLines: this.lines.filter((l) => l.live).length,
       questions: b.questions, qLangs: b.qLangs, topics: b.topics,
-      worstSlide: worst ? { slide: Number(worst[0]), count: worst[1], title: this.pages[Number(worst[0]) - 1]?.text.split("\n")[0] ?? "" } : null,
+      worstSlide: worst ? { slide: Number(worst[0]), count: worst[1], title: slidePages(this.pages)[Number(worst[0]) - 1]?.text.split("\n")[0] ?? "" } : null,
       unanswered: b.queue.filter((g) => !g.answeredAt).map((g) => ({ q: g.q, count: g.count })),
       p50: b.p50,
       speakers: (m.speakers ?? []).map((s) => ({ name: s.name, lines: this.lines.filter((l) => (l.speaker ?? "s0") === s.id).length })),

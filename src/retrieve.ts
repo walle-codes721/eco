@@ -74,6 +74,11 @@ export function teach(
   return { pages: next, added: true };
 }
 
+/** The pages of a Stage that are real slides: not the speaker's notes, and not what was taught. */
+export function slidePages<T extends { tag: string }>(pages: T[]): T[] {
+  return pages.filter((p) => p.tag !== "notes" && p.tag !== TAUGHT_TAG);
+}
+
 /** BM25 scores for every chunk, same order as `chunks`. */
 export function bm25(chunks: Chunk[], query: string, k1 = 1.2, b = 0.75): number[] {
   const q = [...new Set(terms(query))];
@@ -104,7 +109,18 @@ export function selectContext(chunks: Chunk[], query: string, budget = 1500): { 
   const hits = order.filter((i) => scores[i] > 0).slice(0, 3);
   const picked: Chunk[] = [];
   let used = 0;
+  // What the owner or speaker taught always goes in first, up to half the budget: a question in another
+  // language may share no words with it, and a long deck can't be sent whole.
+  const taken = new Set<number>();
+  for (const i of order.filter((i) => chunks[i].tag === TAUGHT_TAG)) {
+    const cost = tokensOf(chunks[i].text);
+    if (used + cost > budget / 2) continue;
+    picked.push(chunks[i]);
+    taken.add(i);
+    used += cost;
+  }
   for (const i of [...hits, ...chunks.map((_, i) => i).filter((i) => !hits.includes(i))]) {
+    if (taken.has(i)) continue;
     const c = chunks[i];
     const cost = tokensOf(c.text);
     if (used + cost > budget) {
