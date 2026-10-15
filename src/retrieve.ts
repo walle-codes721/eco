@@ -36,6 +36,13 @@ export function questionKey(q: string, lang: string): string {
 
 export const tokensOf = (s: string) => Math.ceil(s.length / 4);
 
+/** Fingerprint exactly the ordered source tags/text sent to the model, without storing copies in every cache entry. */
+export async function contextFingerprint(chunks: Chunk[]): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(chunks.map(({ tag, text }) => [tag, text])));
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Split pages into ~300-word chunks, keeping each page's tag. */
 export function chunkPages(pages: { tag: string; text: string }[], words = 300): Chunk[] {
   const out: Chunk[] = [];
@@ -104,31 +111,58 @@ export function bm25(chunks: Chunk[], query: string, k1 = 1.2, b = 0.75): number
 
 /**
  * Context for one answer call, at most `budget` tokens.
- * Top-3 keyword hits first; then the rest of the source in order, so a question asked in
- * Hindi about an English-only deck still gets context (small decks fit whole).
+ * Top-3 keyword hits first; then caller-provided fallback tags, then the source in order.
+ * Stage can prefer its current slide/recent speech when there is no cross-language match.
+ * With keyword hits, reserve up to 20% of the same budget for distinct fallback excerpts.
+ * Fallbacks are context hints, never evidence of a keyword match (they don't set `best`).
  * Transcript translations participate in ranking; only the original text consumes model context.
  */
-export function selectContext(chunks: Chunk[], query: string, budget = 1500): { picked: Chunk[]; best: Chunk | null } {
+export function selectContext(chunks: Chunk[], query: string, budget = 1500, fallbackTags: string[] = []): { picked: Chunk[]; best: Chunk | null } {
   const scores = bm25(chunks, query);
   const order = chunks.map((_, i) => i).sort((a, b) => scores[b] - scores[a]);
   const hits = order.filter((i) => scores[i] > 0).slice(0, 3);
+  const fallback = [...new Set(fallbackTags.flatMap((tag) => chunks.flatMap((c, i) => c.tag === tag ? [i] : [])))];
+  const separate = fallback.filter((i) => !hits.includes(i));
+  const reserved = new Map<number, Chunk>();
+  const preferredCost = [...hits, ...separate].reduce((n, i) => n + tokensOf(chunks[i].text), 0);
+  let allowance = hits.length && preferredCost > budget ? Math.floor(budget * 0.2) : 0;
+  // Share the reservation so a long current slide cannot crowd out every recent phrase.
+  for (const [position, i] of separate.entries()) {
+    const c = chunks[i];
+    const cost = Math.min(tokensOf(c.text), Math.ceil(allowance / (separate.length - position)));
+    if (cost <= 0) continue;
+    const excerpt = { ...c, text: c.text.slice(0, cost * 4) };
+    reserved.set(i, excerpt);
+    allowance -= tokensOf(excerpt.text);
+  }
   const picked: Chunk[] = [];
-  let used = 0;
-  for (const i of [...hits, ...chunks.map((_, i) => i).filter((i) => !hits.includes(i))]) {
+  let best: Chunk | null = null;
+  // Count reserved excerpts now, but emit them after the keyword matches.
+  let used = [...reserved.values()].reduce((n, c) => n + tokensOf(c.text), 0);
+  for (const i of new Set([...hits, ...fallback, ...chunks.map((_, i) => i)])) {
+    const excerpt = reserved.get(i);
+    if (excerpt) {
+      picked.push(excerpt);
+      continue;
+    }
     const c = chunks[i];
     const cost = tokensOf(c.text);
     if (used + cost > budget) {
-      if (used < budget * 0.8 && !hits.includes(i)) {
+      if ((reserved.size && hits.includes(i) && used < budget) || (used < budget * 0.8 && !hits.includes(i))) {
         const room = (budget - used) * 4;
-        picked.push({ ...c, text: c.text.slice(0, room) });
+        // A complete translated line may contain facts beyond this original-text excerpt.
+        const partial = { ...c, text: c.text.slice(0, room), translations: undefined };
+        picked.push(partial);
+        if (i === hits[0]) best = partial;
         used = budget;
       }
       continue;
     }
     picked.push(c);
+    if (i === hits[0]) best = c;
     used += cost;
   }
-  return { picked, best: hits.length ? chunks[hits[0]] : null };
+  return { picked, best };
 }
 
 /** Mock answers: the sentence of the best chunk that shares the most words with the question. */
