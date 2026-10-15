@@ -169,8 +169,11 @@ function drawBoard() {
     ? board.queue.map((g) => h(`div.q-item${g.answeredAt != null ? ".done" : ""}`, {},
         h("span.chip" + (g.count > 1 ? ".red" : ""), {}, String(g.count)),
         h("div", { style: { flex: 1 } }, h("div", {}, g.q), h("div.tiny.muted", {}, g.langs.map((l) => langName(l)).join(", "))),
-        g.answeredAt != null ? h("span.tiny.muted", {}, `answered ${fmtTime(g.answeredAt)}`) :
-          h("button.btn.sm", { type: "button", onclick: () => answered(g.qids) }, icon("check"), "Answered")))
+        h("div.row", { style: { gap: "6px", flexShrink: 0 } },
+          g.taught ? h("span.tiny.muted", {}, "Eco learned this ✓")
+            : g.answeredAt != null ? h("span.tiny.muted", {}, `answered ${fmtTime(g.answeredAt)}`) : null,
+          host && !g.taught ? h("button.btn.sm", { type: "button", onclick: () => teachSheet(g) }, icon("plus"), "Answer it") : null,
+          g.answeredAt == null ? h("button.btn.sm", { type: "button", onclick: () => answered(g.qids) }, icon("check"), "Answered") : null)))
     : [h("p.empty", {}, "When Eco can't answer from your slides, the question lands here.")]));
 }
 
@@ -187,6 +190,36 @@ async function setStatus(status) {
 }
 async function answered(qids) {
   await api(`/api/rooms/${id}/answered`, { method: "POST", key, body: { qids } }).catch(() => toast("Couldn't update"));
+}
+
+/** Teach Eco: type a short answer. Eco keeps it as a source and sends it to the listeners who asked. Nothing is saved before Save. */
+function teachSheet(g) {
+  const qIn = h("textarea", { rows: 2, maxlength: 200 });
+  const askedIn = h("input", { type: "text", maxlength: 200 });
+  const aIn = h("textarea", { rows: 3, maxlength: 500, placeholder: "One or two sentences, as you would say it" });
+  qIn.value = g.q;
+  askedIn.value = g.asked; // the listener's own words, if they asked in another language
+  const save = h("button.btn.primary", { type: "button" }, "Save");
+  const wrap = h("div.sheet-wrap", {}, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "560px", width: "100%" } },
+    h("h2", {}, "Teach Eco this answer"),
+    h("p.small.muted", {}, `Eco will use this to answer the next listeners, and ${g.count > 1 ? `the ${g.count} listeners who asked` : "the listener who asked"} will see it now. Check it before you save.`),
+    h("label.field", {}, "Question", qIn),
+    h("label.field", {}, "Listener's words", askedIn),
+    h("label.field", {}, "Your answer", aIn),
+    h("div.row", {}, h("span.spacer"), h("button.btn", { type: "button", onclick: () => wrap.remove() }, "Cancel"), save)));
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await api(`/api/rooms/${id}/addanswer`, { method: "POST", key, body: { qids: g.qids, q: qIn.value, asked: askedIn.value, a: aIn.value } });
+      toast("Eco will answer this from now on ✓");
+      wrap.remove();
+    } catch (err) {
+      if (err.data?.error === "Already added") wrap.remove();
+      else (toast(err.message || "Couldn't save"), (save.disabled = false));
+    }
+  };
+  document.body.append(wrap);
+  aIn.focus();
 }
 
 async function toggleMic() {

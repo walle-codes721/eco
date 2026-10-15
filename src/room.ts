@@ -593,12 +593,14 @@ export class Room extends DurableObject<Env> {
       t.sample = q.q_en;
       topics.set(q.cite, t);
     }
-    const queue = new Map<string, { qids: string[]; q: string; count: number; langs: string[]; answeredAt: number | null }>();
+    const queue = new Map<string, { qids: string[]; q: string; asked: string; count: number; langs: string[]; answeredAt: number | null; taught: boolean }>();
     for (const q of qs.filter((q) => !q.covered)) {
       const k = normalize(q.q_en);
-      const g = queue.get(k) ?? { qids: [], q: q.q_en, count: 0, langs: [], answeredAt: null };
+      const g = queue.get(k) ?? { qids: [], q: q.q_en, asked: "", count: 0, langs: [], answeredAt: null, taught: true };
       g.qids.push(q.id);
       g.count++;
+      if (!g.asked && q.text !== q.q_en) g.asked = q.text; // a listener's own words, when they asked in another language
+      g.taught = g.taught && !!q.taught;
       if (!g.langs.includes(q.lang)) g.langs.push(q.lang);
       g.answeredAt = q.answeredAt;
       queue.set(k, g);
