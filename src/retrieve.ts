@@ -46,6 +46,9 @@ export function chunkPages(pages: { tag: string; text: string }[], words = 300):
 export const TAUGHT_TAG = "answers";
 const TAUGHT_MAX = 8000; // one page, same ceiling as the rest of the list
 
+/** One line of at most `n` characters: all whitespace and line breaks become single spaces. */
+export const oneLine = (s: unknown, n: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+
 /**
  * Teach Eco: add one owner-approved answer to the list's "answers" page.
  * `q` is the question in the owner's language, `asked` the customer's own words (helps keyword search in their language).
@@ -56,7 +59,7 @@ export function teach(
   e: { q: string; asked?: string; a: string },
 ): { pages: { tag: string; text: string }[]; added: boolean; reason?: "empty" | "duplicate" | "full" } {
   // One line per field, so a customer's words can never start a second entry or fake a "Q:" line.
-  const one = (s: unknown, n: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+  const one = oneLine;
   const q = one(e.q, 200);
   const a = one(e.a, 500);
   const asked = one(e.asked, 200);
@@ -72,6 +75,11 @@ export function teach(
   if (text.length > TAUGHT_MAX) return { pages, added: false, reason: "full" };
   const next = old ? pages.map((p) => (p.tag === TAUGHT_TAG ? { ...p, text } : p)) : [...pages, { tag: TAUGHT_TAG, text }];
   return { pages: next, added: true };
+}
+
+/** The pages of a Stage that are real slides: not the speaker's notes, and not what was taught. */
+export function slidePages<T extends { tag: string }>(pages: T[]): T[] {
+  return pages.filter((p) => p.tag !== "notes" && p.tag !== TAUGHT_TAG);
 }
 
 /** BM25 scores for every chunk, same order as `chunks`. */
@@ -104,7 +112,18 @@ export function selectContext(chunks: Chunk[], query: string, budget = 1500): { 
   const hits = order.filter((i) => scores[i] > 0).slice(0, 3);
   const picked: Chunk[] = [];
   let used = 0;
+  // What the owner or speaker taught always goes in first, up to half the budget: a question in another
+  // language may share no words with it, and a long deck can't be sent whole.
+  const taken = new Set<number>();
+  for (const i of order.filter((i) => chunks[i].tag === TAUGHT_TAG)) {
+    const cost = tokensOf(chunks[i].text);
+    if (used + cost > budget / 2) continue;
+    picked.push(chunks[i]);
+    taken.add(i);
+    used += cost;
+  }
   for (const i of [...hits, ...chunks.map((_, i) => i).filter((i) => !hits.includes(i))]) {
+    if (taken.has(i)) continue;
     const c = chunks[i];
     const cost = tokensOf(c.text);
     if (used + cost > budget) {
