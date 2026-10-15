@@ -42,6 +42,38 @@ export function chunkPages(pages: { tag: string; text: string }[], words = 300):
   return out;
 }
 
+/** The list page that holds what the owner taught Eco. Customers see it as the citation. */
+export const TAUGHT_TAG = "answers";
+const TAUGHT_MAX = 8000; // one page, same ceiling as the rest of the list
+
+/**
+ * Teach Eco: add one owner-approved answer to the list's "answers" page.
+ * `q` is the question in the owner's language, `asked` the customer's own words (helps keyword search in their language).
+ * Never changes `pages`. Says why when nothing was added.
+ */
+export function teach(
+  pages: { tag: string; text: string }[],
+  e: { q: string; asked?: string; a: string },
+): { pages: { tag: string; text: string }[]; added: boolean; reason?: "empty" | "duplicate" | "full" } {
+  // One line per field, so a customer's words can never start a second entry or fake a "Q:" line.
+  const one = (s: unknown, n: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+  const q = one(e.q, 200);
+  const a = one(e.a, 500);
+  const asked = one(e.asked, 200);
+  if (!q || !a) return { pages, added: false, reason: "empty" };
+
+  const entry = `Q: ${q}\n${asked && asked.toLowerCase() !== q.toLowerCase() ? `Asked as: ${asked}\n` : ""}A: ${a}`;
+  const old = pages.find((p) => p.tag === TAUGHT_TAG)?.text ?? "";
+  const key = (s: string) => s.toLowerCase();
+  const same = old.split("\n\n").some((b) => key(b.match(/^Q: (.*)$/m)?.[1] ?? "") === key(q) && key(b.match(/^A: (.*)$/m)?.[1] ?? "") === key(a));
+  if (same) return { pages, added: false, reason: "duplicate" };
+
+  const text = old ? `${old}\n\n${entry}` : entry;
+  if (text.length > TAUGHT_MAX) return { pages, added: false, reason: "full" };
+  const next = old ? pages.map((p) => (p.tag === TAUGHT_TAG ? { ...p, text } : p)) : [...pages, { tag: TAUGHT_TAG, text }];
+  return { pages: next, added: true };
+}
+
 /** BM25 scores for every chunk, same order as `chunks`. */
 export function bm25(chunks: Chunk[], query: string, k1 = 1.2, b = 0.75): number[] {
   const q = [...new Set(terms(query))];

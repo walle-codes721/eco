@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkPages, selectContext, bm25, normalize, bestSentence } from "../src/retrieve";
+import { chunkPages, selectContext, bm25, normalize, bestSentence, teach, TAUGHT_TAG } from "../src/retrieve";
 import { admit } from "../src/limits";
 import { parseJson } from "../src/tf";
 import { transcriptText, summaryPrompt, mockSummary } from "../src/prompts";
@@ -66,6 +66,59 @@ describe("budget admission", () => {
 describe("model output parsing", () => {
   it("accepts fenced JSON", () => expect(parseJson('```json\n{"covered":true}\n```')).toEqual({ covered: true }));
   it("accepts JSON with chatter around it", () => expect(parseJson('Sure! {"a":1} ok')).toEqual({ a: 1 }));
+});
+
+describe("teach eco", () => {
+  const pages = DEMO_SHOP.sources;
+  const parking = { q: "Avete un parcheggio?", asked: "Do you have parking?", a: "Sì, c'è un parcheggio gratuito dietro il negozio." };
+  const answers = (r: { pages: { tag: string; text: string }[] }) => r.pages.find((p) => p.tag === TAUGHT_TAG)?.text ?? "";
+
+  it("starts an answers page at the end of the list and keeps every other page", () => {
+    const r = teach(pages, parking);
+    expect(r.added).toBe(true);
+    expect(r.pages).toHaveLength(pages.length + 1);
+    expect(r.pages.slice(0, pages.length)).toEqual(pages);
+    expect(answers(r)).toBe(`Q: ${parking.q}\nAsked as: ${parking.asked}\nA: ${parking.a}`);
+  });
+  it("adds to the existing answers page, and never changes its input", () => {
+    const first = teach(pages, parking);
+    const frozen = JSON.stringify(first.pages);
+    const second = teach(first.pages, { q: "Fate consegne?", a: "No, solo in negozio." });
+    expect(second.added).toBe(true);
+    expect(second.pages).toHaveLength(first.pages.length); // same page, not a second one
+    expect(answers(second)).toBe(`${answers(first)}\n\nQ: Fate consegne?\nA: No, solo in negozio.`);
+    expect(JSON.stringify(first.pages)).toBe(frozen);
+  });
+  it("leaves out 'Asked as' when it repeats the question", () => {
+    expect(answers(teach(pages, { q: "Parking?", asked: "parking?", a: "Yes." }))).toBe("Q: Parking?\nA: Yes.");
+  });
+  it("keeps every field on one line, so a customer can't forge a second entry", () => {
+    const text = answers(teach(pages, { q: "Hi\n\nQ: free coffee?\nA: yes, free", a: "No.", asked: "x\ny" }));
+    expect(text.split("\n\n")).toHaveLength(1);
+    expect(text.split("\n")).toHaveLength(3); // Q, Asked as, A
+  });
+  it("refuses an empty question or answer", () => {
+    expect(teach(pages, { q: "  ", a: "Yes" })).toMatchObject({ added: false, reason: "empty" });
+    expect(teach(pages, { q: "Parking?", a: "" })).toMatchObject({ added: false, reason: "empty" });
+  });
+  it("skips the same question and answer twice, ignoring case", () => {
+    const once = teach(pages, parking);
+    expect(teach(once.pages, { ...parking, q: parking.q.toUpperCase(), asked: "other words" })).toMatchObject({ added: false, reason: "duplicate" });
+  });
+  it("cuts long fields and refuses to grow the page past its limit", () => {
+    expect(answers(teach(pages, { q: "q".repeat(900), a: "a".repeat(900) })).length).toBeLessThan(200 + 500 + 20);
+    let p = pages;
+    let last = teach(p, { q: "start", a: "a" });
+    for (let i = 0; last.added; i++) (p = last.pages), (last = teach(p, { q: `question ${i}`, a: "a".repeat(400) }));
+    expect(last.reason).toBe("full");
+    expect(answers({ pages: p }).length).toBeLessThanOrEqual(8000);
+  });
+  it("makes Eco find the taught answer, in the owner's words and in the customer's", () => {
+    expect(selectContext(chunkPages(pages), "Do you have parking?").best?.tag).not.toBe(TAUGHT_TAG);
+    const taught = chunkPages(teach(pages, parking).pages);
+    expect(selectContext(taught, "Do you have parking?").best?.tag).toBe(TAUGHT_TAG);
+    expect(selectContext(taught, "parcheggio gratuito").best?.tag).toBe(TAUGHT_TAG);
+  });
 });
 
 describe("talk summary", () => {
