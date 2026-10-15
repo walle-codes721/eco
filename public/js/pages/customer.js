@@ -92,7 +92,7 @@ form.onsubmit = (e) => {
   input.value = "";
   send(text);
 };
-bindHold(hold, { onBlob: send, onError: () => toast(T("micDenied"), 4000) });
+bindHold(hold, { onBlob: send, onError: () => toast(T("micDenied"), 4000), lang: () => lang });
 langSel.onchange = () => {
   lang = langSel.value;
   store(`eco:clang:${id}`, lang);

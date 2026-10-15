@@ -1,6 +1,7 @@
 // The ONE Token Factory client (CONTRIBUTING.md, token rule 3). Mock unless ECO_LIVE=1 and a key is set.
 import type { Env } from "./env";
 import type { Kind, Denied } from "./budget";
+import { MODELS } from "./prompts";
 
 const BASE = "https://developer.amd.com.cn/radeon/api/v1";
 
@@ -30,6 +31,7 @@ export async function tf<T>(
   opts: { pub: boolean; mock: () => T },
 ): Promise<TfResult<T>> {
   if (!isLive(env)) return { data: opts.mock(), live: false, ms: 0 };
+  if (model === MODELS.answer && env.ECO_TEXT_MODEL) model = env.ECO_TEXT_MODEL; // stand-in while Gemma is off the catalog
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
   const translation = kind === "utterance" || kind === "turn";

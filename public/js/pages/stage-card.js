@@ -27,7 +27,7 @@ async function makeSummary() {
     summary = r.summary;
     if (r.cached) toast("Already up to date");
   } catch (err) {
-    toast(err.status === 400 ? "Say a few more phrases first." : err.status === 403 ? "Only the speaker can do this." : "Eco is busy. Try again in a moment.");
+    toast(err.status === 400 ? "Say a few more phrases first." : err.status === 403 ? "Only the speaker can do this." : err.status === 429 ? "Limit reached for now. Try again later." : "Eco is busy. Try again in a moment.");
   }
   drawSummary();
 }

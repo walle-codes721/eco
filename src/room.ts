@@ -417,16 +417,25 @@ export class Room extends DurableObject<Env> {
   private async utterance(req: Request, tryVoice: boolean, speaker: string): Promise<Response> {
     const m = this.meta!;
     if (m.status === "ended") return json({ error: "Talk ended" }, 409);
-    const buf = await req.arrayBuffer();
-    if (buf.byteLength < 1000 || buf.byteLength > 800_000) return json({ error: "Bad audio" }, 413);
+    // Text from the browser's speech recognition (JSON), or a WAV for MiMo.
+    let input: { text?: string; wavB64?: string };
+    if (req.headers.get("content-type")?.startsWith("application/json")) {
+      const text = String(((await req.json().catch(() => ({}))) as { text?: unknown }).text ?? "").trim().slice(0, 500);
+      if (!text) return json({ empty: true });
+      input = { text };
+    } else {
+      const buf = await req.arrayBuffer();
+      if (buf.byteLength < 1000 || buf.byteLength > 800_000) return json({ error: "Bad audio" }, 413);
+      input = { wavB64: b64(buf) };
+    }
     const t0 = Date.now();
     if (tryVoice) this.replayPausedUntil = Date.now() + 45_000;
 
     const prev = this.lines.slice(-2).map((l) => l.src);
-    const r = await tf(this.env, "utterance", MODELS.audio, utterancePrompt(b64(buf), m.langs, prev), {
+    const r = await tf(this.env, "utterance", turnModel(input), utterancePrompt(input, m.langs, prev), {
       pub: m.demo,
       mock: () => {
-        if (!m.demo) return { src: MOCK_LINE, out: Object.fromEntries(m.langs.map((l) => [l, MOCK_LINE])), flags: ["mock"] };
+        if (!m.demo) return { src: input.text ?? MOCK_LINE, out: Object.fromEntries(m.langs.map((l) => [l, MOCK_LINE])), flags: ["mock"] };
         const d = DEMO_TALK[this.mockI++ % DEMO_TALK.length];
         return { src: d.src, out: Object.fromEntries(m.langs.map((l) => [l, d.out[l] ?? d.src])), flags: [] as string[] };
       },
@@ -546,7 +555,8 @@ export class Room extends DurableObject<Env> {
     if (this.lines.length < 3) return json({ error: "Too short" }, 400);
     const n = this.lines.at(-1)!.seq;
     if (this.summary?.n === n) return json({ summary: this.summary, cached: true });
-    if (!isSpeaker && !(m.demo && this.allow(ip, "ask"))) return json({ error: "Not allowed" }, 403);
+    if (!isSpeaker && !m.demo) return json({ error: "Not allowed" }, 403);
+    if (!isSpeaker && !this.allow(ip, "ask")) return json({ error: "limit" }, 429);
     if (this.summarizing) return json({ error: "busy" }, 409); // one at a time: two taps must not make two calls
     this.summarizing = true;
     try {

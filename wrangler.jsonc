@@ -31,7 +31,9 @@
   "vars": {
     "ECO_LIVE": "1",
     "ECO_MAX_CALLS": "50",
-    "ECO_PUBLIC_HOURLY": "30"
+    "ECO_PUBLIC_HOURLY": "30",
+    // Gemma-4-31B-IT vanished from Token Factory on 15 Oct (AMD reviewing). Delete this line when it's back.
+    "ECO_TEXT_MODEL": "DeepSeek-V4-Flash"
   }
   // Secrets (set by Seb, never in this file): RADEON_API_KEY, ADMIN_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SESSION_SECRET
 }

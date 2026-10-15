@@ -139,7 +139,7 @@ replyForm.onsubmit = (e) => {
   replyIn.value = "";
   sendOwner(active, text);
 };
-bindHold(holdBtn, { onBlob: (b) => active && sendOwner(active, b), onError: () => toast("Microphone blocked") });
+bindHold(holdBtn, { onBlob: (b) => active && sendOwner(active, b), onError: () => toast("Microphone blocked"), lang: () => OL });
 
 // ---------- face to face: one iPad flat on the counter, top half faces the customer ----------
 let f2fDraw = null;
@@ -159,7 +159,9 @@ function faceToFace() {
   const sendCust = async (blob) => {
     busy(custHold, true);
     try {
-      addTurns(await api(`/api/rooms/${id}/turn`, { method: "POST", key, body: blob, headers: { "content-type": "audio/wav", "x-side": "customer", "x-cid": cid, "x-lang": custLang } }));
+      addTurns(await api(`/api/rooms/${id}/turn`, typeof blob === "string"
+        ? { method: "POST", key, body: { side: "customer", cid, lang: custLang, text: blob } }
+        : { method: "POST", key, body: blob, headers: { "content-type": "audio/wav", "x-side": "customer", "x-cid": cid, "x-lang": custLang } }));
       const c = convos.find((x) => x.id === cid);
       const eco = c?.turns.at(-1);
       if (eco?.side === "eco") voice.say(eco.src, c.lang);
@@ -174,8 +176,8 @@ function faceToFace() {
     voice.say(c?.turns.at(-1)?.out, c?.lang);
     busy(ownHold, false);
   };
-  bindHold(custHold, { onBlob: sendCust });
-  bindHold(ownHold, { onBlob: sendOwn });
+  bindHold(custHold, { onBlob: sendCust, lang: () => custLang });
+  bindHold(ownHold, { onBlob: sendOwn, lang: () => OL });
 
   f2fDraw = () => {
     const c = convos.find((x) => x.id === cid);
