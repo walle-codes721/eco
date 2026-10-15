@@ -15,7 +15,14 @@ export type TfResult<T> =
   | { data: T; live: boolean; ms: number }
   | { data: null; live: true; ms: number; fallback: Denied | "error"; why?: string };
 
-export const isLive = (env: Env) => env.ECO_LIVE === "1" && !!env.RADEON_API_KEY;
+// Gemma vanished from Token Factory on 15 Oct. Text jobs try it first and fall back to DeepSeek when it's "not supported",
+// then skip it for 10 minutes. When AMD restores it, Eco is back on Gemma with no deploy.
+// ponytail: per-isolate memory, so each Worker isolate pays one free 400 per 10 min; move it into Budget if that ever matters.
+export const TEXT_FALLBACK = "DeepSeek-V4-Flash";
+const GEMMA_RECHECK_MS = 10 * 60_000;
+let gemmaMissingUntil = 0;
+
+export const isLive =(env: Env) => env.ECO_LIVE === "1" && !!env.RADEON_API_KEY;
 
 /** Parses model output that should be JSON, tolerating ```json fences. */
 export function parseJson<T>(content: string): T {
@@ -31,7 +38,7 @@ export async function tf<T>(
   opts: { pub: boolean; mock: () => T },
 ): Promise<TfResult<T>> {
   if (!isLive(env)) return { data: opts.mock(), live: false, ms: 0 };
-  if (model === MODELS.answer && env.ECO_TEXT_MODEL) model = env.ECO_TEXT_MODEL; // stand-in while Gemma is off the catalog
+  if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = TEXT_FALLBACK;
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
   const translation = kind === "utterance" || kind === "turn";
@@ -78,6 +85,13 @@ export async function tf<T>(
           msg = (e.error ?? e.detail?.error ?? e.detail)?.message ?? JSON.stringify(e.error ?? e.detail ?? e);
         } catch {}
         why = `${status}: ${String(msg).slice(0, 160)}`;
+        // Gemma off the catalog: same request on the fallback, no retry. This 400 never reaches finish(), so it can't trip the stop.
+        if (status === 400 && model === MODELS.answer && /not supported/i.test(msg)) {
+          gemmaMissingUntil = Date.now() + GEMMA_RECHECK_MS;
+          model = TEXT_FALLBACK;
+          why = "";
+          continue;
+        }
       }
       break;
     }

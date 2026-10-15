@@ -297,3 +297,32 @@ describe("new-lines pill counter", () => {
     expect(nextNewCount(4, true)).toBe(0);
   });
 });
+
+import { vi } from "vitest";
+import { tf, TEXT_FALLBACK } from "../src/tf";
+
+describe("Gemma fallback (fetch mocked, no real calls)", () => {
+  it("answers on DeepSeek when Gemma is 'not supported', without counting a failure, then skips Gemma", async () => {
+    const finished: { model: string; status: number }[] = [];
+    const env = {
+      ECO_LIVE: "1",
+      RADEON_API_KEY: "test",
+      BUDGET: { idFromName: () => "g", get: () => ({ acquire: async () => ({ ok: true }), finish: async (r: { model: string; status: number }) => void finished.push(r) }) },
+    } as never;
+    const sent: string[] = [];
+    const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"a":1}' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }));
+    vi.stubGlobal("fetch", async (_u: string, init: { body: string }) => {
+      const model = JSON.parse(init.body).model;
+      sent.push(model);
+      return model === MODELS.answer ? new Response('{"error":{"message":"Requested model Gemma-4-31B-IT not supported"}}', { status: 400 }) : ok();
+    });
+    const req = { messages: [], response_format: { type: "json_object" }, max_tokens: 10 };
+    const r = await tf(env, "ask", MODELS.answer, req, { pub: false, mock: () => ({ a: 0 }) });
+    expect(r.data).toEqual({ a: 1 });
+    expect(sent).toEqual([MODELS.answer, TEXT_FALLBACK]);
+    expect(finished).toEqual([expect.objectContaining({ model: TEXT_FALLBACK, status: 200 })]); // the 400 never counts toward the 3-failure stop
+    await tf(env, "ask", MODELS.answer, req, { pub: false, mock: () => ({ a: 0 }) });
+    expect(sent).toEqual([MODELS.answer, TEXT_FALLBACK, TEXT_FALLBACK]); // remembered: no second Gemma round trip
+    vi.unstubAllGlobals();
+  });
+});
