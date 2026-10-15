@@ -1,7 +1,7 @@
 // Co-speaker: joins from their own device via the host's QR. Their mic, their name, their voice.
 import { h, icon, api, roomId, toast, store, notFound, keepAwake } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, speakingSignal } from "/js/mic.js";
+import { phraseMic, phraseInit, speakingSignal } from "/js/mic.js";
 import { voiceCard } from "/js/sample.js";
 
 const id = roomId();
@@ -69,7 +69,8 @@ micBtn.onclick = async () => {
   }
 };
 async function send(blob) {
-  const r = await fetch(`/api/rooms/${id}/utterance`, { method: "POST", headers: { ...headers, "content-type": "audio/wav" }, body: blob }).catch(() => null);
+  const [ct, body] = phraseInit(blob);
+  const r = await fetch(`/api/rooms/${id}/utterance`, { method: "POST", headers: { ...headers, ...ct }, body }).catch(() => null);
   if (!r?.ok) toast("Phrase dropped");
 }
 

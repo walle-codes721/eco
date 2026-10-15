@@ -9,6 +9,7 @@ vi.mock("cloudflare:workers", () => ({
 }));
 
 import { Room, type Line } from "../src/room";
+import { MODELS } from "../src/prompts";
 import * as client from "../src/tf";
 
 const question = "यह कंपनी कितने देशों में काम करती है?";
@@ -17,9 +18,9 @@ const line = (seq: number, countries: number): Line => ({
   src: `We operate in ${countries} countries.`, out: { hi: `हम ${countries} देशों में काम करते हैं।` },
 });
 
-async function stage(pages = Array.from({ length: 6 }, (_, i) => ({
+async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
   tag: `slide ${i + 1}`, text: "Unrelated product background. ".repeat(40).slice(0, 1000),
-}))) {
+})), mode: "stage" | "counter" = "stage") {
   const saved = new Map<string, unknown>();
   let ready: Promise<unknown>;
   const ctx = {
@@ -29,10 +30,11 @@ async function stage(pages = Array.from({ length: 6 }, (_, i) => ({
     },
     blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
     getWebSockets: () => [],
+    waitUntil: (promise: Promise<unknown>) => { void promise; },
   };
   const room = new Room(ctx as unknown as DurableObjectState, { ECO_LIVE: "0" } as Env);
   await ready!;
-  const id = "stage/test/multilingual";
+  const id = `${mode}/test/multilingual`;
   await room.init(id, {
     langs: ["hi"],
     pages,
@@ -58,8 +60,39 @@ async function stage(pages = Array.from({ length: 6 }, (_, i) => ({
 }
 
 describe("Stage question flow", () => {
+  it("uses browser text captions for Hindi Q&A and invalidates a cached miss", async () => {
+    const { room, ask, update } = await testRoom();
+    expect(await ask()).toMatchObject({ covered: false, cached: false });
+    expect((await ask()).cached).toBe(true);
+    // Supply a translation fixture locally; neither the browser STT service nor an AI API is contacted.
+    const phrase = line(1, 15);
+    const spy = vi.spyOn(client, "tf").mockResolvedValueOnce({
+      data: { src: phrase.src, out: phrase.out, flags: [] }, live: false, ms: 0,
+    });
+    try {
+      await update("utterance", { text: phrase.src });
+      expect(room.lines).toHaveLength(1);
+      expect(room.lines[0]).toMatchObject({ src: phrase.src, out: phrase.out, seq: 1 });
+      const [, kind, model, request] = spy.mock.calls[0];
+      expect(kind).toBe("utterance");
+      expect(model).toBe(MODELS.answer); // the text model alias supports ECO_TEXT_MODEL in tf
+      expect(request.response_format).toEqual({ type: "json_object" });
+      expect(JSON.stringify(request.messages)).toContain(phrase.src);
+      expect(JSON.stringify(request.messages)).not.toContain("input_audio");
+      expect(await ask()).toMatchObject({
+        covered: true, answer: phrase.out.hi, cite: "said at 0:00", cached: false,
+      });
+      expect((await ask()).cached).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(2); // one phrase translation and one answer, no translation for retrieval
+      expect(JSON.stringify(spy.mock.calls[1][3].messages)).toContain(phrase.src);
+      expect(spy.mock.calls[1][3].response_format).toEqual({ type: "json_object" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("answers in Hindi from stored captions and caches an unchanged transcript with one model operation", async () => {
-    const { room, ask } = await stage();
+    const { room, ask } = await testRoom();
     room.lines = [line(1, 15)];
     const spy = vi.spyOn(client, "tf");
     try {
@@ -73,7 +106,7 @@ describe("Stage question flow", () => {
   });
 
   it("reconsiders a previously uncovered question after new speech arrives", async () => {
-    const { room, ask } = await stage();
+    const { room, ask } = await testRoom();
     expect(await ask()).toMatchObject({ covered: false, cached: false });
     expect(await ask()).toMatchObject({ covered: false, cached: true });
     room.lines.push(line(1, 15));
@@ -81,7 +114,7 @@ describe("Stage question flow", () => {
   });
 
   it("does not reuse an old answer after the retained transcript changes", async () => {
-    const { room, ask } = await stage();
+    const { room, ask } = await testRoom();
     room.lines = [line(1, 15)];
     expect((await ask()).answer).toContain("15");
     room.lines = [line(2, 20)];
@@ -99,7 +132,7 @@ describe("Stage question flow", () => {
       text: ((i === 11 ? "Our reach\nWe operate in 15 countries.\n" : "Our team\nWe employ 50 people.\n") +
         "Product background. ".repeat(100)).slice(0, 1000),
     }));
-    const { room, ask, update } = await stage(pages);
+    const { room, ask, update } = await testRoom(pages);
     await update("slide", { n: 12 });
     expect(room.lines).toHaveLength(0); // no captions or translated source text
     const spy = vi.spyOn(client, "tf");
@@ -120,7 +153,7 @@ describe("Stage question flow", () => {
   });
 
   it("rechecks after slide navigation and source edits, while reusing unchanged context", async () => {
-    const { ask, update } = await stage([
+    const { ask, update } = await testRoom([
       { tag: "slide 1", text: "Welcome." }, { tag: "slide 2", text: "We operate in 15 countries." },
     ]);
     expect((await ask()).cached).toBe(false);
@@ -133,7 +166,7 @@ describe("Stage question flow", () => {
   });
 
   it("does not repeat an answer call after navigation when the selected evidence is identical", async () => {
-    const { ask, update } = await stage([
+    const { ask, update } = await testRoom([
       { tag: "slide 1", text: "Welcome." }, { tag: "slide 2", text: "We operate in 15 countries." },
     ]);
     const spy = vi.spyOn(client, "tf");
@@ -155,7 +188,7 @@ describe("Stage question flow", () => {
       tag: `slide ${i + 1}`,
       text: ((i === 11 ? "We operate in 15 countries. " : "Background. ") + "Product details. ".repeat(100)).slice(0, 1000),
     }));
-    const { ask, update } = await stage(pages);
+    const { ask, update } = await testRoom(pages);
     const spy = vi.spyOn(client, "tf");
     try {
       expect(await ask()).toMatchObject({ cached: false, covered: false });
@@ -176,7 +209,7 @@ describe("Stage question flow", () => {
   });
 
   it("includes recent English speech even without translated captions or a usable current slide", async () => {
-    const { room, ask } = await stage();
+    const { room, ask } = await testRoom();
     room.meta!.slide = 99; // e.g. slide text was not extracted
     room.lines = [{ ...line(1, 15), out: {} }];
     const spy = vi.spyOn(client, "tf");
@@ -184,6 +217,34 @@ describe("Stage question flow", () => {
       expect(await ask()).toMatchObject({ covered: false, answer: "", cite: "" });
       expect(JSON.stringify(spy.mock.calls[0][3].messages)).toContain("[said at 0:10] We operate in 15 countries.");
       expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("Teach Eco with multilingual retrieval", () => {
+  it("clears a cached miss and retrieves an owner-approved answer by the original Hindi question", async () => {
+    const { room, ask, update } = await testRoom([], "counter");
+    expect(await ask()).toMatchObject({ covered: false, cached: false });
+    expect((await ask()).cached).toBe(true);
+    const answer = "We operate in 15 countries.";
+    room.convos = [{
+      id: "convo", lang: "hi", started: 0, open: true,
+      turns: [{ id: "reply", t: 0, side: "owner", lang: "en", src: answer, out: "हम 15 देशों में काम करते हैं।", live: false }],
+    }];
+    const spy = vi.spyOn(client, "tf");
+    try {
+      await update("addanswer", { cid: "convo", tid: "reply", q: "How many countries?", asked: question, a: answer });
+      expect(spy).not.toHaveBeenCalled();
+      expect(room.cache).toEqual({});
+      expect(room.convos[0].turns[0].taught).toBe(true);
+      expect(room.pages[0].text).toContain(`Asked as: ${question}`);
+      // Mock mode quotes the approved answer verbatim; it cannot translate it.
+      expect(await ask()).toMatchObject({ covered: true, answer, cite: "answers", cached: false });
+      expect((await ask()).cached).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(spy.mock.calls[0][3].messages)).toContain("Write the answer in Hindi");
     } finally {
       spy.mockRestore();
     }

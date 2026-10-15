@@ -1,6 +1,6 @@
 import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, speakingSignal } from "/js/mic.js";
+import { phraseMic, phraseInit, speakingSignal } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
 import { voiceCard } from "/js/sample.js";
 
@@ -221,7 +221,8 @@ async function send(blob, cutAt) {
   inflight++;
   micState.textContent = "Translating…";
   try {
-    const r = await fetch(`/api/rooms/${id}/utterance`, { method: "POST", headers: { "content-type": "audio/wav", ...(key ? { "x-key": key } : {}) }, body: blob });
+    const [ct, body] = phraseInit(blob);
+    const r = await fetch(`/api/rooms/${id}/utterance`, { method: "POST", headers: { ...ct, ...(key ? { "x-key": key } : {}) }, body });
     const data = await r.json().catch(() => ({}));
     if (r.status === 403 && demo) toast("You've used your live minutes for now");
     else if (!r.ok) toast(data.fallback ? `Translation paused (${data.fallback})` : data.error || "Translation failed");

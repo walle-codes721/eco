@@ -43,6 +43,13 @@ const L = {
   cancel: it ? "Annulla" : "Cancel",
   save: it ? "Salva" : "Save",
   saved: it ? "Info salvate" : "Info saved",
+  teach: it ? "Insegna a Eco" : "Teach Eco",
+  teachTitle: it ? "Insegna questa risposta a Eco" : "Teach Eco this answer",
+  teachSub: it ? "Eco userà questo testo per rispondere ai prossimi clienti. Controllalo e correggilo prima di salvare." : "Eco will use this text to answer the next customers. Check it and fix it before you save.",
+  teachQ: it ? "Domanda" : "Question",
+  teachAsked: it ? "Parole del cliente" : "Customer's words",
+  teachA: it ? "Risposta" : "Answer",
+  taught: it ? "Eco risponderà da solo la prossima volta ✓" : "Eco will answer this next time ✓",
 };
 
 let convos = [];
@@ -77,7 +84,52 @@ function bubble(t, c) {
     return h("div.bubble.them", {}, h("div.who", {}, langName(c.lang, OL)), t.out, t.out !== t.src ? h("div.orig", {}, t.src) : null);
   if (t.side === "eco")
     return h("div.bubble.eco", {}, h("div.who", {}, `${L.eco}${t.cite ? ` · ${t.cite}` : ""}`), t.out, h("div.orig", {}, t.src));
-  return h("div.bubble.me", {}, t.src, t.out !== t.src ? h("div.orig", {}, t.out) : null);
+  const me = h("div.bubble.me", {}, t.src, t.out !== t.src ? h("div.orig", {}, t.out) : null);
+  const asked = meta.host && !meta.demo ? askedFor(c, t) : null; // the demo shop can't be edited
+  if (!asked && !t.taught) return me;
+  return h("div", { style: { alignSelf: "flex-end", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px", maxWidth: "100%" } }, me,
+    t.taught ? h("span.tiny.muted", {}, L.taught) : h("button.btn.sm.ghost", { type: "button", onclick: () => teachEco(c, t, asked) }, icon("plus"), L.teach));
+}
+
+/** The customer's turn this owner reply answered, unless Eco had already answered it. */
+function askedFor(c, t) {
+  for (let j = c.turns.indexOf(t) - 1; j >= 0; j--) {
+    if (c.turns[j].side === "eco") return null;
+    if (c.turns[j].side === "customer") return c.turns[j];
+  }
+  return null;
+}
+
+/** Teach Eco: the owner checks the question and the answer, then Eco adds them to the list. Nothing is saved before Save. */
+function teachEco(c, t, asked) {
+  const qIn = h("textarea", { rows: 2, maxlength: 200 });
+  const askedIn = h("input", { type: "text", maxlength: 200 });
+  const aIn = h("textarea", { rows: 3, maxlength: 500 });
+  qIn.value = asked.out; // the customer's question in the owner's language
+  askedIn.value = asked.src !== asked.out ? asked.src : ""; // their own words, which help Eco find this entry in their language
+  aIn.value = t.src; // what the owner said
+  const save = h("button.btn.primary", { type: "button" }, L.save);
+  const wrap = h("div.sheet-wrap", {}, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "560px", width: "100%" } },
+    h("h2", {}, L.teachTitle), h("p.small.muted", {}, L.teachSub),
+    h("label.field", {}, L.teachQ, qIn),
+    h("label.field", {}, L.teachAsked, askedIn),
+    h("label.field", {}, L.teachA, aIn),
+    h("div.row", {}, h("span.spacer"), h("button.btn", { type: "button", onclick: () => wrap.remove() }, L.cancel), save)));
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await api(`/api/rooms/${id}/addanswer`, { method: "POST", key, body: { cid: c.id, tid: t.id, q: qIn.value, asked: askedIn.value, a: aIn.value } });
+      t.taught = true;
+      toast(L.taught);
+      wrap.remove();
+      drawThread();
+    } catch (err) {
+      if (err.data?.error === "Already added") (t.taught = true), wrap.remove(), drawThread();
+      else (toast(err.message || "Couldn't save"), (save.disabled = false));
+    }
+  };
+  document.body.append(wrap);
+  aIn.focus();
 }
 
 function drawList() {
@@ -139,7 +191,7 @@ replyForm.onsubmit = (e) => {
   replyIn.value = "";
   sendOwner(active, text);
 };
-bindHold(holdBtn, { onBlob: (b) => active && sendOwner(active, b), onError: () => toast("Microphone blocked") });
+bindHold(holdBtn, { onBlob: (b) => active && sendOwner(active, b), onError: () => toast("Microphone blocked"), lang: () => OL });
 
 // ---------- face to face: one iPad flat on the counter, top half faces the customer ----------
 let f2fDraw = null;
@@ -159,7 +211,9 @@ function faceToFace() {
   const sendCust = async (blob) => {
     busy(custHold, true);
     try {
-      addTurns(await api(`/api/rooms/${id}/turn`, { method: "POST", key, body: blob, headers: { "content-type": "audio/wav", "x-side": "customer", "x-cid": cid, "x-lang": custLang } }));
+      addTurns(await api(`/api/rooms/${id}/turn`, typeof blob === "string"
+        ? { method: "POST", key, body: { side: "customer", cid, lang: custLang, text: blob } }
+        : { method: "POST", key, body: blob, headers: { "content-type": "audio/wav", "x-side": "customer", "x-cid": cid, "x-lang": custLang } }));
       const c = convos.find((x) => x.id === cid);
       const eco = c?.turns.at(-1);
       if (eco?.side === "eco") voice.say(eco.src, c.lang);
@@ -174,8 +228,8 @@ function faceToFace() {
     voice.say(c?.turns.at(-1)?.out, c?.lang);
     busy(ownHold, false);
   };
-  bindHold(custHold, { onBlob: sendCust });
-  bindHold(ownHold, { onBlob: sendOwn });
+  bindHold(custHold, { onBlob: sendCust, lang: () => custLang });
+  bindHold(ownHold, { onBlob: sendOwn, lang: () => OL });
 
   f2fDraw = () => {
     const c = convos.find((x) => x.id === cid);
@@ -208,6 +262,10 @@ connect(id, { role: "owner", ...(key ? { key } : {}) }, (m) => {
     drawThread();
   }
   if (m.type === "turns") addTurns(m);
+  if (m.type === "taught") {
+    const t = convos.find((x) => x.id === m.cid)?.turns.find((x) => x.id === m.tid);
+    if (t) (t.taught = true), drawThread(); // another owner device taught this reply
+  }
 });
 drawList();
 drawThread();

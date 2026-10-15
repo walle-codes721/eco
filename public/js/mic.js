@@ -1,5 +1,66 @@
-// Microphone: continuous phrase mode (stage) and hold-to-talk (counter). Both produce 16 kHz WAV.
+// Microphone: continuous phrase mode (stage) and hold-to-talk (counter).
+// With the browser's speech recognition they produce text; without it (Firefox), 16 kHz WAV.
 import { Cutter, encodeWav, resample } from "/js/vad.js";
+
+// ponytail: Token Factory stopped taking audio on 15 Oct, so the browser does speech-to-text (Chrome/Safari; Chrome sends
+// the audio to Google). Delete SR and the sr* functions to go back to WAV → MiMo if AMD restores audio input.
+const SR = globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition;
+const BCP47 = { en: "en-US", it: "it-IT", es: "es-ES", hi: "hi-IN", fr: "fr-FR", de: "de-DE", pt: "pt-PT", zh: "zh-CN", ja: "ja-JP", ko: "ko-KR", ar: "ar-SA", ru: "ru-RU", nl: "nl-NL", pl: "pl-PL", tr: "tr-TR" };
+const denied = (e) => Object.assign(new Error(e.error), { name: "NotAllowedError" });
+
+/** fetch headers + body for a phrase: recognised text, or a WAV blob. */
+export const phraseInit = (p) => (typeof p === "string" ? [{ "content-type": "application/json" }, JSON.stringify({ text: p })] : [{ "content-type": "audio/wav" }, p]);
+
+function sr(lang) {
+  const r = new SR();
+  r.lang = BCP47[lang] ?? lang;
+  r.continuous = true;
+  r.interimResults = false;
+  return r;
+}
+
+function srPhrases({ onPhrase, onLevel, maxTotalMs, lang }) {
+  const r = sr(lang);
+  let stopped = false;
+  const end = () => ((stopped = true), r.stop(), onLevel(0));
+  r.onspeechstart = () => onLevel(1);
+  r.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i].isFinal && e.results[i][0].transcript.trim();
+      if (t) onPhrase(t, performance.now());
+    }
+    onLevel(0);
+  };
+  r.onend = () => !stopped && r.start(); // Chrome ends the session after a silence: keep listening
+  return new Promise((ok, fail) => {
+    r.onstart = () => {
+      r.onstart = null;
+      if (maxTotalMs < Infinity) setTimeout(end, maxTotalMs);
+      ok(end);
+    };
+    r.onerror = (e) => {
+      if (e.error === "no-speech" || e.error === "aborted") return; // a silence: onend restarts
+      stopped = true; // network, no mic, blocked: don't restart in a loop
+      if (/not-allowed/.test(e.error)) fail(denied(e));
+    };
+    r.start();
+  });
+}
+
+function srHold({ onLevel, lang }) {
+  const r = sr(lang);
+  let text = "", resolve;
+  const done = new Promise((ok) => (resolve = ok));
+  r.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) text += e.results[i][0].transcript + " ";
+  };
+  r.onend = () => (onLevel(0), resolve(text.trim() || null));
+  return new Promise((ok, fail) => {
+    r.onstart = () => (onLevel(0.6), ok({ stop: () => (r.stop(), done) }));
+    r.onerror = (e) => /not-allowed/.test(e.error) && fail(denied(e));
+    r.start();
+  });
+}
 
 async function open(onFrame) {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
@@ -12,8 +73,9 @@ async function open(onFrame) {
   return () => { tap.disconnect(); src.disconnect(); stream.getTracks().forEach((t) => t.stop()); ctx.close(); };
 }
 
-/** Stage: listens until stopped, calls onPhrase(wavBlob, cutAt) at each pause. */
-export async function phraseMic({ onPhrase, onLevel = () => {}, maxTotalMs = Infinity }) {
+/** Stage: listens until stopped, calls onPhrase(textOrWav, cutAt) at each pause. */
+export async function phraseMic({ onPhrase, onLevel = () => {}, maxTotalMs = Infinity, lang = navigator.language }) {
+  if (SR) return srPhrases({ onPhrase, onLevel, maxTotalMs, lang });
   const cut = new Cutter();
   const started = performance.now();
   let stop;
@@ -31,8 +93,9 @@ export async function phraseMic({ onPhrase, onLevel = () => {}, maxTotalMs = Inf
   return end;
 }
 
-/** Counter: press and hold. Returns stop() which resolves to a WAV blob (or null if too short). */
-export async function holdMic({ onLevel = () => {}, maxMs = 15000 } = {}) {
+/** Counter: press and hold. Returns stop() which resolves to text or a WAV blob (or null if too short). */
+export async function holdMic({ onLevel = () => {}, maxMs = 15000, lang = navigator.language } = {}) {
+  if (SR) return srHold({ onLevel, lang });
   const parts = [];
   let len = 0, finished = false, resolve;
   const done = new Promise((r) => (resolve = r));
@@ -59,8 +122,8 @@ export async function holdMic({ onLevel = () => {}, maxMs = 15000 } = {}) {
   return { stop: () => (finish(), done) };
 }
 
-/** Wires a .hold button: press to talk, release to send. Space bar works too when `key` is set. */
-export function bindHold(btn, { onBlob, onError = () => {}, key = false }) {
+/** Wires a .hold button: press to talk, release to send (text or WAV). Space bar works too when `key` is set. */
+export function bindHold(btn, { onBlob, onError = () => {}, key = false, lang = () => navigator.language }) {
   let rec = null, pressed = false;
   const level = (l) => btn.style.setProperty("--level", l.toFixed(2));
   const down = async (e) => {
@@ -70,7 +133,7 @@ export function bindHold(btn, { onBlob, onError = () => {}, key = false }) {
     btn.classList.add("on");
     navigator.vibrate?.(10);
     try {
-      const r = await holdMic({ onLevel: level });
+      const r = await holdMic({ onLevel: level, lang: lang() });
       if (pressed) rec = r;
       else r.stop(); // released before the mic opened
     } catch (err) {

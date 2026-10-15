@@ -3,7 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
 import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary } from "./prompts";
-import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, questionKey, selectContext, terms, transcriptChunks, type Chunk } from "./retrieve";
+import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, questionKey, selectContext, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT } from "./voice";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
@@ -33,7 +33,7 @@ export interface Meta {
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
 export interface Line { speaker?: string; seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string> }
 export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null }
-export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean }
+export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean; taught?: boolean /* owner turn already added to the list (Teach Eco) */ }
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
 /** The talk's summary. `n` is the seq of the last line it covers: a newer line makes it stale. */
 export interface Summary { n: number; text: Record<string, string>; live: boolean; at: number }
@@ -292,6 +292,8 @@ export class Room extends DurableObject<Env> {
         if (m.mode === "stage") this.send(["listener", "screen", "host"], { type: "slides", slides: this.publicMeta().slides });
         return json({ ok: true, chunks: this.chunks.length });
       }
+      case "POST addanswer":
+        return this.teachAnswer(body);
     }
     return json({ error: "Unknown action" }, 404);
   }
@@ -417,16 +419,25 @@ export class Room extends DurableObject<Env> {
   private async utterance(req: Request, tryVoice: boolean, speaker: string): Promise<Response> {
     const m = this.meta!;
     if (m.status === "ended") return json({ error: "Talk ended" }, 409);
-    const buf = await req.arrayBuffer();
-    if (buf.byteLength < 1000 || buf.byteLength > 800_000) return json({ error: "Bad audio" }, 413);
+    // Text from the browser's speech recognition (JSON), or a WAV for MiMo.
+    let input: { text?: string; wavB64?: string };
+    if (req.headers.get("content-type")?.startsWith("application/json")) {
+      const text = String(((await req.json().catch(() => ({}))) as { text?: unknown }).text ?? "").trim().slice(0, 500);
+      if (!text) return json({ empty: true });
+      input = { text };
+    } else {
+      const buf = await req.arrayBuffer();
+      if (buf.byteLength < 1000 || buf.byteLength > 800_000) return json({ error: "Bad audio" }, 413);
+      input = { wavB64: b64(buf) };
+    }
     const t0 = Date.now();
     if (tryVoice) this.replayPausedUntil = Date.now() + 45_000;
 
     const prev = this.lines.slice(-2).map((l) => l.src);
-    const r = await tf(this.env, "utterance", MODELS.audio, utterancePrompt(b64(buf), m.langs, prev), {
+    const r = await tf(this.env, "utterance", turnModel(input), utterancePrompt(input, m.langs, prev), {
       pub: m.demo,
       mock: () => {
-        if (!m.demo) return { src: MOCK_LINE, out: Object.fromEntries(m.langs.map((l) => [l, MOCK_LINE])), flags: ["mock"] };
+        if (!m.demo) return { src: input.text ?? MOCK_LINE, out: Object.fromEntries(m.langs.map((l) => [l, MOCK_LINE])), flags: ["mock"] };
         const d = DEMO_TALK[this.mockI++ % DEMO_TALK.length];
         return { src: d.src, out: Object.fromEntries(m.langs.map((l) => [l, d.out[l] ?? d.src])), flags: [] as string[] };
       },
@@ -541,7 +552,8 @@ export class Room extends DurableObject<Env> {
     if (this.lines.length < 3) return json({ error: "Too short" }, 400);
     const n = this.lines.at(-1)!.seq;
     if (this.summary?.n === n) return json({ summary: this.summary, cached: true });
-    if (!isSpeaker && !(m.demo && this.allow(ip, "ask"))) return json({ error: "Not allowed" }, 403);
+    if (!isSpeaker && !m.demo) return json({ error: "Not allowed" }, 403);
+    if (!isSpeaker && !this.allow(ip, "ask")) return json({ error: "limit" }, 429);
     if (this.summarizing) return json({ error: "busy" }, 409); // one at a time: two taps must not make two calls
     this.summarizing = true;
     try {
@@ -714,6 +726,32 @@ export class Room extends DurableObject<Env> {
     const msg = { type: "turns", cid, lang: convo.lang, open: convo.open, turns: added };
     this.send(["owner"], msg, [`c:${cid}`]);
     return json(msg);
+  }
+
+  /**
+   * Teach Eco: the owner (already past the host check) turns one of their replies into a list entry.
+   * The owner has reviewed `q` and `a` on their screen. Nothing here calls the AI.
+   */
+  private async teachAnswer(body: any): Promise<Response> {
+    const m = this.meta!;
+    if (m.mode !== "counter") return json({ error: "Not a counter" }, 400);
+    if (m.demo) return json({ error: "The demo can't be edited" }, 400);
+    const turn = this.convos.find((c) => c.id === body.cid)?.turns.find((t) => t.id === body.tid);
+    if (!turn || turn.side !== "owner") return json({ error: "No such reply" }, 404);
+    if (turn.taught) return json({ error: "Already added" }, 409);
+
+    const r = teach(this.pages, { q: body.q, asked: body.asked, a: body.a });
+    if (r.reason === "empty") return json({ error: "Write the question and the answer" }, 400);
+    if (r.reason === "full") return json({ error: "The answers section is full. Tidy it in Edit info." }, 409);
+    if (r.added) {
+      this.pages = r.pages;
+      this.chunks = chunkPages(this.pages);
+      this.cache = {}; // answers came from the old info
+    }
+    turn.taught = true; // also for a duplicate: it's already in the list, so the button can go
+    await this.save("pages", "chunks", "cache", "convos");
+    this.send(["owner"], { type: "taught", cid: body.cid, tid: body.tid });
+    return json({ ok: true, added: r.added, chunks: this.chunks.length });
   }
 
   counterCard() {
