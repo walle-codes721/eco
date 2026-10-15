@@ -125,6 +125,17 @@ export function selectContext(chunks: Chunk[], query: string, budget = 1500): { 
 export function bestSentence(question: string, chunk: Chunk | null): { covered: boolean; text: string; cite: string } {
   if (!chunk) return { covered: false, text: "", cite: "" };
   const q = new Set(terms(question));
+  if (chunk.tag === TAUGHT_TAG) {
+    // Taught entries: find the entry that shares the most words, and say its answer, not the "Q:" line.
+    let ans = "";
+    let top = 0;
+    for (const block of chunk.text.split(/\n(?=Q: )/)) { // chunkPages drops the blank lines between entries, so cut at each "Q:"
+      const n = terms(block).filter((t) => q.has(t)).length;
+      const a = block.match(/^A: (.*)$/m)?.[1];
+      if (a && n > top) [ans, top] = [a, n];
+    }
+    return top ? { covered: true, text: ans, cite: chunk.tag } : { covered: false, text: "", cite: "" };
+  }
   let best = "";
   let score = 0;
   const units = chunk.text.split("\n").flatMap((l) => (l.length > 200 ? l.split(/(?<=[.!?])\s+/) : [l]));

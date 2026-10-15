@@ -113,6 +113,13 @@ describe("teach eco", () => {
     expect(last.reason).toBe("full");
     expect(answers({ pages: p }).length).toBeLessThanOrEqual(8000);
   });
+  it("mock answers from a taught entry say the owner's answer, from the best matching entry", () => {
+    const two = teach(teach(pages, parking).pages, { q: "Fate consegne?", asked: "Do you deliver?", a: "No, solo in negozio." });
+    const chunk = chunkPages(two.pages).find((c) => c.tag === TAUGHT_TAG)!;
+    expect(bestSentence("is there free parking nearby", chunk)).toEqual({ covered: true, text: parking.a, cite: TAUGHT_TAG });
+    expect(bestSentence("do you deliver?", chunk).text).toBe("No, solo in negozio.");
+    expect(bestSentence("do you sell pizza", chunk).covered).toBe(false);
+  });
   it("makes Eco find the taught answer, in the owner's words and in the customer's", () => {
     expect(selectContext(chunkPages(pages), "Do you have parking?").best?.tag).not.toBe(TAUGHT_TAG);
     const taught = chunkPages(teach(pages, parking).pages);
