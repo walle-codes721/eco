@@ -5,6 +5,7 @@ import { tf, isLive } from "./tf";
 import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary } from "./prompts";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT } from "./voice";
+import { phraseEvidence } from "./utterance";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
 type Status = "lobby" | "live" | "ended";
@@ -446,15 +447,22 @@ export class Room extends DurableObject<Env> {
         return { src: d.src, out: Object.fromEntries(langs.map((l) => [l, d.out[l] ?? d.src])), flags: [] as string[] }; // demo originals are English
       },
     });
-    if (r.data === null) {
+    if (r.data === null && !(r.invalidOutput && input.text)) {
       const why = "why" in r && r.why ? `${r.fallback}, ${r.why}` : r.fallback;
       this.send(["host"], { type: "notice", level: "warn", text: `Translation paused (${why}).` });
       return json({ fallback: why }, 503);
     }
-    if (!r.data.src?.trim()) return json({ empty: true });
-    if (r.live && isEcho(this.lines, speaker, r.data.src, Date.now())) return json({ dup: true });
+    const evidence = phraseEvidence(r.data, m.demo && !r.live ? undefined : input.text, langs);
+    if (!evidence.src) {
+      if (r.data && typeof r.data.src === "string" && !r.data.src.trim()) return json({ empty: true });
+      return json({ fallback: "No complete transcript was returned" }, 503);
+    }
+    if (r.live && isEcho(this.lines, speaker, evidence.src, Date.now())) return json({ dup: true });
+    if (r.live && evidence.incomplete) {
+      this.send(["host", "speaker"], { type: "notice", level: "warn", text: "Some translations are unavailable. The original speech was kept; no translation retry was made." });
+    }
     if (m.status === "lobby") await this.setStatus("live");
-    const line = await this.addLine({ speaker, src: r.data.src, out: r.data.out ?? {}, flags: r.data.flags ?? [], ms: Date.now() - t0, live: r.live });
+    const line = await this.addLine({ speaker, src: evidence.src, out: evidence.out, flags: evidence.flags, ms: Date.now() - t0, live: r.live });
     return json({ line });
   }
 

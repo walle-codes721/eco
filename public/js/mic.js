@@ -10,6 +10,17 @@ export const SPOKEN_LANGUAGES = Object.keys(BCP47);
 export const hasSpeechRecognition = !!SR;
 const denied = (e) => Object.assign(new Error(e.error), { name: "NotAllowedError" });
 
+export function micErrorMessage(error) {
+  if (error.name === "NotAllowedError") return "Microphone blocked: allow it in your browser settings, then retry.";
+  return ({
+    network: "Speech recognition couldn't connect. Check your connection and retry.",
+    "audio-capture": "No microphone is available. Check your microphone connection and permissions, then retry.",
+    "language-not-supported": "This browser can't recognize that spoken language. Choose another language and retry.",
+    "no-speech": "No speech was detected. Start the microphone again and speak.",
+    aborted: "Speech recognition stopped before starting. Please retry.",
+  })[error.code] ?? "Couldn't start speech recognition. Check your microphone and retry.";
+}
+
 /** fetch headers + body for a phrase: recognised text, or a WAV blob. */
 export const phraseInit = (p) => (typeof p === "string" ? [{ "content-type": "application/json" }, JSON.stringify({ text: p })] : [{ "content-type": "audio/wav" }, p]);
 
@@ -21,10 +32,18 @@ function sr(lang) {
   return r;
 }
 
-function srPhrases({ onPhrase, onLevel, maxTotalMs, lang }) {
+function srPhrases({ onPhrase, onLevel, maxTotalMs, lang, onError }) {
   const r = sr(lang);
   let stopped = false;
-  const end = () => ((stopped = true), r.stop(), onLevel(0));
+  let started = false;
+  let timer;
+  const end = () => {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(timer);
+    try { r.stop(); } catch {} // the browser may already have stopped
+    onLevel(0);
+  };
   r.onspeechstart = () => onLevel(1);
   r.onresult = (e) => {
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -33,19 +52,36 @@ function srPhrases({ onPhrase, onLevel, maxTotalMs, lang }) {
     }
     onLevel(0);
   };
-  r.onend = () => !stopped && r.start(); // Chrome ends the session after a silence: keep listening
   return new Promise((ok, fail) => {
+    const failed = (error) => {
+      if (stopped) return;
+      stopped = true;
+      clearTimeout(timer);
+      // Detach before aborting: abort can itself emit error/end events.
+      r.onstart = r.onend = r.onerror = r.onresult = r.onspeechstart = null;
+      try { r.abort ? r.abort() : r.stop(); } catch {}
+      onLevel(0);
+      if (!started) fail(error);
+      else onError(error);
+    };
+    const start = () => { try { r.start(); } catch (error) { failed(error); } };
+    r.onend = () => {
+      if (stopped) return;
+      if (!started) failed(Object.assign(new Error("Recognition ended before starting"), { code: "aborted" }));
+      else start(); // silence: restart with the same language
+    };
     r.onstart = () => {
+      if (stopped) return;
+      started = true;
       r.onstart = null;
-      if (maxTotalMs < Infinity) setTimeout(end, maxTotalMs);
+      if (maxTotalMs < Infinity) timer = setTimeout(end, maxTotalMs);
       ok(end);
     };
     r.onerror = (e) => {
-      if (e.error === "no-speech" || e.error === "aborted") return; // a silence: onend restarts
-      stopped = true; // network, no mic, blocked: don't restart in a loop
-      if (/not-allowed/.test(e.error)) fail(denied(e));
+      if (started && (e.error === "no-speech" || e.error === "aborted")) return;
+      failed(/not-allowed/.test(e.error) ? denied(e) : Object.assign(new Error(e.error), { code: e.error }));
     };
-    r.start();
+    start();
   });
 }
 
@@ -76,8 +112,8 @@ async function open(onFrame) {
 }
 
 /** Stage: listens until stopped, calls onPhrase(textOrWav, cutAt) at each pause. */
-export async function phraseMic({ onPhrase, onLevel = () => {}, maxTotalMs = Infinity, lang = navigator.language }) {
-  if (SR) return srPhrases({ onPhrase, onLevel, maxTotalMs, lang });
+export async function phraseMic({ onPhrase, onLevel = () => {}, onError = () => {}, maxTotalMs = Infinity, lang = navigator.language }) {
+  if (SR) return srPhrases({ onPhrase, onLevel, onError, maxTotalMs, lang });
   const cut = new Cutter();
   const started = performance.now();
   let stop;

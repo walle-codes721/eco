@@ -1,7 +1,7 @@
 // Co-speaker: joins from their own device via the host's QR. Their mic, their name, their voice.
 import { h, icon, api, roomId, toast, store, notFound, keepAwake, langName } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, phraseInit, speakingSignal, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
+import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
 import { voiceCard } from "/js/sample.js";
 
 const id = roomId();
@@ -65,13 +65,13 @@ micBtn.onclick = async () => {
   if (stopMic) return stopMic();
   micBtn.disabled = spokenLang.disabled = true;
   try {
-    const end = await phraseMic({ lang: spokenLang.value || undefined, onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)), onPhrase: send });
+    const end = await phraseMic({ lang: spokenLang.value || undefined, onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)), onPhrase: send, onError: (err) => { stopMic?.(); toast(micErrorMessage(err)); } });
     stopMic = () => (end(), (stopMic = null), (spokenLang.disabled = !hasSpeechRecognition), micBtn.classList.remove("on"), (micState.textContent = "Off"), (level.style.width = "0"), live.send({ type: "speaking", on: false }));
     micBtn.classList.add("on");
     micState.textContent = "Listening…";
     keepAwake();
-  } catch {
-    toast("Couldn't open the microphone");
+  } catch (err) {
+    toast(micErrorMessage(err));
   } finally {
     micBtn.disabled = false;
     spokenLang.disabled = !hasSpeechRecognition || !!stopMic;
@@ -96,6 +96,7 @@ main.append(
 drawPeople();
 
 const live = connect(id, { role: "speaker", sk: key }, (m) => {
+  if (m.type === "notice") toast(m.text);
   if (m.type === "hello") Object.assign(meta, m.meta, { me: meta.me });
   if (m.type === "speakers") meta.speakers = m.speakers;
   if (m.type === "speaking") m.on ? speaking.add(m.speaker) : speaking.delete(m.speaker);

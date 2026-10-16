@@ -36,12 +36,13 @@ export function utterancePrompt(input: { text?: string; wavB64?: string }, langs
         (input.wavB64
           ? "You are Eco, a live conference interpreter. The audio is one phrase of a live talk. 1) src: transcribe it exactly, in the language spoken. "
           : "You are Eco, a live conference interpreter. The text is one phrase of a live talk from speech recognition. " +
-            "1) src: the phrase as given, fixing only punctuation and obvious recognition errors. ") +
+            "The original text is already stored: do not repeat it in a src field. ") +
         `2) out: translate it into ${langs.map(langName).join(", ")} as natural spoken language a native listener would use. ` +
-        "Keep names, numbers and product names. Never add or drop content. " +
+        "Keep names, numbers and product names. Never add or drop content. Do not summarize to fit. " +
+        "For a target language already spoken in the phrase, copy the phrase exactly. " +
         "If a phrase is ambiguous or you are unsure, translate it literally and put that language code in flags. " +
         "If there is no speech, return empty strings." +
-        shapeNote(`{"src": string, "out": {${langs.map((l) => `"${l}": string`).join(", ")}}, "flags": [string]}`),
+        shapeNote(`{${input.wavB64 ? '"src": string, ' : ""}"out": {${langs.map((l) => `"${l}": string`).join(", ")}}, "flags": [string]}`),
     },
     {
       role: "user",

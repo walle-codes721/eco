@@ -1,6 +1,6 @@
 import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, phraseInit, speakingSignal, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
+import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
 import { voiceCard } from "/js/sample.js";
 
@@ -242,6 +242,7 @@ async function toggleMic() {
       maxTotalMs: demo ? 30000 : Infinity,
       onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)),
       onPhrase: send,
+      onError: (err) => { stopMic?.(); toast(micErrorMessage(err)); },
     });
     stopMic = () => {
       end();
@@ -256,7 +257,7 @@ async function toggleMic() {
     micState.textContent = "Listening…";
     if (demo) setTimeout(() => stopMic?.(), 30500);
   } catch (err) {
-    toast(err.name === "NotAllowedError" ? "Microphone blocked: allow it in the address bar" : "Couldn't open the microphone");
+    toast(micErrorMessage(err));
   } finally {
     micBtn.disabled = false;
     spokenLang.disabled = !hasSpeechRecognition || !!stopMic;
