@@ -1,6 +1,14 @@
 // Pure decisions for scrollable captions: whether to follow new lines, and the unread count.
 // Kept DOM-free so the engine tests can run them (same pattern as vad.js).
 
+/** Prefer the requested translation, including English. The original has no stored language code. */
+export function captionFor(line, lang) {
+  const translated = line.out?.[lang];
+  return typeof translated === "string" && translated.trim()
+    ? { text: translated, lang }
+    : { text: line.src ?? "", lang: null };
+}
+
 export const NEAR_BOTTOM_PX = 48;
 
 /** Is the view within `threshold` px of the bottom (or has nothing to scroll)? */

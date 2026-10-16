@@ -6,7 +6,7 @@ const S = {
     ask: "Ask the talk", askPh: "Ask a question about the talk…", fromTalk: "Answers come only from the talk and its slides",
     notCovered: "Not in the talk. Sent to the speaker.", answeredAt: "The speaker answered this at", sound: "Sound", soundOn: "Sound on", soundOff: "Sound off",
     ended: "The talk has ended", summary: "Summary", fromSpeaker: "From the speaker",recap: "Your recap", transcript: "Transcript", yourQs: "Your questions", share: "Share", reconnecting: "Reconnecting…",
-    newLines: "new", close: "Close",
+    newLines: "new", close: "Close", original: "Original",
     slide: "Slide", limit: "You've reached the question limit for now.", busy: "Eco is busy. Try again in a moment.", language: "Language",
     hello: "Talk to us in your language", holdToTalk: "Hold to talk", orType: "or type a message…", sentToStaff: "Sent to staff",
     fromList: "from the info", staff: "Staff", you: "You", start: "Start", typing: "Translating…",

@@ -23,6 +23,7 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
 })), mode: "stage" | "counter" = "stage") {
   const saved = new Map<string, unknown>();
   const listenerMessages: Record<string, unknown>[] = [];
+  const controlMessages: Record<string, unknown>[] = [];
   let ready: Promise<unknown>;
   const ctx = {
     storage: {
@@ -30,7 +31,8 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
       put: async (values: Record<string, unknown>) => { for (const [key, value] of Object.entries(values)) saved.set(key, value); },
     },
     blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
-    getWebSockets: (tag?: string) => tag === "listener" ? [{ send: (msg: string) => listenerMessages.push(JSON.parse(msg)) }] : [],
+    getWebSockets: (tag?: string) => tag === "listener" ? [{ deserializeAttachment: () => ({ lang: "en" }), send: (msg: string) => listenerMessages.push(JSON.parse(msg)) }]
+      : tag === "host" || tag === "speaker" ? [{ send: (msg: string) => controlMessages.push({ role: tag, ...JSON.parse(msg) }) }] : [],
     waitUntil: (promise: Promise<unknown>) => { void promise; },
   };
   const room = new Room(ctx as unknown as DurableObjectState, { ECO_LIVE: "0" } as Env);
@@ -43,6 +45,8 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
   return {
     room,
     listenerMessages,
+    controlMessages,
+    saved,
     update: async (action: string, body: unknown) => {
       const response = await room.fetch(new Request(`https://room/${action}`, {
         method: "POST", headers: { "x-room": id, "x-key": room.meta!.hostKey, "content-type": "application/json" },
@@ -63,6 +67,121 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
 }
 
 describe("Stage question flow", () => {
+  it("retains lengthy original speech after invalid output, warns speakers, and refreshes cached Q&A evidence", async () => {
+    const { room, ask, update, saved, controlMessages } = await testRoom();
+    room.meta!.langs = ["it", "es", "hi"];
+    const text = "How many countries does the company operate in?";
+    expect(await ask(text, "en")).toMatchObject({ covered: false, cached: false });
+    expect((await ask(text, "en")).cached).toBe(true);
+    const original = ("We operate in 15 countries. We employ 50 people. " + "Product background. ".repeat(40)).slice(0, 500);
+    const spy = vi.spyOn(client, "tf").mockResolvedValueOnce({ data: null, live: true, ms: 0, fallback: "error", invalidOutput: true });
+    try {
+      await update("utterance", { text: original });
+      expect(saved.get("lines")).toEqual([expect.objectContaining({ src: original, out: {}, flags: ["en", "it", "es", "hi"] })]);
+      for (const role of ["host", "speaker"]) expect(controlMessages).toContainEqual(expect.objectContaining({ role, type: "notice", text: expect.stringContaining("original speech was kept") }));
+      expect(await ask(text, "en")).toMatchObject({ covered: true, answer: "We operate in 15 countries.", cite: "said at 0:00", cached: false });
+      expect((await ask(text, "en")).cached).toBe(true);
+      expect(await ask("When is the founder's birthday?", "en")).toMatchObject({ covered: false, answer: "", cite: "" });
+      expect(spy).toHaveBeenCalledTimes(3); // phrase, country answer, unsupported answer; no phrase retry
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("accepts translation-only JSON while keeping the browser original as the cited evidence", async () => {
+    const { room, ask, update } = await testRoom();
+    const src = "La nostra azienda opera in 15 paesi.";
+    const en = "Our company operates in 15 countries.";
+    const spy = vi.spyOn(client, "tf").mockResolvedValueOnce({ data: { out: { en, hi: 42 }, flags: [] }, live: true, ms: 0 });
+    try {
+      await update("utterance", { text: src });
+      expect(room.lines[0]).toMatchObject({ src, out: { en }, flags: ["hi"] });
+      expect(await ask("How many countries does the company operate in?", "en")).toMatchObject({ covered: true, answer: en, cite: "said at 0:00" });
+      expect(JSON.stringify(spy.mock.calls[1][3].messages)).toContain(src);
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["budget", "audio"])("does not invent or persist source text after a %s failure", async (kind) => {
+    const { room } = await testRoom();
+    const spy = vi.spyOn(client, "tf").mockResolvedValueOnce(kind === "budget"
+      ? { data: null, live: true, ms: 0, fallback: "ceiling" }
+      : { data: null, live: true, ms: 0, fallback: "error", invalidOutput: true });
+    try {
+      const response = await room.fetch(new Request("https://room/utterance", {
+        method: "POST", headers: { "x-room": room.meta!.id, "x-key": room.meta!.hostKey, "content-type": kind === "audio" ? "audio/wav" : "application/json" },
+        body: kind === "audio" ? new Uint8Array(1200) : JSON.stringify({ text: "We operate in 15 countries." }),
+      }));
+      expect(response.status).toBe(503);
+      expect(room.lines).toEqual([]);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([{ langs: ["it", "es", "hi"] }, { langs: ["en", "it", "hi"] }])("requests English once alongside $langs in one capped phrase call", async ({ langs }) => {
+    const { room, update } = await testRoom();
+    room.meta!.langs = langs;
+    const spy = vi.spyOn(client, "tf");
+    try {
+      await update("utterance", { text: "La nostra azienda opera in 15 paesi." });
+      expect(spy).toHaveBeenCalledTimes(1);
+      const prompt = spy.mock.calls[0][3];
+      const messages = JSON.stringify(prompt.messages);
+      for (const lang of new Set(["en", ...langs])) expect(messages.split(`\\"${lang}\\": string`)).toHaveLength(2);
+      expect(prompt.max_tokens).toBe(300);
+      expect(prompt.response_format).toEqual({ type: "json_object" });
+      expect(room.lines[0].src).toBe("La nostra azienda opera in 15 paesi.");
+      if (!langs.includes("en")) expect(room.lines[0].out.en).toBeUndefined(); // the real mock cannot translate
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["presenter", "co-speaker"])("answers in English from an Italian %s with a stored English caption", async (role) => {
+    const { room, ask, saved } = await testRoom();
+    expect(room.meta!.langs).not.toContain("en"); // English listeners are supported without configuring another room target
+    const src = "La nostra azienda opera in 15 paesi.";
+    const en = "Our company operates in 15 countries.";
+    let auth: Record<string, string> = { "x-key": room.meta!.hostKey };
+    let speaker = "s0";
+    if (role === "co-speaker") {
+      // The presenter loads metadata to obtain the join QR before a co-speaker joins.
+      await room.fetch(new Request("https://room/meta", { headers: { "x-room": room.meta!.id, ...auth } }));
+      const joined = await room.fetch(new Request("https://room/join", {
+        method: "POST", headers: { "x-room": room.meta!.id, "x-join": room.meta!.joinKey!, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Italian speaker" }),
+      }));
+      expect(joined.status).toBe(200);
+      const body = await joined.json() as { key: string; id: string };
+      auth = { "x-speaker-key": body.key };
+      speaker = body.id;
+    }
+    const spy = vi.spyOn(client, "tf").mockResolvedValueOnce({ data: { src, out: { en }, flags: [] }, live: false, ms: 0 });
+    try {
+      const spoken = await room.fetch(new Request("https://room/utterance", {
+        method: "POST", headers: { "x-room": room.meta!.id, ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ text: src }),
+      }));
+      expect(spoken.status).toBe(200);
+      expect(saved.get("lines")).toEqual([expect.objectContaining({ src, out: { en }, speaker })]);
+      expect(JSON.stringify(spy.mock.calls[0][3].messages)).toContain('\\"en\\": string');
+      expect(JSON.stringify(spy.mock.calls[0][3].messages)).toContain('\\"hi\\": string');
+      expect(spy.mock.calls[0][3].max_tokens).toBe(300);
+      const text = "How many countries does the company operate in?";
+      expect(await ask(text, "en")).toMatchObject({ covered: true, answer: en, cite: "said at 0:00", cached: false });
+      expect((await ask(text, "en")).cached).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(2); // one fixture translation, one offline answer
+      expect(JSON.stringify(spy.mock.calls[1][3].messages)).toContain(`[said at 0:00] ${src}`);
+      expect(JSON.stringify(spy.mock.calls[1][3].messages)).toContain("Write the answer in English");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("uses browser text captions for Hindi Q&A and invalidates a cached miss", async () => {
     const { room, ask, update } = await testRoom();
     expect(await ask()).toMatchObject({ covered: false, cached: false });

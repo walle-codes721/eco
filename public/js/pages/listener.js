@@ -2,7 +2,7 @@ import { h, icon, api, roomId, who, toast, fmtTime, langName, phoneLang, keepAwa
 import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { t } from "/js/i18n.js";
-import { nearBottom, nextNewCount } from "/js/caps.js";
+import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
 
 const id = roomId();
 let meta;
@@ -13,7 +13,7 @@ try {
   throw new Error("no room");
 }
 
-const choices = [...meta.langs, "en"];
+const choices = [...new Set([...meta.langs, "en"])];
 let lang = store(`eco:lang:${id}`) ?? (choices.includes(phoneLang()) ? phoneLang() : meta.langs[0]);
 let lines = [];
 let summary = null; // { text: { en, it, ... } } once the speaker has made one
@@ -22,7 +22,7 @@ let live = null;
 let atBottom = true; // smart follow: pinned to live unless the listener scrolls up
 let newCount = 0; // lines that arrived while reading history
 const T = (k) => t(lang, k);
-const textOf = (l) => (lang === "en" ? l.src : l.out?.[lang] ?? l.src);
+const textOf = (l) => captionFor(l, lang).text;
 
 // ---------- shell ----------
 const langSel = h("select.lang-select", { "aria-label": "Language" }, ...choices.map((l) => h("option", { value: l, selected: l === lang }, langName(l, l))));
@@ -78,17 +78,18 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", { onclick: () => showMsg(l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)), textOf(l))));
+  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", { onclick: () => showMsg(l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
+    !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l))));
   if (atBottom) caps.scrollTop = caps.scrollHeight;
 }
 
 // Tap a caption to read it comfortably: same overlay as the welcome sheet, centered.
 function showMsg(l) {
-  const textLang = lang === "en" || !l.out?.[lang] ? "en" : lang;
+  const textLang = captionFor(l, lang).lang;
   const close = h("button.btn.ghost", { type: "button" }, icon("x"), T("close"));
   const wrap = h("div.sheet-wrap.msg-wrap", { onclick: (e) => { if (e.target === wrap) done(); } },
     h("div.msg-modal", {},
-      h("p.msg-meta", {}, who(meta, l), h("span.when", {}, fmtTime(l.at)), h("span.msg-lang", {}, langName(textLang, textLang))),
+      h("p.msg-meta", {}, who(meta, l), h("span.when", {}, fmtTime(l.at)), h("span.msg-lang", {}, textLang ? langName(textLang, textLang) : T("original"))),
       h("p.msg-text", {}, textOf(l)),
       h("div.msg-end", {}, close),
     ));

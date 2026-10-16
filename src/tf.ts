@@ -13,7 +13,7 @@ export interface TfRequest {
 
 export type TfResult<T> =
   | { data: T; live: boolean; ms: number }
-  | { data: null; live: true; ms: number; fallback: Denied | "error"; why?: string };
+  | { data: null; live: true; ms: number; fallback: Denied | "error"; why?: string; invalidOutput?: boolean };
 
 // Gemma vanished from Token Factory on 15 Oct. Text jobs try it first and fall back to DeepSeek when it's "not supported",
 // then skip it for 10 minutes. When AMD restores it, Eco is back on Gemma with no deploy.
@@ -49,6 +49,7 @@ export async function tf<T>(
   let status = 0;
   let usage = { prompt_tokens: 0, completion_tokens: 0 };
   let content = "";
+  let finishReason: string | undefined;
   let why = "";
   try {
     for (let attempt = 0; ; attempt++) {
@@ -73,8 +74,10 @@ export async function tf<T>(
         }
       }
       if (status === 200) {
-        const j = (await res.json()) as { choices: { message: { content: string } }[]; usage?: typeof usage };
-        content = j.choices[0]?.message?.content ?? "";
+        const j = (await res.json()) as { choices: { message: { content: string }; finish_reason?: string }[]; usage?: typeof usage };
+        const value = j.choices[0]?.message?.content;
+        content = typeof value === "string" ? value : "";
+        finishReason = j.choices[0]?.finish_reason;
         usage = j.usage ?? usage;
       } else {
         // Gateway errors are {"error":{...}}, platform errors {"detail":{"error":{...}}}. Never includes the key.
@@ -114,11 +117,22 @@ export async function tf<T>(
     console.warn("tf failed", kind, model, why);
     return { data: null, live: true, ms, fallback: "error", why };
   }
+  // Even syntactically valid JSON can contain clipped translations at the output limit.
+  // Do not repair fragments or retry; Stage may retain its independently supplied browser text.
+  if (kind === "utterance" && finishReason && finishReason !== "stop") {
+    return { data: null, live: true, ms, fallback: "error", why: `incomplete phrase output (${finishReason})`, invalidOutput: true };
+  }
   try {
-    return { data: parseJson<T>(content), live: true, ms };
+    // Phrase evidence must be a complete response, not a JSON fragment extracted
+    // from a malformed wrapper. Keep the existing parser for other job types.
+    const data = kind === "utterance"
+      ? JSON.parse(content.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "")) as T
+      : parseJson<T>(content);
+    if (kind === "utterance" && (!data || typeof data !== "object" || Array.isArray(data))) throw new Error("Expected phrase object");
+    return { data, live: true, ms };
   } catch {
     why = content ? "model didn't return JSON" : "model returned nothing";
     console.warn("tf failed", kind, model, why, content.slice(0, 200));
-    return { data: null, live: true, ms, fallback: "error", why };
+    return { data: null, live: true, ms, fallback: "error", why, invalidOutput: true };
   }
 }
