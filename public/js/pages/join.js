@@ -1,7 +1,7 @@
 // Co-speaker: joins from their own device via the host's QR. Their mic, their name, their voice.
-import { h, icon, api, roomId, toast, store, notFound, keepAwake } from "/js/eco.js";
+import { h, icon, api, roomId, toast, store, notFound, keepAwake, langName } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, phraseInit, speakingSignal } from "/js/mic.js";
+import { phraseMic, phraseInit, speakingSignal, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
 import { voiceCard } from "/js/sample.js";
 
 const id = roomId();
@@ -53,19 +53,28 @@ const drawPeople = () => people.replaceChildren(...meta.speakers.map((s) =>
   h(`span.chip${speaking.has(s.id) ? ".speaking" : ""}`, {}, speaking.has(s.id) ? h("span.dot.live") : null, s.id === meta.me ? `${s.name} (you)` : s.name)));
 
 const level = h("div", { style: { height: "100%", width: "0", background: "var(--red)", transition: "width .1s" } });
+const spokenLang = h("select", { disabled: !hasSpeechRecognition },
+  h("option", { value: "" }, `Browser default (${navigator.language})`),
+  ...SPOKEN_LANGUAGES.map((l) => h("option", { value: l }, langName(l, "en"))),
+);
 const micState = h("div.small.muted", {}, "Off");
 const micBtn = h("button.mic-btn", { type: "button" }, h("span.ico", {}, icon("mic")), h("div", { style: { flex: 1 } }, h("div", { style: { fontWeight: 600 } }, "Microphone"), micState));
 let stopMic = null;
 micBtn.onclick = async () => {
+  if (micBtn.disabled) return;
   if (stopMic) return stopMic();
+  micBtn.disabled = spokenLang.disabled = true;
   try {
-    const end = await phraseMic({ onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)), onPhrase: send });
-    stopMic = () => (end(), (stopMic = null), micBtn.classList.remove("on"), (micState.textContent = "Off"), (level.style.width = "0"), live.send({ type: "speaking", on: false }));
+    const end = await phraseMic({ lang: spokenLang.value || undefined, onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)), onPhrase: send });
+    stopMic = () => (end(), (stopMic = null), (spokenLang.disabled = !hasSpeechRecognition), micBtn.classList.remove("on"), (micState.textContent = "Off"), (level.style.width = "0"), live.send({ type: "speaking", on: false }));
     micBtn.classList.add("on");
     micState.textContent = "Listening…";
     keepAwake();
   } catch {
     toast("Couldn't open the microphone");
+  } finally {
+    micBtn.disabled = false;
+    spokenLang.disabled = !hasSpeechRecognition || !!stopMic;
   }
 };
 async function send(blob) {
@@ -77,7 +86,10 @@ async function send(blob) {
 main.append(
   h("p.eyebrow", {}, "Speaking in"), h("h1", { style: { fontSize: "28px", margin: "4px 0 16px" } }, meta.title),
   h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Speakers")), people),
-  h("div.card", {}, micBtn, h("div.level", { style: { marginTop: "12px" } }, level),
+  h("div.card", {},
+    h("label.field", {}, "Spoken Language", spokenLang),
+    h("p.tiny.muted", {}, hasSpeechRecognition ? "Choose before starting. Stop the mic to change languages." : "This browser uses audio upload. The language selector only applies to browser speech recognition."),
+    micBtn, h("div.level", { style: { marginTop: "12px" } }, level),
     h("p.tiny.muted", { style: { marginTop: "10px" } }, "Turn the mic on while it's your turn. Eco tags everything this device hears with your name.")),
   voiceCard(id, meta, headers),
 );

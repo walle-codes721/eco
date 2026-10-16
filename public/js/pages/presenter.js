@@ -1,6 +1,6 @@
 import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, phraseInit, speakingSignal } from "/js/mic.js";
+import { phraseMic, phraseInit, speakingSignal, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
 import { voiceCard } from "/js/sample.js";
 
@@ -59,6 +59,10 @@ const prev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous 
 const next = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(meta.slide + 1), disabled: demo }, icon("next"));
 
 const level = h("i");
+const spokenLang = h("select", { disabled: !hasSpeechRecognition },
+  h("option", { value: "" }, `Browser default (${navigator.language})`),
+  ...SPOKEN_LANGUAGES.map((l) => h("option", { value: l }, langName(l, "en"))),
+);
 const micState = h("div.small.muted", {}, "Off");
 const micBtn = h("button.mic-btn", { type: "button", onclick: () => toggleMic() },
   h("span.ico", {}, icon("mic")),
@@ -76,6 +80,8 @@ const left = h("div.col-left", {},
   ),
   h("div.card", {},
     h("div.card-head", {}, h("span.eyebrow", {}, demo ? "Your turn" : "Stage input")),
+    h("label.field", {}, "Spoken Language", spokenLang),
+    h("p.tiny.muted", {}, hasSpeechRecognition ? "Choose before starting. Stop the mic to change languages." : "This browser uses audio upload. The language selector only applies to browser speech recognition."),
     micBtn,
     h("div.level", { style: { marginTop: "12px" } }, level),
     h("p.tiny.muted", { style: { marginTop: "10px" } }, demo ? "30 seconds of live mic. The replay pauses while you talk." : "Eco cuts at your natural pauses. Space toggles the mic."),
@@ -93,7 +99,7 @@ const left = h("div.col-left", {},
 const now = h("div.said");
 const mid = h("div.col-mid", {},
   h("div.card", { style: { minHeight: "60vh" } },
-    h("div.card-head", {}, h("span.eyebrow", {}, "You said"), h("span.spacer"), h("span.chip", {}, "EN")),
+    h("div.card-head", {}, h("span.eyebrow", {}, "You said"), h("span.spacer"), h("span.chip", {}, "Original")),
     now,
   ),
 );
@@ -223,13 +229,16 @@ function teachSheet(g) {
 }
 
 async function toggleMic() {
+  if (micBtn.disabled) return;
   if (stopMic) {
     stopMic();
     return;
   }
   if (meta.status === "ended") return toast("The talk has ended");
+  micBtn.disabled = spokenLang.disabled = true;
   try {
     const end = await phraseMic({
+      lang: spokenLang.value || undefined,
       maxTotalMs: demo ? 30000 : Infinity,
       onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)),
       onPhrase: send,
@@ -238,6 +247,7 @@ async function toggleMic() {
       end();
       live.send({ type: "speaking", on: false });
       stopMic = null;
+      spokenLang.disabled = !hasSpeechRecognition;
       micBtn.classList.remove("on");
       micState.textContent = "Off";
       level.style.width = "0";
@@ -247,6 +257,9 @@ async function toggleMic() {
     if (demo) setTimeout(() => stopMic?.(), 30500);
   } catch (err) {
     toast(err.name === "NotAllowedError" ? "Microphone blocked: allow it in the address bar" : "Couldn't open the microphone");
+  } finally {
+    micBtn.disabled = false;
+    spokenLang.disabled = !hasSpeechRecognition || !!stopMic;
   }
 }
 
@@ -272,7 +285,7 @@ async function send(blob, cutAt) {
 }
 
 addEventListener("keydown", (e) => {
-  if (e.target.closest("input, textarea")) return;
+  if (e.target.closest("input, textarea, select")) return;
   if (["ArrowRight", "PageDown", "ArrowDown"].includes(e.key)) goSlide(meta.slide + 1);
   if (["ArrowLeft", "PageUp", "ArrowUp"].includes(e.key)) goSlide(meta.slide - 1);
   if (e.code === "Space" && !e.repeat) (e.preventDefault(), toggleMic());

@@ -1,11 +1,13 @@
 // Microphone: continuous phrase mode (stage) and hold-to-talk (counter).
 // With the browser's speech recognition they produce text; without it (Firefox), 16 kHz WAV.
-import { Cutter, encodeWav, resample } from "/js/vad.js";
+import { Cutter, encodeWav, resample } from "./vad.js";
 
 // ponytail: Token Factory stopped taking audio on 15 Oct, so the browser does speech-to-text (Chrome/Safari; Chrome sends
 // the audio to Google). Delete SR and the sr* functions to go back to WAV → MiMo if AMD restores audio input.
 const SR = globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition;
 const BCP47 = { en: "en-US", it: "it-IT", es: "es-ES", hi: "hi-IN", fr: "fr-FR", de: "de-DE", pt: "pt-PT", zh: "zh-CN", ja: "ja-JP", ko: "ko-KR", ar: "ar-SA", ru: "ru-RU", nl: "nl-NL", pl: "pl-PL", tr: "tr-TR" };
+export const SPOKEN_LANGUAGES = Object.keys(BCP47);
+export const hasSpeechRecognition = !!SR;
 const denied = (e) => Object.assign(new Error(e.error), { name: "NotAllowedError" });
 
 /** fetch headers + body for a phrase: recognised text, or a WAV blob. */

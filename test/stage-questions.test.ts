@@ -43,6 +43,7 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
   return {
     room,
     listenerMessages,
+    saved,
     update: async (action: string, body: unknown) => {
       const response = await room.fetch(new Request(`https://room/${action}`, {
         method: "POST", headers: { "x-room": id, "x-key": room.meta!.hostKey, "content-type": "application/json" },
@@ -63,6 +64,66 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
 }
 
 describe("Stage question flow", () => {
+  it.each([{ langs: ["it", "es", "hi"] }, { langs: ["en", "it", "hi"] }])("requests English once alongside $langs in one capped phrase call", async ({ langs }) => {
+    const { room, update } = await testRoom();
+    room.meta!.langs = langs;
+    const spy = vi.spyOn(client, "tf");
+    try {
+      await update("utterance", { text: "La nostra azienda opera in 15 paesi." });
+      expect(spy).toHaveBeenCalledTimes(1);
+      const prompt = spy.mock.calls[0][3];
+      const messages = JSON.stringify(prompt.messages);
+      for (const lang of new Set(["en", ...langs])) expect(messages.split(`\\"${lang}\\": string`)).toHaveLength(2);
+      expect(prompt.max_tokens).toBe(300);
+      expect(prompt.response_format).toEqual({ type: "json_object" });
+      expect(room.lines[0].src).toBe("La nostra azienda opera in 15 paesi.");
+      if (!langs.includes("en")) expect(room.lines[0].out.en).toBeUndefined(); // the real mock cannot translate
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["presenter", "co-speaker"])("answers in English from an Italian %s with a stored English caption", async (role) => {
+    const { room, ask, saved } = await testRoom();
+    expect(room.meta!.langs).not.toContain("en"); // English listeners are supported without configuring another room target
+    const src = "La nostra azienda opera in 15 paesi.";
+    const en = "Our company operates in 15 countries.";
+    let auth: Record<string, string> = { "x-key": room.meta!.hostKey };
+    let speaker = "s0";
+    if (role === "co-speaker") {
+      // The presenter loads metadata to obtain the join QR before a co-speaker joins.
+      await room.fetch(new Request("https://room/meta", { headers: { "x-room": room.meta!.id, ...auth } }));
+      const joined = await room.fetch(new Request("https://room/join", {
+        method: "POST", headers: { "x-room": room.meta!.id, "x-join": room.meta!.joinKey!, "content-type": "application/json" },
+        body: JSON.stringify({ name: "Italian speaker" }),
+      }));
+      expect(joined.status).toBe(200);
+      const body = await joined.json() as { key: string; id: string };
+      auth = { "x-speaker-key": body.key };
+      speaker = body.id;
+    }
+    const spy = vi.spyOn(client, "tf").mockResolvedValueOnce({ data: { src, out: { en }, flags: [] }, live: false, ms: 0 });
+    try {
+      const spoken = await room.fetch(new Request("https://room/utterance", {
+        method: "POST", headers: { "x-room": room.meta!.id, ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ text: src }),
+      }));
+      expect(spoken.status).toBe(200);
+      expect(saved.get("lines")).toEqual([expect.objectContaining({ src, out: { en }, speaker })]);
+      expect(JSON.stringify(spy.mock.calls[0][3].messages)).toContain('\\"en\\": string');
+      expect(JSON.stringify(spy.mock.calls[0][3].messages)).toContain('\\"hi\\": string');
+      expect(spy.mock.calls[0][3].max_tokens).toBe(300);
+      const text = "How many countries does the company operate in?";
+      expect(await ask(text, "en")).toMatchObject({ covered: true, answer: en, cite: "said at 0:00", cached: false });
+      expect((await ask(text, "en")).cached).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(2); // one fixture translation, one offline answer
+      expect(JSON.stringify(spy.mock.calls[1][3].messages)).toContain(`[said at 0:00] ${src}`);
+      expect(JSON.stringify(spy.mock.calls[1][3].messages)).toContain("Write the answer in English");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("uses browser text captions for Hindi Q&A and invalidates a cached miss", async () => {
     const { room, ask, update } = await testRoom();
     expect(await ask()).toMatchObject({ covered: false, cached: false });

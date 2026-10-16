@@ -434,12 +434,16 @@ export class Room extends DurableObject<Env> {
     if (tryVoice) this.replayPausedUntil = Date.now() + 45_000;
 
     const prev = this.lines.slice(-2).map((l) => l.src);
-    const r = await tf(this.env, "utterance", turnModel(input), utterancePrompt(input, m.langs, prev), {
+    // English is always offered to listeners; the original speech may be in any language.
+    // Include it in the same phrase call, with the existing output cap and budget admission.
+    const langs = [...new Set(["en", ...m.langs])];
+    const r = await tf(this.env, "utterance", turnModel(input), utterancePrompt(input, langs, prev), {
       pub: m.demo,
       mock: () => {
+        // Mock mode cannot translate arbitrary speech: keep original-text fallback for missing English.
         if (!m.demo) return { src: input.text ?? MOCK_LINE, out: Object.fromEntries(m.langs.map((l) => [l, MOCK_LINE])), flags: ["mock"] };
         const d = DEMO_TALK[this.mockI++ % DEMO_TALK.length];
-        return { src: d.src, out: Object.fromEntries(m.langs.map((l) => [l, d.out[l] ?? d.src])), flags: [] as string[] };
+        return { src: d.src, out: Object.fromEntries(langs.map((l) => [l, d.out[l] ?? d.src])), flags: [] as string[] }; // demo originals are English
       },
     });
     if (r.data === null) {

@@ -175,5 +175,5 @@ export function mockSummary(lines: { slide: number; src: string; out: Record<str
   const firstOnSlide = new Map<number, (typeof lines)[number]>();
   for (const l of lines) if (l.src.trim() && !firstOnSlide.has(l.slide)) firstOnSlide.set(l.slide, l);
   const picked = [...firstOnSlide.values()].slice(0, 5);
-  return Object.fromEntries(langs.map((lang) => [lang, picked.map((l) => `- ${lang === "en" ? l.src : l.out?.[lang] ?? l.src}`).join("\n")]));
+  return Object.fromEntries(langs.map((lang) => [lang, picked.map((l) => `- ${l.out?.[lang]?.trim() || l.src}`).join("\n")]));
 }
