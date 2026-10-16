@@ -22,6 +22,12 @@ Gemma (Google DeepMind's open model, running on AMD GPUs through Token Factory) 
 
 Retrieval is local BM25 keyword scoring, so it costs zero tokens. Knowing who is speaking costs nothing either: each speaker uses their own device and mic, so every line is tagged by the device it came from.
 
+**Questions across languages.** Stage searches both the original transcript and its existing translated captions. For example, a Hindi question such as “यह कंपनी कितने देशों में काम करती है?” can find the English phrase “We operate in 15 countries” through its Hindi caption, even when earlier slides fill the context window. Only the original source text is sent as evidence to the answer model, which is asked to answer in the listener's selected language. This adds no translation call and keeps the existing context allowance. Answers are cached while the transcript and selected evidence are unchanged. Slide navigation alone does not trigger another answer call if the ordered source tags and text are identical; changed evidence, new speech or source edits cause reevaluation.
+
+When captions are missing, Stage uses the **current slide** and **two most recent transcript chunks** as fallback context before filling from source order. Keyword matches remain first. When keyword hits and distinct fallback sources would exceed the 1,500 estimated source-token allowance, up to 20% (300 tokens) of that same allowance is reserved for fallback excerpts, shared across those sources. Sources that all fit are kept intact. This gives the answer model useful English evidence without claiming the question matched that evidence; fallback text alone never becomes a mock answer or a substitute citation.
+
+This is keyword retrieval plus contextual fallback, not universal semantic search. Relevant material on another slide can still be missed without shared keywords or translated captions, and facts beyond a truncated excerpt can still be omitted. Mock mode quotes matching source text or stored captions, rather than generating a translation; a Hindi question with only English fallback evidence still returns “not covered” in mock mode. Live answer quality needs a separately approved live test.
+
 **Status.** Captions, ask the talk, the board, Counter, multiple speakers (a co-speaker QR, "now speaking", names on captions) and voice samples work in mock mode. The cloned voice runs once the voice service in [`voice/`](voice/) is deployed (a Hugging Face Space until AMD can host the model) and `VOICE_URL` is set; until then listeners hear the phone's built-in voice, a different one per speaker.
 
 **Contributing:** read [CONTRIBUTING.md](CONTRIBUTING.md) first (stack, workflow, and the rules that protect our shared API key). Open work is in [PLAN.md](PLAN.md).
@@ -81,6 +87,8 @@ Budget (Durable Object): limits + call log for every live call, voice included
 ```sh
 npm test
 ```
+
+`test/multilingual.test.ts` covers caption matching in Hindi, Italian, Spanish and English, preserving original evidence and Hindi character marks. `test/english-only-qa.test.ts` covers a long English-only deck, distracting facts, unsupported questions, context limits and documented retrieval misses. `test/stage-questions.test.ts` exercises the room's question handler in mock mode, including answer-language instructions, citations, fallback context, cache reuse and invalidation. None makes live API calls.
 
 ## License
 

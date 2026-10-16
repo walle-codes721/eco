@@ -142,10 +142,12 @@ describe("teach eco on the stage", () => {
     expect(slidePages(taught)).toEqual(DEMO_SLIDES);
   });
   it("a taught answer goes into the context first, even when the question shares no words with it", () => {
-    const { picked, best } = selectContext(chunkPages(taught), "यह कैसे काम करता है?", 600);
+    // Hindi marks now survive tokenization: है would overlap the taught question.
+    const question = "संस्थापक जन्मदिन?";
+    const { picked, best } = selectContext(chunkPages(taught), question, 600);
     expect(picked[0].tag).toBe(TAUGHT_TAG);
     expect(best).toBeNull(); // no keyword hit, but the taught answer is still sent
-    expect(selectContext(chunkPages(DEMO_SLIDES), "यह कैसे काम करता है?", 600).picked.some((c) => c.tag === TAUGHT_TAG)).toBe(false);
+    expect(selectContext(chunkPages(DEMO_SLIDES), question, 600).picked.some((c) => c.tag === TAUGHT_TAG)).toBe(false);
   });
   it("does not change which slide is the best match for a question the slides answer", () => {
     expect(selectContext(chunkPages(taught), "What is ROCm?").best?.tag).toBe("slide 5");

@@ -4,6 +4,7 @@ export interface Chunk {
   tag: string; // "slide 6", "menu", "hours"... shown to users as the citation
   title: string; // first line, used as the board topic
   text: string;
+  translations?: Record<string, string>; // aligned caption lines, used locally for search only
 }
 
 const STOP = new Set(
@@ -20,14 +21,27 @@ const STOP = new Set(
 );
 
 export function terms(s: string): string[] {
-  return (s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length > 1 && !STOP.has(t));
+  // Marks belong to their letters: splitting them breaks Hindi words such as देशों.
+  return (s.normalize("NFC").toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu) ?? []).filter((t) => t.length > 1 && !STOP.has(t));
 }
 
 export function normalize(q: string): string {
   return terms(q).join(" ");
 }
 
+/** Answer identity must preserve negation, Hindi vowel marks and other meaningful words. */
+export function questionKey(q: string, lang: string): string {
+  return JSON.stringify(["qa-v2", lang, q.normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim()]);
+}
+
 export const tokensOf = (s: string) => Math.ceil(s.length / 4);
+
+/** Fingerprint exactly the ordered source tags/text sent to the model, without storing copies in every cache entry. */
+export async function contextFingerprint(chunks: Chunk[]): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(chunks.map(({ tag, text }) => [tag, text])));
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** Split pages into ~300-word chunks, keeping each page's tag. */
 export function chunkPages(pages: { tag: string; text: string }[], words = 300): Chunk[] {
@@ -40,6 +54,40 @@ export function chunkPages(pages: { tag: string; text: string }[], words = 300):
     for (let i = 0; i < w.length; i += words) out.push({ tag: p.tag, title, text: w.slice(i, i + words).join("").trim() });
   }
   return out;
+}
+
+/** Keep each phrase aligned with its existing translations; never generate new ones for retrieval. */
+export function transcriptChunks(lines: { at: number; slide: number; src: string; out?: Record<string, string> }[]): Chunk[] {
+  const chunks: Chunk[] = [];
+  let buf: typeof lines = [];
+  let words = 0;
+  const flush = () => {
+    if (!buf.length) return;
+    const at = buf[0].at;
+    const langs = [...new Set(buf.flatMap((l) => Object.entries(l.out ?? {})
+      .filter(([, text]) => typeof text === "string" && text.trim()).map(([lang]) => lang)))];
+    chunks.push({
+      tag: `said at ${Math.floor(at / 60)}:${String(at % 60).padStart(2, "0")}`,
+      title: `Slide ${buf[0].slide}`,
+      text: buf.map((l) => l.src.replace(/\s+/g, " ").trim()).join("\n"),
+      translations: Object.fromEntries(langs.map((lang) => [lang,
+        buf.map((l) => {
+          const translated = l.out?.[lang];
+          return (typeof translated === "string" && translated.trim() ? translated : l.src).replace(/\s+/g, " ").trim();
+        }).join("\n"),
+      ])),
+    });
+    buf = [];
+    words = 0;
+  };
+  for (const line of lines) {
+    if (!line.src.trim()) continue;
+    if (buf.length && (buf[0].slide !== line.slide || words + line.src.split(/\s+/).length > 150)) flush();
+    buf.push(line);
+    words += line.src.split(/\s+/).length;
+  }
+  flush();
+  return chunks;
 }
 
 /** The list page that holds what the owner taught Eco. Customers see it as the citation. */
@@ -85,7 +133,7 @@ export function slidePages<T extends { tag: string }>(pages: T[]): T[] {
 /** BM25 scores for every chunk, same order as `chunks`. */
 export function bm25(chunks: Chunk[], query: string, k1 = 1.2, b = 0.75): number[] {
   const q = [...new Set(terms(query))];
-  const docs = chunks.map((c) => terms(c.title + " " + c.text));
+  const docs = chunks.map((c) => terms([c.title, c.text, ...Object.values(c.translations ?? {})].join(" ")));
   const avg = docs.reduce((n, d) => n + d.length, 0) / (docs.length || 1);
   const df = new Map<string, number>();
   for (const d of docs) for (const t of new Set(d)) df.set(t, (df.get(t) ?? 0) + 1);
@@ -103,17 +151,21 @@ export function bm25(chunks: Chunk[], query: string, k1 = 1.2, b = 0.75): number
 
 /**
  * Context for one answer call, at most `budget` tokens.
- * Top-3 keyword hits first; then the rest of the source in order, so a question asked in
- * Hindi about an English deck still gets context (small decks fit whole).
+ * Taught chunks first (up to half the budget), then top-3 keyword hits,
+ * caller-provided fallback tags, and the source in order.
+ * Stage can prefer its current slide/recent speech when there is no cross-language match.
+ * With keyword hits, reserve up to 20% of the same budget for distinct fallback excerpts.
+ * Fallbacks are context hints, never evidence of a keyword match (they don't set `best`).
+ * Transcript translations participate in ranking; only the original text consumes model context.
  */
-export function selectContext(chunks: Chunk[], query: string, budget = 1500): { picked: Chunk[]; best: Chunk | null } {
+export function selectContext(chunks: Chunk[], query: string, budget = 1500, fallbackTags: string[] = []): { picked: Chunk[]; best: Chunk | null } {
   const scores = bm25(chunks, query);
   const order = chunks.map((_, i) => i).sort((a, b) => scores[b] - scores[a]);
   const hits = order.filter((i) => scores[i] > 0).slice(0, 3);
   const picked: Chunk[] = [];
+  let best: Chunk | null = null;
   let used = 0;
-  // What the owner or speaker taught always goes in first, up to half the budget: a question in another
-  // language may share no words with it, and a long deck can't be sent whole.
+  // Keep taught evidence available even when the question shares no words with it.
   const taken = new Set<number>();
   for (const i of order.filter((i) => chunks[i].tag === TAUGHT_TAG)) {
     const cost = tokensOf(chunks[i].text);
@@ -121,27 +173,53 @@ export function selectContext(chunks: Chunk[], query: string, budget = 1500): { 
     picked.push(chunks[i]);
     taken.add(i);
     used += cost;
+    if (i === hits[0]) best = chunks[i];
   }
-  for (const i of [...hits, ...chunks.map((_, i) => i).filter((i) => !hits.includes(i))]) {
+  const fallback = [...new Set(fallbackTags.flatMap((tag) => chunks.flatMap((c, i) => c.tag === tag ? [i] : [])))];
+  const separate = fallback.filter((i) => !hits.includes(i) && !taken.has(i));
+  const reserved = new Map<number, Chunk>();
+  const preferredCost = [...new Set([...taken, ...hits, ...separate])].reduce((n, i) => n + tokensOf(chunks[i].text), 0);
+  let allowance = hits.length && preferredCost > budget ? Math.floor(budget * 0.2) : 0;
+  // Share the reservation so a long current slide cannot crowd out every recent phrase.
+  for (const [position, i] of separate.entries()) {
+    const c = chunks[i];
+    const cost = Math.min(tokensOf(c.text), Math.ceil(allowance / (separate.length - position)));
+    if (cost <= 0) continue;
+    const excerpt = { ...c, text: c.text.slice(0, cost * 4) };
+    reserved.set(i, excerpt);
+    allowance -= tokensOf(excerpt.text);
+  }
+  // Count reserved excerpts now, but emit them after the keyword matches.
+  used += [...reserved.values()].reduce((n, c) => n + tokensOf(c.text), 0);
+  for (const i of new Set([...hits, ...fallback, ...chunks.map((_, i) => i)])) {
     if (taken.has(i)) continue;
+    const excerpt = reserved.get(i);
+    if (excerpt) {
+      picked.push(excerpt);
+      continue;
+    }
     const c = chunks[i];
     const cost = tokensOf(c.text);
     if (used + cost > budget) {
-      if (used < budget * 0.8 && !hits.includes(i)) {
+      if ((reserved.size && hits.includes(i) && used < budget) || (used < budget * 0.8 && !hits.includes(i))) {
         const room = (budget - used) * 4;
-        picked.push({ ...c, text: c.text.slice(0, room) });
+        // A complete translated line may contain facts beyond this original-text excerpt.
+        const partial = { ...c, text: c.text.slice(0, room), translations: undefined };
+        picked.push(partial);
+        if (i === hits[0]) best = partial;
         used = budget;
       }
       continue;
     }
     picked.push(c);
+    if (i === hits[0]) best = c;
     used += cost;
   }
-  return { picked, best: hits.length ? chunks[hits[0]] : null };
+  return { picked, best };
 }
 
 /** Mock answers: the sentence of the best chunk that shares the most words with the question. */
-export function bestSentence(question: string, chunk: Chunk | null): { covered: boolean; text: string; cite: string } {
+export function bestSentence(question: string, chunk: Chunk | null, lang?: string): { covered: boolean; text: string; cite: string } {
   if (!chunk) return { covered: false, text: "", cite: "" };
   const q = new Set(terms(question));
   if (chunk.tag === TAUGHT_TAG) {
@@ -157,10 +235,12 @@ export function bestSentence(question: string, chunk: Chunk | null): { covered: 
   }
   let best = "";
   let score = 0;
-  const units = chunk.text.split("\n").flatMap((l) => (l.length > 200 ? l.split(/(?<=[.!?])\s+/) : [l]));
-  for (const s of units) {
-    const n = terms(s).filter((t) => q.has(t)).length;
-    if (n > score) [best, score] = [s.trim(), n];
+  const translations = Object.values(chunk.translations ?? {}).map((t) => t.split("\n"));
+  const target = lang ? chunk.translations?.[lang]?.split("\n") : undefined;
+  const units = chunk.text.split("\n").flatMap((l) => (!translations.length && l.length > 200 ? l.split(/(?<=[.!?])\s+/) : [l]));
+  for (const [i, s] of units.entries()) {
+    const n = Math.max(...[s, ...translations.map((t) => t[i] ?? "")].map((t) => terms(t).filter((w) => q.has(w)).length));
+    if (n > score) [best, score] = [(target?.[i] || s).trim(), n];
   }
   return score ? { covered: true, text: best, cite: chunk.tag } : { covered: false, text: "", cite: "" };
 }
