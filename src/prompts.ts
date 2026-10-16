@@ -3,7 +3,7 @@ import type { Chunk } from "./retrieve";
 
 // Gemma does every text job (answers, Counter text turns, owner text replies, summaries) on AMD GPUs via Token Factory.
 // MiMo only where the input is audio or a photo: Gemma on Token Factory takes neither.
-// ECO_TEXT_MODEL overrides `answer` while Gemma is missing from the catalog (tf.ts).
+// When Gemma is missing from the catalog, tf.ts falls back to DeepSeek-V4-Flash for `answer` jobs.
 export const MODELS = {
   audio: "MiMo-V2.6-Flash", // the only Token Factory model with audio input
   answer: "Gemma-4-31B-IT", // all text in, text out; thinking is off by default in Gemma 4's chat template

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chunkPages, selectContext, bm25, normalize, bestSentence, teach, TAUGHT_TAG } from "../src/retrieve";
+import { chunkPages, selectContext, bm25, normalize, bestSentence, slidePages, teach, tokensOf, TAUGHT_TAG } from "../src/retrieve";
 import { admit } from "../src/limits";
 import { parseJson } from "../src/tf";
 import { transcriptText, summaryPrompt, mockSummary } from "../src/prompts";
@@ -125,6 +125,52 @@ describe("teach eco", () => {
     const taught = chunkPages(teach(pages, parking).pages);
     expect(selectContext(taught, "Do you have parking?").best?.tag).toBe(TAUGHT_TAG);
     expect(selectContext(taught, "parcheggio gratuito").best?.tag).toBe(TAUGHT_TAG);
+  });
+});
+
+describe("teach eco on the stage", () => {
+  const entry = { q: "What is the demo room?", asked: "क्या है डेमो रूम?", a: "The demo room is the public replay of a sample talk." };
+  const taught = teach(DEMO_SLIDES, entry).pages;
+  const big = (n: number) => Array.from({ length: n }, (_, i) => ({ q: `question ${i}`, a: "word ".repeat(100) })).reduce((p, e) => teach(p, e).pages, DEMO_SLIDES);
+
+  it("slidePages keeps the real slides and leaves out notes and taught answers", () => {
+    const pages = [{ tag: "slide 1" }, { tag: "notes" }, { tag: "slide 2" }, { tag: TAUGHT_TAG }];
+    expect(slidePages(pages).map((p) => p.tag)).toEqual(["slide 1", "slide 2"]);
+  });
+  it("teaching never adds a slide", () => {
+    expect(taught).toHaveLength(DEMO_SLIDES.length + 1);
+    expect(slidePages(taught)).toEqual(DEMO_SLIDES);
+  });
+  it("a taught answer goes into the context first, even when the question shares no words with it", () => {
+    // Hindi marks now survive tokenization: है would overlap the taught question.
+    const question = "संस्थापक जन्मदिन?";
+    const { picked, best } = selectContext(chunkPages(taught), question, 600);
+    expect(picked[0].tag).toBe(TAUGHT_TAG);
+    expect(best).toBeNull(); // no keyword hit, but the taught answer is still sent
+    expect(selectContext(chunkPages(DEMO_SLIDES), question, 600).picked.some((c) => c.tag === TAUGHT_TAG)).toBe(false);
+  });
+  it("does not change which slide is the best match for a question the slides answer", () => {
+    expect(selectContext(chunkPages(taught), "What is ROCm?").best?.tag).toBe("slide 5");
+    expect(selectContext(chunkPages(taught), "What is the demo room?").best?.tag).toBe(TAUGHT_TAG);
+  });
+  it("sends taught chunks first but never more than half the budget, and always stays inside the budget", () => {
+    const pages = chunkPages(big(4)); // two taught chunks: 373 and 144 tokens
+    const sizes = pages.filter((c) => c.tag === TAUGHT_TAG).map((c) => tokensOf(c.text));
+    expect(sizes.length).toBeGreaterThan(1);
+    const upFront = (budget: number) => {
+      const { picked } = selectContext(pages, "anything at all", budget);
+      const lead = [];
+      for (const c of picked) if (c.tag === TAUGHT_TAG) lead.push(c); else break;
+      return { lead, tokens: lead.reduce((n, c) => n + tokensOf(c.text), 0), chars: picked.reduce((n, c) => n + c.text.length, 0) };
+    };
+    const small = upFront(600);
+    expect(small.lead.length).toBeGreaterThan(0); // the 144-token chunk fits in half of 600
+    expect(small.tokens).toBeLessThanOrEqual(300); // the 373-token one does not
+    expect(small.chars).toBeLessThanOrEqual(600 * 4 + 10);
+    const roomy = upFront(1500);
+    expect(roomy.tokens).toBeGreaterThan(small.tokens); // both fit in half of 1500
+    expect(roomy.tokens).toBeLessThanOrEqual(750);
+    expect(roomy.chars).toBeLessThanOrEqual(1500 * 4 + 10);
   });
 });
 
@@ -295,5 +341,34 @@ describe("new-lines pill counter", () => {
   });
   it("resets when the listener taps back to live", () => {
     expect(nextNewCount(4, true)).toBe(0);
+  });
+});
+
+import { vi } from "vitest";
+import { tf, TEXT_FALLBACK } from "../src/tf";
+
+describe("Gemma fallback (fetch mocked, no real calls)", () => {
+  it("answers on DeepSeek when Gemma is 'not supported', without counting a failure, then skips Gemma", async () => {
+    const finished: { model: string; status: number }[] = [];
+    const env = {
+      ECO_LIVE: "1",
+      RADEON_API_KEY: "test",
+      BUDGET: { idFromName: () => "g", get: () => ({ acquire: async () => ({ ok: true }), finish: async (r: { model: string; status: number }) => void finished.push(r) }) },
+    } as never;
+    const sent: string[] = [];
+    const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"a":1}' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }));
+    vi.stubGlobal("fetch", async (_u: string, init: { body: string }) => {
+      const model = JSON.parse(init.body).model;
+      sent.push(model);
+      return model === MODELS.answer ? new Response('{"error":{"message":"Requested model Gemma-4-31B-IT not supported"}}', { status: 400 }) : ok();
+    });
+    const req = { messages: [], response_format: { type: "json_object" }, max_tokens: 10 };
+    const r = await tf(env, "ask", MODELS.answer, req, { pub: false, mock: () => ({ a: 0 }) });
+    expect(r.data).toEqual({ a: 1 });
+    expect(sent).toEqual([MODELS.answer, TEXT_FALLBACK]);
+    expect(finished).toEqual([expect.objectContaining({ model: TEXT_FALLBACK, status: 200 })]); // the 400 never counts toward the 3-failure stop
+    await tf(env, "ask", MODELS.answer, req, { pub: false, mock: () => ({ a: 0 }) });
+    expect(sent).toEqual([MODELS.answer, TEXT_FALLBACK, TEXT_FALLBACK]); // remembered: no second Gemma round trip
+    vi.unstubAllGlobals();
   });
 });

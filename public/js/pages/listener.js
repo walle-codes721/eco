@@ -154,9 +154,11 @@ function drawQs() {
     h("div.qa", {},
       h("div.q", {}, q.text),
       q.pending ? h("div.a.muted", {}, "…") :
+        q.speakerAnswer ? h("div.a", {}, q.speakerAnswer) : // the speaker typed an answer to a question the talk didn't cover
         q.covered ? h("div.a", {}, q.answer) : h("div.a.muted", {}, T("notCovered")),
       h("div.meta", {},
-        q.covered && q.cite ? h("span.chip", {}, q.cite) : null,
+        q.speakerAnswer ? h("span.chip", {}, T("fromSpeaker")) : null,
+        q.covered && q.cite ? h("span.chip", {}, q.cite === "answers" ? T("fromSpeaker") : q.cite) : null, // "answers" is what a speaker taught Eco
         q.answeredAt != null ? h("span", {}, icon("check"), ` ${T("answeredAt")} ${fmtTime(q.answeredAt)}`) : null,
       ),
     )));
@@ -301,11 +303,11 @@ if (meta.status === "ended") {
     }
     if (m.type === "answered") {
       let hit = false;
-      for (const q of myQs) if (m.qids.includes(q.id)) (q.answeredAt = m.at), (hit = true);
+      for (const q of myQs) if (m.qids.includes(q.id)) (q.answeredAt = m.at), m.answer && (q.speakerAnswer = m.answer), (hit = true);
       if (hit) {
         store(`eco:qs:${id}`, myQs);
         drawQs();
-        toast(`${T("answeredAt")} ${fmtTime(m.at)}`, 3500);
+        toast(m.answer ? `${T("fromSpeaker")}: ${m.answer}` : `${T("answeredAt")} ${fmtTime(m.at)}`, 3500);
       }
     }
     drawStatus();

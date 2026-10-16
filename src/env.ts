@@ -11,7 +11,6 @@ export interface Env {
   ECO_LIVE?: string;
   ECO_MAX_CALLS?: string;
   ECO_PUBLIC_HOURLY?: string;
-  ECO_TEXT_MODEL?: string; // replaces Gemma for text jobs; unset it when Gemma is back on Token Factory
   RADEON_API_KEY?: string; // secret
   ADMIN_KEY?: string; // secret
   GOOGLE_CLIENT_ID?: string; // secret

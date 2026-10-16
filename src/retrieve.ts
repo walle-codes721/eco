@@ -94,6 +94,9 @@ export function transcriptChunks(lines: { at: number; slide: number; src: string
 export const TAUGHT_TAG = "answers";
 const TAUGHT_MAX = 8000; // one page, same ceiling as the rest of the list
 
+/** One line of at most `n` characters: all whitespace and line breaks become single spaces. */
+export const oneLine = (s: unknown, n: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+
 /**
  * Teach Eco: add one owner-approved answer to the list's "answers" page.
  * `q` is the question in the owner's language, `asked` the customer's own words (helps keyword search in their language).
@@ -104,7 +107,7 @@ export function teach(
   e: { q: string; asked?: string; a: string },
 ): { pages: { tag: string; text: string }[]; added: boolean; reason?: "empty" | "duplicate" | "full" } {
   // One line per field, so a customer's words can never start a second entry or fake a "Q:" line.
-  const one = (s: unknown, n: number) => String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+  const one = oneLine;
   const q = one(e.q, 200);
   const a = one(e.a, 500);
   const asked = one(e.asked, 200);
@@ -120,6 +123,11 @@ export function teach(
   if (text.length > TAUGHT_MAX) return { pages, added: false, reason: "full" };
   const next = old ? pages.map((p) => (p.tag === TAUGHT_TAG ? { ...p, text } : p)) : [...pages, { tag: TAUGHT_TAG, text }];
   return { pages: next, added: true };
+}
+
+/** The pages of a Stage that are real slides: not the speaker's notes, and not what was taught. */
+export function slidePages<T extends { tag: string }>(pages: T[]): T[] {
+  return pages.filter((p) => p.tag !== "notes" && p.tag !== TAUGHT_TAG);
 }
 
 /** BM25 scores for every chunk, same order as `chunks`. */
@@ -143,7 +151,8 @@ export function bm25(chunks: Chunk[], query: string, k1 = 1.2, b = 0.75): number
 
 /**
  * Context for one answer call, at most `budget` tokens.
- * Top-3 keyword hits first; then caller-provided fallback tags, then the source in order.
+ * Taught chunks first (up to half the budget), then top-3 keyword hits,
+ * caller-provided fallback tags, and the source in order.
  * Stage can prefer its current slide/recent speech when there is no cross-language match.
  * With keyword hits, reserve up to 20% of the same budget for distinct fallback excerpts.
  * Fallbacks are context hints, never evidence of a keyword match (they don't set `best`).
@@ -153,10 +162,23 @@ export function selectContext(chunks: Chunk[], query: string, budget = 1500, fal
   const scores = bm25(chunks, query);
   const order = chunks.map((_, i) => i).sort((a, b) => scores[b] - scores[a]);
   const hits = order.filter((i) => scores[i] > 0).slice(0, 3);
+  const picked: Chunk[] = [];
+  let best: Chunk | null = null;
+  let used = 0;
+  // Keep taught evidence available even when the question shares no words with it.
+  const taken = new Set<number>();
+  for (const i of order.filter((i) => chunks[i].tag === TAUGHT_TAG)) {
+    const cost = tokensOf(chunks[i].text);
+    if (used + cost > budget / 2) continue;
+    picked.push(chunks[i]);
+    taken.add(i);
+    used += cost;
+    if (i === hits[0]) best = chunks[i];
+  }
   const fallback = [...new Set(fallbackTags.flatMap((tag) => chunks.flatMap((c, i) => c.tag === tag ? [i] : [])))];
-  const separate = fallback.filter((i) => !hits.includes(i));
+  const separate = fallback.filter((i) => !hits.includes(i) && !taken.has(i));
   const reserved = new Map<number, Chunk>();
-  const preferredCost = [...hits, ...separate].reduce((n, i) => n + tokensOf(chunks[i].text), 0);
+  const preferredCost = [...new Set([...taken, ...hits, ...separate])].reduce((n, i) => n + tokensOf(chunks[i].text), 0);
   let allowance = hits.length && preferredCost > budget ? Math.floor(budget * 0.2) : 0;
   // Share the reservation so a long current slide cannot crowd out every recent phrase.
   for (const [position, i] of separate.entries()) {
@@ -167,11 +189,10 @@ export function selectContext(chunks: Chunk[], query: string, budget = 1500, fal
     reserved.set(i, excerpt);
     allowance -= tokensOf(excerpt.text);
   }
-  const picked: Chunk[] = [];
-  let best: Chunk | null = null;
   // Count reserved excerpts now, but emit them after the keyword matches.
-  let used = [...reserved.values()].reduce((n, c) => n + tokensOf(c.text), 0);
+  used += [...reserved.values()].reduce((n, c) => n + tokensOf(c.text), 0);
   for (const i of new Set([...hits, ...fallback, ...chunks.map((_, i) => i)])) {
+    if (taken.has(i)) continue;
     const excerpt = reserved.get(i);
     if (excerpt) {
       picked.push(excerpt);

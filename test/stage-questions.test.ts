@@ -22,6 +22,7 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
   tag: `slide ${i + 1}`, text: "Unrelated product background. ".repeat(40).slice(0, 1000),
 })), mode: "stage" | "counter" = "stage") {
   const saved = new Map<string, unknown>();
+  const listenerMessages: Record<string, unknown>[] = [];
   let ready: Promise<unknown>;
   const ctx = {
     storage: {
@@ -29,7 +30,7 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
       put: async (values: Record<string, unknown>) => { for (const [key, value] of Object.entries(values)) saved.set(key, value); },
     },
     blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
-    getWebSockets: () => [],
+    getWebSockets: (tag?: string) => tag === "listener" ? [{ send: (msg: string) => listenerMessages.push(JSON.parse(msg)) }] : [],
     waitUntil: (promise: Promise<unknown>) => { void promise; },
   };
   const room = new Room(ctx as unknown as DurableObjectState, { ECO_LIVE: "0" } as Env);
@@ -41,12 +42,14 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
   });
   return {
     room,
+    listenerMessages,
     update: async (action: string, body: unknown) => {
       const response = await room.fetch(new Request(`https://room/${action}`, {
         method: "POST", headers: { "x-room": id, "x-key": room.meta!.hostKey, "content-type": "application/json" },
         body: JSON.stringify(body),
       }));
       expect(response.status).toBe(200);
+      return response.json();
     },
     ask: async (text = question, lang = "hi") => {
       const response = await room.fetch(new Request("https://room/ask", {
@@ -54,7 +57,7 @@ async function testRoom(pages = Array.from({ length: 6 }, (_, i) => ({
         body: JSON.stringify({ text, lang }),
       }));
       expect(response.status).toBe(200);
-      return response.json() as Promise<{ covered: boolean; answer: string; cite: string; cached: boolean }>;
+      return response.json() as Promise<{ id: string; covered: boolean; answer: string; cite: string; cached: boolean }>;
     },
   };
 }
@@ -75,7 +78,7 @@ describe("Stage question flow", () => {
       expect(room.lines[0]).toMatchObject({ src: phrase.src, out: phrase.out, seq: 1 });
       const [, kind, model, request] = spy.mock.calls[0];
       expect(kind).toBe("utterance");
-      expect(model).toBe(MODELS.answer); // the text model alias supports ECO_TEXT_MODEL in tf
+      expect(model).toBe(MODELS.answer); // tf handles Gemma availability and automatic fallback
       expect(request.response_format).toEqual({ type: "json_object" });
       expect(JSON.stringify(request.messages)).toContain(phrase.src);
       expect(JSON.stringify(request.messages)).not.toContain("input_audio");
@@ -224,6 +227,68 @@ describe("Stage question flow", () => {
 });
 
 describe("Teach Eco with multilingual retrieval", () => {
+  it("keeps cached evidence when a speaker only marks a question answered or teaches an existing entry", async () => {
+    const answer = "We operate in 15 countries.";
+    const { room, ask, update, listenerMessages } = await testRoom([
+      { tag: "slide 1", text: "Welcome." },
+      { tag: "answers", text: `Q: How many countries?\nA: ${answer}` },
+    ]);
+    // The mock cannot translate English sources, but its miss already includes this taught evidence.
+    const missing = await ask();
+    expect(missing.covered).toBe(false);
+    const cache = { ...room.cache };
+    const spy = vi.spyOn(client, "tf");
+    try {
+      await update("answered", { qids: [missing.id] });
+      expect(room.cache).toEqual(cache);
+      expect((await ask()).cached).toBe(true);
+      expect(await update("addanswer", { qids: [missing.id], q: "How many countries?", a: answer })).toMatchObject({ added: false });
+      expect(room.cache).toEqual(cache); // no changed source and no model operation
+      expect(spy).not.toHaveBeenCalled();
+      expect(listenerMessages).toContainEqual({ type: "answered", qids: [missing.id], at: 0, answer });
+      expect(await ask("How many countries?", "en")).toMatchObject({ covered: true, answer, cite: "answers" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("teaches Stage questions, updates listeners, and invalidates answers when taught sources change", async () => {
+    const { room, ask, update, listenerMessages } = await testRoom([
+      { tag: "slide 1", text: "Welcome." }, { tag: "notes", text: "Speaker notes." },
+    ]);
+    const first = await ask();
+    const second = await ask();
+    expect(first).toMatchObject({ covered: false, cached: false });
+    expect(second.cached).toBe(true);
+    const answer = "हम 15 देशों में काम करते हैं।";
+    const spy = vi.spyOn(client, "tf");
+    try {
+      await update("addanswer", { qids: [first.id, second.id], q: "How many countries?", asked: question, a: answer });
+      expect(spy).not.toHaveBeenCalled();
+      expect(room.cache).toEqual({});
+      expect(room.questions.slice(0, 2).every((q) => q.taught === answer && q.answeredAt !== null)).toBe(true);
+      expect(listenerMessages).toContainEqual({ type: "answered", qids: [first.id, second.id], at: 0, answer });
+      expect(room.publicMeta().slides).toEqual([{ tag: "slide 1", text: "Welcome." }]);
+      await update("slide", { n: 3 });
+      expect(room.meta!.slide).toBe(1); // notes and answers do not become slides
+      expect(await ask()).toMatchObject({ covered: true, cached: false, answer, cite: "answers" });
+      expect((await ask()).cached).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(spy.mock.calls[0][3].messages)).toContain("Write the answer in Hindi");
+
+      await update("sources", { pages: room.pages.map((p) => ({ ...p, text: p.text.replace("15", "20") })) });
+      expect(await ask()).toMatchObject({ cached: false, answer: answer.replace("15", "20"), cite: "answers" });
+      await update("sources", { pages: [{ tag: "slide 1", text: "Welcome." }] });
+      expect(await ask()).toMatchObject({ covered: false, cached: false, answer: "", cite: "" });
+      expect((await ask()).cached).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(3);
+      // A direct speaker reply remains historical; it is not used as a current cached/source answer.
+      expect(room.questions[0].taught).toBe(answer);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("clears a cached miss and retrieves an owner-approved answer by the original Hindi question", async () => {
     const { room, ask, update } = await testRoom([], "counter");
     expect(await ask()).toMatchObject({ covered: false, cached: false });

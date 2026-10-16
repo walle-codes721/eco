@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { answerPrompt } from "../src/prompts";
-import { bestSentence, chunkPages, selectContext, tokensOf } from "../src/retrieve";
+import { bestSentence, chunkPages, selectContext, tokensOf, TAUGHT_TAG } from "../src/retrieve";
 
 const questions = [
   ["hi", "यह कंपनी कितने देशों में काम करती है?", "Hindi"],
@@ -23,6 +23,32 @@ const pages = Array.from({ length: 20 }, (_, i) => ({
 const deck = chunkPages(pages);
 
 describe("English-only Stage slides without translated captions", () => {
+  it("counts taught evidence and keyword hits together before reserving fallback excerpts", () => {
+    const taught = { tag: TAUGHT_TAG, title: "Approved", text: "Approved details. ".repeat(200).slice(0, 3000) };
+    const hits = Array.from({ length: 3 }, (_, i) => ({ tag: `slide ${i + 1}`, title: "ROCm", text: "ROCm details. ".repeat(100).slice(0, 1200) }));
+    const hints = [
+      { tag: "slide 12", title: "Reach", text: (fact + " ").repeat(40).slice(0, 800) },
+      { tag: "said at 4:00", title: "Recent", text: "Our office is in Italy. ".repeat(40).slice(0, 800) },
+    ];
+    const { picked, best } = selectContext([...hits, ...hints, taught], "ROCm", 1500, hints.map((c) => c.tag));
+    expect(picked[0]).toEqual(taught);
+    expect(best).toEqual(hits[0]);
+    const fallback = picked.filter((c) => hints.some((h) => h.tag === c.tag));
+    expect(fallback).toHaveLength(2);
+    expect(fallback.reduce((n, c) => n + tokensOf(c.text), 0)).toBe(300);
+    expect(picked.reduce((n, c) => n + tokensOf(c.text), 0)).toBe(1500);
+    expect(new Set(picked.map((c) => c.tag)).size).toBe(picked.length);
+  });
+
+  it("does not double-count a taught source that is also a keyword hit and a fallback", () => {
+    const taught = { tag: TAUGHT_TAG, title: "Countries", text: `Q: Countries?\nA: ${fact}` };
+    const slide = { tag: "slide 1", title: "Welcome", text: "Background." };
+    const { picked, best } = selectContext([slide, taught], "countries", 1500, [TAUGHT_TAG, "slide 1"]);
+    expect(picked).toEqual([taught, slide]);
+    expect(best).toEqual(taught);
+    expect(bestSentence("countries", best)).toEqual({ covered: true, text: fact, cite: TAUGHT_TAG });
+  });
+
   it.each(questions)("includes the current slide as evidence for a %s question in a long deck", (lang, question, language) => {
     const { picked, best } = selectContext(deck, question, 1500, ["slide 12"]);
     expect(picked.find((c) => c.tag === "slide 12")?.text).toContain(fact);
