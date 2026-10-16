@@ -4,7 +4,7 @@ import type { Env } from "./env";
 import { tf, isLive } from "./tf";
 import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary } from "./prompts";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
-import { voiceFor, SAMPLE_TEXT } from "./voice";
+import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
 import { phraseEvidence } from "./utterance";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
@@ -29,6 +29,7 @@ export interface Meta {
   deck?: boolean; // stage: the speaker's PDF is in R2, so every screen can show it
   speakers?: Speaker[]; // stage: s0 is the host; co-speakers join from their own device
   joinKey?: string; // stage: in the host's "add a speaker" QR
+  voiceMode?: VoiceMode; // stage: missing on older rooms = "sample"
 }
 /** One device = one speaker. `key` authorises that device; `voice` = a consented sample is stored. */
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
@@ -48,13 +49,6 @@ const rid = () => crypto.randomUUID().replaceAll("-", "");
 const MOCK_LINE = "(Mock mode: Eco heard you. Real transcripts and translations need live mode.)";
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const uid = () => crypto.randomUUID().slice(0, 8);
-
-function b64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(s);
-}
 
 export class Room extends DurableObject<Env> {
   meta: Meta | null = null;
@@ -119,6 +113,11 @@ export class Room extends DurableObject<Env> {
       bizType: s(body.bizType, 30) || "shop",
       ownerLang: s(body.ownerLang, 5) || "it",
     };
+    if (mode === "stage") {
+      // "saved" needs a signed-in owner who has recorded one; otherwise they record a sample for this talk.
+      const want = (["saved", "sample", "phone"] as const).find((v) => v === body.voice) ?? "sample";
+      this.meta.voiceMode = want === "saved" && !(owner && (await this.env.FILES.head(savedKey(owner)))) ? "sample" : want;
+    }
     const pages: { tag: string; text: string }[] = (Array.isArray(body.pages) ? body.pages : [])
       .slice(0, 200)
       .map((p: any) => ({ tag: s(p.tag, 40), text: s(p.text, 8000) }))
@@ -156,7 +155,8 @@ export class Room extends DurableObject<Env> {
       slides: m.mode === "stage" ? slidePages(this.pages) : [],
       deck: !!m.deck,
       speakers: (m.speakers ?? []).map(({ id, name, voice }) => ({ id, name, voice })),
-      voice: !!this.env.VOICE_URL,
+      voice: m.voiceMode !== "phone" && canClone(this.env),
+      voiceMode: m.voiceMode ?? "sample",
     };
   }
 
@@ -176,7 +176,7 @@ export class Room extends DurableObject<Env> {
     const m = this.meta;
     if (m.mode === "stage" && !m.speakers) {
       // Also runs once on rooms made before speakers existed, including the live demo room.
-      m.speakers = m.demo ? DEMO_SPEAKERS.map((name, i) => ({ id: `s${i}`, name, key: "", voice: false })) : [{ id: "s0", name: m.speaker || "Speaker", key: "", voice: false }];
+      m.speakers = m.demo ? DEMO_SPEAKERS.map((name, i) => ({ id: `s${i}`, name, key: "", voice: false })) : [{ id: "s0", name: m.speaker || "Speaker", key: "", voice: m.voiceMode === "saved" }];
       if (!m.demo) m.joinKey = rid();
       await this.save("meta");
     }
@@ -230,7 +230,7 @@ export class Room extends DurableObject<Env> {
       }
       case "PUT voice": {
         // The speaker's own sample, only with their consent. Stored in R2; deleted with DELETE voice.
-        if (!me || m.demo) return json({ error: "Not allowed" }, 403);
+        if (!me || m.demo || sampleKey(m, me.id) !== `${m.id}/voice/${me.id}.wav` || m.voiceMode === "phone") return json({ error: "Not allowed" }, 403);
         if (req.headers.get("x-consent") !== "yes") return json({ error: "Consent needed" }, 400);
         const wav = await req.arrayBuffer();
         if (wav.byteLength < 20_000 || wav.byteLength > 1_500_000) return json({ error: "Record about 10 seconds" }, 413);
@@ -242,7 +242,7 @@ export class Room extends DurableObject<Env> {
         return json({ ok: true });
       }
       case "DELETE voice": {
-        if (!me) return json({ error: "Not allowed" }, 403);
+        if (!me || sampleKey(m, me.id) !== `${m.id}/voice/${me.id}.wav`) return json({ error: "Not allowed" }, 403); // a saved voice is deleted from /me
         await this.env.FILES.delete(`${m.id}/voice/${me.id}.wav`);
         this.samples.delete(me.id);
         me.voice = false;
@@ -479,14 +479,14 @@ export class Room extends DurableObject<Env> {
   /** The line in its speaker's cloned voice, one clip per language that has listeners right now. */
   private async clone(line: Line) {
     const sp = this.meta!.speakers?.find((s) => s.id === line.speaker);
-    if (!this.env.VOICE_URL || !sp?.voice || this.cloning >= 2) return; // busy: phones fall back to their own voice
+    if (this.meta!.voiceMode === "phone" || !canClone(this.env) || !sp?.voice || this.cloning >= 2) return; // busy: phones fall back to their own voice
     const langs = Object.keys(this.listenerLangs()).filter((l) => line.out[l]);
     if (!langs.length) return;
     this.cloning++;
     try {
       let sample = this.samples.get(sp.id);
       if (!sample) {
-        sample = await (await this.env.FILES.get(`${this.meta!.id}/voice/${sp.id}.wav`))?.arrayBuffer();
+        sample = await (await this.env.FILES.get(sampleKey(this.meta!, sp.id)))?.arrayBuffer();
         if (!sample) return;
         this.samples.set(sp.id, sample);
       }

@@ -1,4 +1,4 @@
-import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName } from "/js/eco.js";
+import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me } from "/js/eco.js";
 import { openPdf, pdfPages, renderPage, saveDeck, uploadDeck } from "/js/slides.js";
 
 const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
@@ -62,8 +62,27 @@ const langBtns = LANGS.map((l) => {
 });
 
 const option = (name, desc, checked, disabled) =>
-  h("div.option", { role: "radio", "aria-checked": String(checked), "aria-disabled": String(!!disabled) },
+  h("div.option", { role: "radio", tabindex: 0, "aria-checked": String(checked), "aria-disabled": String(!!disabled) },
     h("span.radio"), h("div", {}, h("div", { style: { fontWeight: 600 } }, name), h("div.small.muted", {}, desc)));
+
+// Voice: the account's saved voice (record once on /me), a sample for this talk, or the phone's voice.
+const { user } = await me();
+state.voice = user?.voice ? "saved" : "sample";
+const voices = {
+  saved: option("Your saved voice", user?.voice ? "The voice you recorded on your account page. Nothing to record for this talk."
+    : h("span", {}, user ? "Record it once on " : "Sign in and record it once on ", h("a", { href: user ? "/me" : "/auth/google?next=/me" }, "your account page"), ", then every talk can use it."), state.voice === "saved", !user?.voice),
+  sample: option("Record for this talk", "Record a 10-second sample from the presenter page (and each co-speaker from theirs). Listeners hear each speaker's cloned voice in their language.", state.voice === "sample"),
+  phone: option("Phone voice", "No cloning: each phone reads the translation aloud, a different voice per speaker.", false),
+};
+for (const [v, el] of Object.entries(voices)) {
+  const pick = () => {
+    if (el.getAttribute("aria-disabled") === "true") return;
+    state.voice = v;
+    for (const [k, o] of Object.entries(voices)) o.setAttribute("aria-checked", String(k === v));
+  };
+  el.onclick = (e) => e.target.closest("a") || pick();
+  el.onkeydown = (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), pick());
+}
 
 const link = linkField("stage", title);
 const section = (head, sub, ...body) =>
@@ -75,10 +94,7 @@ const form = h("form", {},
   section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs),
   section("Notes", "Optional. Also used to answer questions.", notes),
   section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
-  section("Voice", "What listeners hear when they turn sound on.",
-    option("Your own voice", "Record a 10-second sample from the presenter page (and each co-speaker from theirs). Listeners hear each speaker's cloned voice in their language.", true),
-    option("Phone voice", "The fallback: each phone reads the translation aloud, a different voice per speaker.", false),
-  ),
+  section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices))),
   h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end" } }, create),
 );
 
@@ -90,7 +106,7 @@ form.onsubmit = async (e) => {
   try {
     const { id, hostKey } = await api("/api/rooms", {
       method: "POST",
-      body: { mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs, pages: state.pages, notes: notes.value },
+      body: { mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs, pages: state.pages, notes: notes.value, voice: state.voice },
     });
     if (state.bytes) {
       await saveDeck(id, state.bytes);

@@ -91,7 +91,7 @@ main.append(
     h("p.tiny.muted", {}, hasSpeechRecognition ? "Choose before starting. Stop the mic to change languages." : "This browser uses audio upload. The language selector only applies to browser speech recognition."),
     micBtn, h("div.level", { style: { marginTop: "12px" } }, level),
     h("p.tiny.muted", { style: { marginTop: "10px" } }, "Turn the mic on while it's your turn. Eco tags everything this device hears with your name.")),
-  voiceCard(id, meta, headers),
+  meta.voiceMode === "phone" ? null : voiceCard(id, meta, headers),
 );
 drawPeople();
 

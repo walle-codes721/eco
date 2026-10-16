@@ -92,7 +92,9 @@ const left = h("div.col-left", {},
     h("p.url", { style: { marginTop: "10px", fontSize: "14px" } }, shortUrl(`/${id}`)),
   ),
   speakersCard(),
-  host && !demo ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
+  host && !demo && meta.voiceMode === "sample" ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
+  host && !demo && meta.voiceMode === "saved" ? h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Your voice")),
+    h("p.small", {}, "This talk uses your saved voice. ", h("a", { href: "/me" }, "Hear or re-record it"), ".")) : null,
 );
 
 // ---------- middle: what you said ----------

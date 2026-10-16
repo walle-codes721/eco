@@ -132,8 +132,9 @@ export async function phraseMic({ onPhrase, onLevel = () => {}, onError = () => 
 }
 
 /** Counter: press and hold. Returns stop() which resolves to text or a WAV blob (or null if too short). */
-export async function holdMic({ onLevel = () => {}, maxMs = 15000, lang = navigator.language } = {}) {
-  if (SR) return srHold({ onLevel, lang });
+/** `wav: true` always records audio (voice samples), even where the browser could transcribe. */
+export async function holdMic({ onLevel = () => {}, maxMs = 15000, lang = navigator.language, wav = false } = {}) {
+  if (SR && !wav) return srHold({ onLevel, lang });
   const parts = [];
   let len = 0, finished = false, resolve;
   const done = new Promise((r) => (resolve = r));

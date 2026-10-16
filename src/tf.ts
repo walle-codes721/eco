@@ -30,6 +30,35 @@ export function parseJson<T>(content: string): T {
   return JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1)) as T;
 }
 
+/** OmniVoice on /audio/speech: one clip in the voice of `refB64` (a WAV). Same gate and log as chat; null = phones speak.
+ *  Mock returns null too: no recorded clip, so mock rooms hear the phone voice. No retries: a late clip is useless live. */
+export async function tfSpeech(env: Env, input: string, lang: string, refB64: string, refText: string): Promise<ArrayBuffer | null> {
+  if (!isLive(env)) return null;
+  const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
+  const gate = await budget.acquire("voice", false);
+  if (!gate.ok) return null;
+  const t0 = Date.now();
+  let status = 0;
+  try {
+    const res = await fetch(`${BASE}/audio/speech`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
+      // ref_text skips server-side transcription of the sample (~4 s per clip instead of ~17 s).
+      body: JSON.stringify({ model: MODELS.voice, input, language: lang, ref_audio: `data:audio/wav;base64,${refB64}`, ref_text: refText, response_format: "wav" }),
+      signal: AbortSignal.timeout(10_000), // later than this the phone voice already spoke
+    });
+    status = res.status;
+    if (status === 200) return await res.arrayBuffer();
+    console.warn("tf voice failed", status, (await res.text().catch(() => "")).slice(0, 160));
+    return null;
+  } catch {
+    status = status || 599;
+    return null;
+  } finally {
+    await budget.finish({ kind: "voice", model: MODELS.voice, ms: Date.now() - t0, status, tin: 0, tout: 0, pub: false });
+  }
+}
+
 export async function tf<T>(
   env: Env,
   kind: Kind,

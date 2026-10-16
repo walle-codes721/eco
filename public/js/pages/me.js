@@ -1,4 +1,5 @@
 import { h, icon, api, me, toast } from "/js/eco.js";
+import { sampleCard } from "/js/sample.js";
 
 const { user, signin } = await me();
 const bar = h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), h("span.title.muted", {}, "My talks and shops"), h("span.spacer"),
@@ -46,6 +47,8 @@ if (!user) {
     h("div.page-head", {}, h("p.eyebrow", {}, user.email), h("h1", {}, user.name || user.handle)),
     user.rooms.length ? h("p.small.muted", {}, "Your links start with ", h("span.mono", {}, `/${"stage"}/${user.handle}/`), ".")
       : h("section.form-section", {}, h("header", {}, h("h2", {}, "Your name"), h("p", {}, "It goes in every link you share. You can change it until you create your first talk or shop.")), nameForm),
+    h("section.form-section", {}, h("header", {}, h("h2", {}, "Your saved voice"), h("p", {}, "Record it once. Any talk can use it: pick \"Your saved voice\" when you create the talk.")),
+      sampleCard({ url: "/api/me/voice", playUrl: "/api/me/voice", sampleText: user.sampleText, has: user.voice, title: "Saved voice", intro: "Read this aloud in a quiet room:" })),
     list("stage", "Talks", "No talks yet.", "/stage/new", "New talk"),
     list("counter", "Shops", "No shops yet.", "/counter/new", "New counter"),
   );

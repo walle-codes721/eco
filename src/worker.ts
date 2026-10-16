@@ -3,6 +3,7 @@ import { tf } from "./tf";
 import { MODELS, extractPrompt } from "./prompts";
 import { authRoute, sessionSub } from "./auth";
 import { NAME, slugify } from "./names";
+import { SAMPLE_TEXT, savedKey } from "./voice";
 
 export { Room } from "./room";
 export { Budget } from "./budget";
@@ -85,7 +86,25 @@ async function api(req: Request, env: Env, url: URL, path: string, ip: string): 
       const r = await account(`u:${sub}`).rename(String(name ?? "").toLowerCase());
       return json(r, r.ok ? 200 : 400);
     }
-    return json({ user: await account(`u:${sub}`).me() });
+    const user = await account(`u:${sub}`).me();
+    return json({ user: user && { ...user, voice: !!(await env.FILES.head(savedKey(sub))), sampleText: SAMPLE_TEXT } });
+  }
+
+  // Your saved voice: recorded once with consent, used by every talk created with "Your saved voice".
+  if (path === "/api/me/voice") {
+    if (!sub) return json({ error: "Sign in first" }, 401);
+    if (req.method === "GET") {
+      const obj = await env.FILES.get(savedKey(sub));
+      return obj ? new Response(obj.body, { headers: { "content-type": "audio/wav", "cache-control": "private, no-store" } }) : json({ error: "No saved voice" }, 404);
+    }
+    if (req.method === "DELETE") return (await env.FILES.delete(savedKey(sub)), json({ ok: true }));
+    if (req.method === "PUT") {
+      if (req.headers.get("x-consent") !== "yes") return json({ error: "Consent needed" }, 400);
+      const wav = await req.arrayBuffer();
+      if (wav.byteLength < 20_000 || wav.byteLength > 1_500_000) return json({ error: "Record about 10 seconds" }, 413);
+      await env.FILES.put(savedKey(sub), wav, { httpMetadata: { contentType: "audio/wav" } });
+      return json({ ok: true });
+    }
   }
 
   if (path === "/api/rooms" && req.method === "POST") {

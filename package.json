@@ -5,8 +5,8 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "wrangler dev --var ECO_LIVE:0",
-    "dev:live": "wrangler dev",
+    "dev": "wrangler dev --var ECO_LIVE:0 --local-upstream localhost:8787",
+    "dev:live": "wrangler dev --local-upstream localhost:8787",
     "deploy": "wrangler deploy",
     "test": "vitest run",
     "check": "tsc --noEmit"

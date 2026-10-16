@@ -8,6 +8,7 @@ export const MODELS = {
   audio: "MiMo-V2.6-Flash", // the only Token Factory model with audio input
   answer: "Gemma-4-31B-IT", // all text in, text out; thinking is off by default in Gemma 4's chat template
   vision: "MiMo-V2.6-Flash",
+  voice: "OmniVoice", // /audio/speech, clones from a reference clip (added experimentally 16 Oct)
 } as const;
 
 /** Model for a turn: audio → MiMo, typed text → Gemma. */
