@@ -35,6 +35,8 @@ let atBottom = true; // smart follow: pinned to live unless the listener scrolls
 let newCount = 0; // lines that arrived while reading history
 const T = (k) => t(lang, k);
 const textOf = (l) => captionFor(l, lang).text;
+const presetId = () => meta.presets?.[0]?.id ?? "morgan-freeman";
+const lineAudio = (l) => (meta.presetsEnabled ? l.audio?.[`${lang}@${presetId()}`] : l.audio?.[lang]);
 const playback = stageAudio({ play: (...args) => voice.playStage(...args), stop: () => voice.stopStage() });
 addEventListener("pagehide", () => playback.clear());
 
@@ -138,6 +140,7 @@ function drawCaps() {
     return;
   }
   caps.replaceChildren(...lines.slice(-50).map((l) => h(keyOf(l) === picked ? "p.picked" : "p", { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
+    meta.presetsEnabled ? h("span.chip", {}, meta.presets?.[0]?.label ?? "AI voice") : null,
     !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l),
     reacts[keyOf(l)] ? h("span.emo.my-react", {}, reacts[keyOf(l)]) : null)));
   if (atBottom) caps.scrollTop = caps.scrollHeight;
@@ -255,7 +258,11 @@ function addLine(l) {
   // A speaker with a voice sample: wait briefly for their cloned clip, else the phone speaks.
   const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
   const idx = Math.max(0, meta.speakers?.indexOf(sp) ?? 0);
-  playback.line({ seq: l.seq, text: textOf(l), lang, speaker: idx, url: l.audio?.[lang], wait: meta.voice && sp?.voice, enabled: voice.on });
+  playback.line({
+    seq: l.seq, text: textOf(l), lang, speaker: idx, url: lineAudio(l),
+    wait: meta.presetsEnabled ? meta.voice : meta.voice && sp?.voice,
+    enabled: voice.on,
+  });
 }
 function onAudio(m) {
   const l = lines.find((x) => x.seq === m.seq);
@@ -584,6 +591,11 @@ if (meta.status === "ended") {
     }
     if (m.type === "tally") { const p = polls.find((x) => x.id === m.pid); if (p) (p.tally = m.tally), drawPolls(); }
     if (m.type === "pollclose") (polls = m.poll ? polls.map((x) => (x.id === m.pid ? m.poll : x)) : polls.filter((x) => x.id !== m.pid)), drawPolls();
+    if (m.type === "presets") {
+      meta.presetsEnabled = m.presetsEnabled;
+      meta.presets = m.presets ?? [];
+      drawCaps();
+    }
     if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") (meta.slide = m.n), drawSlide();

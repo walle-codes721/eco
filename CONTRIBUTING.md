@@ -45,7 +45,7 @@ Demo rooms that work with no key: `/stage/eco/demo/speak`, `/stage/eco/demo`, `/
 
 ## Voices
 
-Only clone a voice from a sample the speaker recorded themselves, with an explicit consent checkbox. Never clone anyone in Counter, and never a listener.
+Only clone a voice from a sample the speaker recorded themselves, with an explicit consent checkbox. Never clone anyone in Counter, and never a listener. The Morgan Freeman preset is the one documented exception for the hackathon demo only; see [ADR 0006](docs/adr/0006-preset-voice-is-the-consent-exception.md) and issue #35.
 
 ## Secrets and the public repo
 

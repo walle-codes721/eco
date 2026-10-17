@@ -111,6 +111,9 @@ const voices = {
   sample: option("Record for this talk", "Record a 10-second sample from the presenter page (and each co-speaker from theirs). Listeners hear each speaker's cloned voice in their language.", state.voice === "sample"),
   phone: option("Phone voice", "No cloning: each phone reads the translation aloud, a different voice per speaker.", false),
 };
+const presetBox = h("input", { type: "checkbox", id: "presets-enabled" });
+const presetField = h("label.check", { style: { marginTop: "12px" } }, presetBox,
+  h("span.small", {}, "Offer the Morgan Freeman (AI) preset voice (demo only — always labelled synthetic on listeners' phones)."));
 for (const [v, el] of Object.entries(voices)) {
   const pick = () => {
     if (el.getAttribute("aria-disabled") === "true") return;
@@ -132,7 +135,7 @@ const form = h("form", {},
   section("Notes", "Optional. Also used to answer questions.", notes),
   section("Script", "Optional. Only you see it, as a teleprompter above your slides. Word, PDF or text.", script, h("div.row", { style: { gap: "10px" } }, scriptUpload, scriptFile, scriptInfo)),
   section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
-  section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices))),
+  section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices)), presetField),
   h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end" } }, create),
 );
 
@@ -146,7 +149,7 @@ form.onsubmit = async (e) => {
       method: "POST",
       body: {
         mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs,
-        pages: state.pages, notes: notes.value, voice: state.voice, script: script.value,
+        pages: state.pages, notes: notes.value, voice: state.voice, script: script.value, presetsEnabled: presetBox.checked,
       },
     });
     if (state.bytes) {

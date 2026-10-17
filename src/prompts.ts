@@ -27,6 +27,22 @@ export const langName = (c: string) => LANG_NAMES[c] ?? c;
 
 type Msg = { role: "system" | "user"; content: string | unknown[] };
 const audioPart = (wavB64: string) => ({ type: "input_audio", input_audio: { data: wavB64, format: "wav" } });
+const audioPartFile = (b64: string, format: "wav" | "mp3") => ({ type: "input_audio", input_audio: { data: b64, format } });
+
+/** One-time preset reference transcript from the bundled clip (MiMo, lazy). */
+export function presetTranscriptPrompt(audioB64: string, format: "wav" | "mp3") {
+  return {
+    messages: [
+      {
+        role: "system",
+        content: "Transcribe the spoken words exactly. Do not add or drop content." + shapeNote('{"transcript": string}'),
+      },
+      { role: "user", content: [audioPartFile(audioB64, format)] },
+    ] as Msg[],
+    response_format: JSON_OBJECT,
+    max_tokens: 400,
+  };
+}
 const sources = (chunks: Chunk[]) => chunks.map((c) => `[${c.tag}] ${c.text}`).join("\n\n");
 
 /** Stage: one call per phrase returns the transcript and every language (CONTRIBUTING.md, token rule 4). */

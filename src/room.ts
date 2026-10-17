@@ -11,6 +11,7 @@ import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLin
 import {
   voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, type VoiceMode, type VoiceSampleMime,
 } from "./voice";
+import { PRESET_VOICES, ensurePresetTranscript, presetAudioKey, publicPresets } from "./preset-voice";
 import { phraseEvidence } from "./utterance";
 import { customerTurn, ownerTurn, type CustomerTurn } from "./counter-turn";
 import { translationTiming, timingHeader } from "./timing";
@@ -42,6 +43,7 @@ export interface Meta {
   speakers?: Speaker[]; // stage: s0 is the host; co-speakers join from their own device
   joinKey?: string; // stage: in the host's "add a speaker" QR
   voiceMode?: VoiceMode; // stage: missing on older rooms = "sample"
+  presetsEnabled?: boolean; // stage: listeners may hear bundled preset voices (ADR 0006)
 }
 /** One device = one speaker. `key` authorises that device; `voice` = a consented sample is stored. */
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
@@ -150,6 +152,7 @@ export class Room extends DurableObject<Env> {
       // "saved" needs a signed-in owner who has recorded one; otherwise they record a sample for this talk.
       const want = (["saved", "sample", "phone"] as const).find((v) => v === body.voice) ?? "sample";
       this.meta.voiceMode = want === "saved" && !(owner && (await loadStoredSample(this.env.FILES, savedKey(owner)))) ? "sample" : want;
+      this.meta.presetsEnabled = !!body.presetsEnabled;
     }
     const pages: { tag: string; text: string }[] = (Array.isArray(body.pages) ? body.pages : [])
       .slice(0, 200)
@@ -204,6 +207,8 @@ export class Room extends DurableObject<Env> {
       speakers: (m.speakers ?? []).map(({ id, name, voice }) => ({ id, name, voice })),
       voice: m.voiceMode !== "phone" && canClone(this.env),
       voiceMode: m.voiceMode ?? "sample",
+      presetsEnabled: !!m.presetsEnabled,
+      presets: m.presetsEnabled ? publicPresets() : [],
     };
   }
 
@@ -383,6 +388,14 @@ export class Room extends DurableObject<Env> {
         return this.closePoll(String(body.pid ?? ""));
       case "POST addanswer":
         return m.mode === "stage" ? this.teachQuestion(body) : this.teachAnswer(body);
+      case "POST presets": {
+        if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
+        m.presetsEnabled = !!body.enabled;
+        await this.save("meta");
+        const presets = m.presetsEnabled ? publicPresets() : [];
+        this.send(["listener", "screen", "host", "speaker"], { type: "presets", presetsEnabled: m.presetsEnabled, presets });
+        return json({ ok: true, presetsEnabled: m.presetsEnabled, presets });
+      }
     }
     return json({ error: "Unknown action" }, 404);
   }
@@ -622,12 +635,12 @@ export class Room extends DurableObject<Env> {
     if (this.lines.length > 600) this.lines.splice(0, this.lines.length - 600);
     await this.save("lines");
     this.send(["listener", "screen", "host", "speaker"], { type: "line", line });
-    this.ctx.waitUntil(this.clone(line));
+    this.ctx.waitUntil((async () => { await this.cloneSpeaker(line); await this.clonePresets(line); })());
     return line;
   }
 
   /** The line in its speaker's cloned voice, one clip per language that has listeners right now. */
-  private async clone(line: Line) {
+  private async cloneSpeaker(line: Line) {
     const sp = this.meta!.speakers?.find((s) => s.id === line.speaker);
     if (this.meta!.voiceMode === "phone" || !canClone(this.env) || !sp?.voice || this.cloning >= 2) return; // busy: phones fall back to their own voice
     const langs = Object.keys(this.listenerLangs()).filter((l) => line.out[l]);
@@ -659,6 +672,38 @@ export class Room extends DurableObject<Env> {
       }));
       if (!Object.keys(audio).length) return;
       if (this.lines.includes(line)) await this.save("lines");
+    } finally {
+      this.cloning--;
+    }
+  }
+
+  /** Preset voice clips when the speaker enabled them for this talk. */
+  private async clonePresets(line: Line) {
+    const m = this.meta!;
+    if (!m.presetsEnabled || m.voiceMode === "phone" || !canClone(this.env) || this.cloning >= 2) return;
+    const langs = Object.keys(this.listenerLangs()).filter((l) => line.out[l]);
+    if (!langs.length) return;
+    this.cloning++;
+    try {
+      for (const preset of PRESET_VOICES) {
+        const refText = await ensurePresetTranscript(this.env, this.env.FILES, preset.id);
+        if (!refText) return;
+        const sample = preset.clip();
+        const audio: Record<string, string> = {};
+        await Promise.allSettled(langs.map(async (lang) => {
+          const wav = await voiceFor(this.env, sample, line.out[lang], lang, preset.mime, refText);
+          if (!wav || !this.lines.includes(line)) return;
+          const k = `${line.seq}-${line.t}-${lang}-${preset.id}`;
+          await this.env.FILES.put(`${m.id}/audio/${k}.wav`, wav);
+          if (!this.lines.includes(line)) return;
+          const url = `/api/rooms/${m.id}/audio?k=${k}`;
+          const field = presetAudioKey(lang, preset.id);
+          audio[field] = url;
+          line.audio = { ...line.audio, [field]: url };
+          this.send(["listener"], { type: "audio", seq: line.seq, audio: { [field]: url } });
+        }));
+        if (Object.keys(audio).length && this.lines.includes(line)) await this.save("lines");
+      }
     } finally {
       this.cloning--;
     }

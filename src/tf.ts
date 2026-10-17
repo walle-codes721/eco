@@ -38,7 +38,7 @@ async function hedged(post: Post, limit: number): Promise<{ res: Response; model
   const stopGemma = new AbortController();
   const gemma = post(MODELS.answer, AbortSignal.any([deadline, stopGemma.signal])).then((res) => ({ res, model: MODELS.answer as string }));
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const early = await Promise.race([gemma, new Promise<null>((r) => (timer = setTimeout(() => r(null), GEMMA_LIVE_MS)))]).finally(() => clearTimeout(timer));
+  const early = await Promise.race([gemma, new Promise<null>((r) => (timer = setTimeout(() => r(null), GEMMA_LIVE_MS)))]).finally(() => { if (timer != null) clearTimeout(timer); });
   if (early) return early;
   const stopDs = new AbortController();
   const ds = post(TEXT_FALLBACK, AbortSignal.any([deadline, stopDs.signal])).then((res) => ({ res, model: TEXT_FALLBACK }));
