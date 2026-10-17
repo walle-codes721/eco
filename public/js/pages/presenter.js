@@ -271,8 +271,11 @@ async function send(blob, cutAt) {
   micState.textContent = "Translating…";
   try {
     const [ct, body] = phraseInit(blob);
+    const timing = new URLSearchParams(location.search).get("timing") === "1";
+    if (timing) ct["x-eco-timing"] = "1";
     const r = await fetch(`/api/rooms/${id}/utterance`, { method: "POST", headers: { ...ct, ...(key ? { "x-key": key } : {}) }, body });
     const data = await r.json().catch(() => ({}));
+    if (timing) console.info("eco translation timing", { seq: data.line?.seq, status: r.status, finalToResponseMs: performance.now() - cutAt, serverTiming: r.headers.get("server-timing") });
     if (r.status === 403 && demo) toast("You've used your live minutes for now");
     else if (!r.ok) toast(data.fallback ? `Translation paused (${data.fallback})` : data.error || "Translation failed");
     else if (data.line) {

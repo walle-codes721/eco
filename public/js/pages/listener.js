@@ -1,6 +1,7 @@
 import { h, icon, api, roomId, who, toast, fmtTime, langName, phoneLang, keepAwake, store, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
+import { stageAudio } from "/js/stage-audio.js";
 import { t } from "/js/i18n.js";
 import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
 
@@ -23,6 +24,8 @@ let atBottom = true; // smart follow: pinned to live unless the listener scrolls
 let newCount = 0; // lines that arrived while reading history
 const T = (k) => t(lang, k);
 const textOf = (l) => captionFor(l, lang).text;
+const playback = stageAudio({ play: (...args) => voice.playStage(...args), stop: () => voice.stopStage() });
+addEventListener("pagehide", () => playback.clear());
 
 // ---------- shell ----------
 const langSel = h("select.lang-select", { "aria-label": "Language" }, ...choices.map((l) => h("option", { value: l, selected: l === lang }, langName(l, l))));
@@ -135,19 +138,12 @@ function addLine(l) {
   // A speaker with a voice sample: wait briefly for their cloned clip, else the phone speaks.
   const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
   const idx = Math.max(0, meta.speakers?.indexOf(sp) ?? 0);
-  if (meta.voice && sp?.voice && !l.audio?.[lang]) {
-    pendingVoice = { seq: l.seq, timer: setTimeout(() => ((pendingVoice = null), voice.say(textOf(l), lang, null, idx)), 4000) };
-  } else voice.say(textOf(l), lang === "en" ? "en" : lang, l.audio?.[lang], idx);
+  playback.line({ seq: l.seq, text: textOf(l), lang, speaker: idx, url: l.audio?.[lang], wait: meta.voice && sp?.voice, enabled: voice.on });
 }
-let pendingVoice = null;
 function onAudio(m) {
   const l = lines.find((x) => x.seq === m.seq);
   if (l) l.audio = { ...l.audio, ...m.audio };
-  if (pendingVoice?.seq === m.seq && m.audio[lang]) {
-    clearTimeout(pendingVoice.timer);
-    pendingVoice = null;
-    voice.say(textOf(l ?? {}), lang, m.audio[lang]);
-  }
+  playback.audio(m.seq, m.audio);
 }
 
 // The speaker's typed answer in the listener's language once it is translated, otherwise exactly as the speaker typed it.
@@ -189,6 +185,7 @@ qForm.onsubmit = async (e) => {
 };
 
 langSel.onchange = () => {
+  playback.clear();
   lang = langSel.value;
   store(`eco:lang:${id}`, lang);
   live?.send({ type: "lang", lang });
@@ -200,6 +197,7 @@ langSel.onchange = () => {
   drawStatus();
 };
 soundBtn.onclick = () => {
+  playback.clear();
   voice.on ? voice.off() : voice.unlock();
   labels();
   toast(voice.on ? T("soundOn") : T("soundOff"));
@@ -218,6 +216,8 @@ function drawSummary() {
 }
 
 async function recap() {
+  // Normal completion keeps accepted final phrases alive, including clone timers.
+  // Explicit mute, language change, reset and page exit still cancel immediately.
   const { lines: all } = await api(`/api/rooms/${id}/transcript`).catch(() => ({ lines }));
   summary = (await api(`/api/rooms/${id}/summary`).catch(() => ({}))).summary ?? null;
   drawSummary();
@@ -291,6 +291,7 @@ if (meta.status === "ended") {
     if (m.type === "hello") {
       Object.assign(meta, m.meta);
       lines = m.lines ?? [];
+      playback.clear(lines.at(-1)?.seq ?? 0);
       snapToLive(); // (re)connect: anchor on the newest line, clear any stale pill
       drawCaps();
       if (meta.status === "ended") return recap();
@@ -300,7 +301,7 @@ if (meta.status === "ended") {
     if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") meta.slide = m.n;
-    if (m.type === "reset") { lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); }
+    if (m.type === "reset") { playback.clear(0); lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); }
     if (m.type === "summary") (summary = m.summary), drawSummary();
     if (m.type === "status") {
       meta.status = m.status;
