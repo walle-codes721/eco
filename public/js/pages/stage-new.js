@@ -12,6 +12,12 @@ const speaker = h("input", { type: "text", placeholder: "Your name", maxlength: 
 const notes = h("textarea", { placeholder: "Things you'll say that aren't on the slides: numbers, links, answers to likely questions." });
 const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
 
+// Talk context: sent with every translation so terms like "Apple" stay Apple, not Apfel.
+const about = h("textarea", { maxlength: 500, rows: 3, placeholder: "A keynote about Apple's new products. Any language." });
+const aboutCount = h("span.small.muted", {}, "0 / 500");
+about.oninput = () => { aboutCount.textContent = `${about.value.length} / 500`; };
+const keep = h("textarea", { rows: 2, placeholder: "Apple, Vision Pro, Tim Cook" });
+
 // Teleprompter script: pasted or read from a file, split into phrases on submit. Only the speaker sees it.
 const script = h("textarea", { placeholder: "Paste what you plan to say. Eco shows it to you a few words at a time. Mark slide changes with \"Slide 2:\" lines or [next slide] and Eco turns the slide for you; other [notes] show as reminders." });
 const scriptInfo = h("span.small.muted");
@@ -137,6 +143,9 @@ const create = h("button.btn.primary.big", { type: "submit" }, "Create the room"
 const form = h("form", {},
   section("Your talk", "Shown on every listener's phone.", h("label.field", {}, "Title", title), h("label.field", {}, "Speaker", speaker), link.el),
   section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs, deckPreview),
+  section("Talk context", "Optional. Helps the translator pick the right meaning.",
+    h("label.field", {}, "About the talk", about, aboutCount),
+    h("label.field", {}, "Words to keep as they are", keep, h("span.small.muted", {}, "Names, brands, product terms. Separate with commas or new lines."))),
   section("Notes", "Optional. Also used to answer questions.", notes),
   section("Script", "Optional. Only you see it, as a teleprompter above your slides. Word, PDF or text.", script, h("div.row", { style: { gap: "10px" } }, scriptUpload, scriptFile, scriptInfo)),
   section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
@@ -155,6 +164,7 @@ form.onsubmit = async (e) => {
       body: {
         mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs,
         pages: state.pages, notes: notes.value, voice: state.voice, script: script.value, presetsEnabled: presetBox.checked,
+        about: about.value, keep: keep.value,
       },
     });
     if (state.bytes) {

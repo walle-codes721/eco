@@ -58,6 +58,10 @@ A line as one listener reads it, in that listener's language.
 A listener's single emoji on a line (👍 👎 😂 🤯 ❤️ 🤔), chosen by tapping its caption; they can change or clear it. Private to that listener: only the projector shows it, anonymously, and the speaker reads them on the Post-talk card. Not a Poll.
 _Avoid_: like, vote, feedback
 
+**Talk context**:
+What a Stage is about (up to 500 characters, in any language) and the terms every translation keeps verbatim, set by the speaker before the talk. It rides along on each translation call; it never adds one.
+_Avoid_: glossary, brief
+
 **Deck**:
 The speaker's slides for a Stage. Its written words are in one language, English unless the speaker chooses another.
 _Avoid_: presentation, slideshow
