@@ -59,9 +59,8 @@ const pollBox = h("section.lst-panel.lst-polls", { hidden: true },
   h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, pollHead, h("span.spacer"), newQBtn),
   h("div.poll-carousel", {}, pollPrev, pollSlot, pollNext), pollDots);
 // The deck: the live slide by default; listeners can page back, never ahead of the speaker.
-const slideHead = h("h2", { style: { fontSize: "20px" } });
 const slideFrame = h("div.slide-frame");
-const slideLabel = h("span.small.muted.mono");
+const slideLabel = h("span.slide-count");
 const slidePrev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous slide", onclick: () => goSlide(view - 1) }, icon("prev"));
 const slideNext = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(view + 1) }, icon("next"));
 const currentBtn = h("button.btn.sm", { type: "button", hidden: true, onclick: () => goSlide(Infinity) });
@@ -77,11 +76,12 @@ const slideViewBtn = h("button.btn.sm", {
   },
 });
 // Expand: the slide at ~80% of the screen over the dimmed page; Esc or a tap outside closes it.
-const zoomBtn = h("button.btn.icon-btn", { type: "button", onclick: () => zoom(true) }, icon("expand"));
+const zoomBtn = h("button.btn.icon-btn.zoom-btn", { type: "button", onclick: () => zoom(true) }, icon("expand"));
+// No heading: the controls float over the slide, like the presenter's.
 const slideBox = h("section.lst-panel.lst-slides", { hidden: true }, h("div.divider"),
-  h("div.row", { style: { alignItems: "center", marginBottom: "10px", flexWrap: "wrap", gap: "8px" } }, slideHead, h("span.spacer"), slideViewBtn, currentBtn, zoomBtn),
-  slideFrame,
-  h("div.row", { style: { justifyContent: "center", gap: "12px", marginTop: "10px" } }, slidePrev, slideLabel, slideNext),
+  h("div.lst-slide", {}, slideFrame,
+    h("div.slide-tools", {}, slideViewBtn, currentBtn, zoomBtn),
+    h("div.slide-nav", {}, slidePrev, slideLabel, slideNext)),
   h("div.zoom-back", { onclick: () => zoom(false) }));
 const askSub = h("p.small.muted");
 const askBox = h("section.lst-panel.lst-ask", {},
@@ -106,7 +106,6 @@ function labels() {
   qInput.placeholder = T("askPh");
   askHead.textContent = T("ask");
   pollHead.textContent = T("poll");
-  slideHead.textContent = T("slides");
   syncSlideViewBtn();
   currentBtn.textContent = T("current");
   newQBtn.textContent = T("newQuestion");

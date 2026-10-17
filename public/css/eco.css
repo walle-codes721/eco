@@ -453,7 +453,15 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .qsheet-handle { display: none; }
 .zoom-back { display: none; }
 .lst-slides.zoom .zoom-back { display: block; position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.35); animation: fade 0.3s; }
-.lst-slides.zoom .slide-frame { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(80vw, calc(80dvh * 16 / 9)); z-index: 61; box-shadow: var(--shadow); animation: fade 0.3s; }
+.lst-slides.zoom .lst-slide { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(80vw, calc(80dvh * 16 / 9)); z-index: 61; animation: fade 0.3s; }
+.lst-slides.zoom .slide-frame { box-shadow: var(--shadow); }
+.lst-slides.zoom .zoom-btn { display: none; }
+/* controls over the slide: shown on hover, always on touch screens */
+.lst-slide { position: relative; }
+.slide-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; opacity: 0; transition: opacity 0.2s; }
+.slide-tools .btn { box-shadow: var(--shadow); }
+.lst-slide:hover :is(.slide-nav, .slide-tools), .slide-tools:focus-within { opacity: 1; }
+@media (hover: none) { .lst-slide :is(.slide-nav, .slide-tools) { opacity: 1; } }
 @media (max-width: 899px) {
   .listen { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
   .qsheet {
@@ -482,7 +490,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
   .listen .lst-panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
   .listen .divider { display: none; }
   .listen .lst-slides { grid-area: slides; overflow: visible; }
-  .listen .lst-slides:not(.zoom) .slide-frame { width: min(100%, calc(52dvh * 16 / 9)); margin-inline: auto; }
+  .listen .lst-slides:not(.zoom) .lst-slide { width: min(100%, calc(62dvh * 16 / 9)); margin-inline: auto; }
   .listen .lst-caps { grid-area: caps; display: flex; flex-direction: column; }
   .listen .lst-caps .status-row { padding-top: 0; }
   .listen .caps-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
