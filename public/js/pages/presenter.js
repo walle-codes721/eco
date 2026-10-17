@@ -1,8 +1,10 @@
-import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound } from "/js/eco.js";
+import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
 import { voiceCard } from "/js/sample.js";
+import { t } from "/js/i18n.js";
+import { pollQ, pollResults } from "/js/polls.js";
 
 const id = roomId();
 const key = hostKey(id);
@@ -10,6 +12,7 @@ let meta, deck, stopMic = null, inflight = 0, lastLatency = null, drawSpeakers =
 const speaking = new Set();
 let lines = [];
 let board = null;
+let polls = [];
 
 try {
   meta = await api(`/api/rooms/${id}/meta`, { key });
@@ -111,7 +114,9 @@ const listenersEl = h("div");
 const topicsEl = h("div");
 const barsEl = h("div");
 const queueEl = h("div");
+const pollsEl = h("div");
 const right = h("div.col-right", {},
+  host ? askCard() : null,
   h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "In the room")), listenersEl),
   h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "What they asked")), topicsEl),
   h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Questions per slide")), barsEl),
@@ -345,6 +350,112 @@ function speakersCard() {
   );
 }
 
+/** Ask: the speaker polls the room. They write and read in their own language; listeners in theirs. */
+function askCard() {
+  const plangSel = h("select", { "aria-label": "Your language" },
+    ...[...new Set([...SPOKEN_LANGUAGES, "en", ...meta.langs])].map((l) => h("option", { value: l }, langName(l, "en"))));
+  plangSel.value = store(`eco:plang:${id}`) ?? (spokenLang.value || phoneLang());
+  if (!plangSel.value) plangSel.value = "en";
+  plangSel.onchange = () => (store(`eco:plang:${id}`, plangSel.value), drawPolls());
+  spokenLang.addEventListener("change", () => { if (!store(`eco:plang:${id}`) && spokenLang.value) (plangSel.value = spokenLang.value), drawPolls(); });
+  askCard.lang = () => plangSel.value;
+  return h("div.card", {},
+    h("div.card-head", {}, h("span.eyebrow", {}, "Ask"), h("span.spacer"),
+      h("button.btn.sm", { type: "button", disabled: meta.demo, onclick: () => pollSheet(plangSel.value) }, icon("plus"), "New question")),
+    h("label.field", {}, "Your language", plangSel),
+    pollsEl,
+  );
+}
+
+function drawPolls() {
+  if (!host) return;
+  const lang = askCard.lang();
+  pollsEl.replaceChildren(...(polls.length
+    ? polls.slice().reverse().map((p) => {
+        const L = p.q[lang] && (p.kind !== "free" || p.share) ? lang : p.lang; // picked after it went out: private free answers exist only in the language it was written in
+        const missing = p.kind === "free" && !p.open && p.tally.texts?.some((x) => !x.out[p.lang]);
+        return h("div", { style: { padding: "14px 0", borderTop: "1px solid var(--line)" } },
+          h("div.row", { style: { gap: "6px", flexWrap: "wrap" } },
+            h(`span.pill${p.open ? ".live" : ""}`, {}, h("span.dot"), p.open ? "Open" : "Closed"),
+            h("span.chip", {}, KIND_NAMES[p.kind]),
+            h("span.chip", {}, p.share ? "Results shared" : "Private"),
+            h("span.spacer"),
+            p.open ? h("button.btn.sm", { type: "button", onclick: (e) => closePoll(p, e.currentTarget) }, "Close")
+              : missing ? h("button.btn.sm", { type: "button", onclick: (e) => closePoll(p, e.currentTarget) }, "Translate answers") : null),
+          h("div", { style: { fontWeight: 600, marginTop: "8px" } }, pollQ(p, L)),
+          p.kind === "free" && p.open ? h("p.tiny.muted", { style: { marginTop: "8px" } }, `${p.tally.n} ${t(L, "votes")} · translated when you close`) : pollResults(p, L));
+      })
+    : [h("p.empty", {}, "Ask the room a question. Listeners answer on their phones, each in their own language.")]));
+}
+
+const KIND_NAMES = { free: "Free response", choice: "Multiple choice", tf: "True / False", rating: "Rating", rank: "Ranking" };
+
+async function closePoll(p, btn) {
+  btn.disabled = true;
+  try {
+    await api(`/api/rooms/${id}/pollclose`, { method: "POST", key, body: { pid: p.id } });
+  } catch (err) {
+    toast(err.data?.fallback ? `Closed, but the answers weren't translated (${err.data.fallback}). Try again.` : "Couldn't close the poll", 4000);
+    btn.disabled = false;
+  }
+}
+
+/** Write a poll in your language. Nothing reaches the room before Send. */
+function pollSheet(lang) {
+  let kind = "choice";
+  const qIn = h("textarea", { rows: 2, maxlength: 200, placeholder: "Your question" });
+  const optsEl = h("div.stack", { style: { gap: "8px" } });
+  const optRow = (v = "") => {
+    const inp = h("input", { type: "text", maxlength: 80, placeholder: `Option ${optsEl.children.length + 1}` });
+    inp.value = v;
+    const row = h("div.row", { style: { gap: "6px" } }, inp, h("button.btn.icon-btn", { type: "button", "aria-label": "Remove option", onclick: () => optsEl.children.length > 2 && row.remove() }, icon("x")));
+    optsEl.append(row);
+    return inp;
+  };
+  optRow(); optRow();
+  const addOpt = h("button.btn.sm", { type: "button", onclick: () => optsEl.children.length < 10 && optRow().focus() }, icon("plus"), "Add option");
+  const minIn = h("input", { type: "number", value: 1, step: 1 });
+  const maxIn = h("input", { type: "number", value: 5, step: 1 });
+  const tfNote = h("p.small.muted", {}, `Listeners pick “${t(lang, "true")}” or “${t(lang, "false")}”.`);
+  const share = h("input", { type: "checkbox" });
+  const choiceBox = h("div.stack", { style: { gap: "8px" } }, optsEl, h("div", {}, addOpt));
+  const ratingBox = h("div.row", { style: { gap: "12px" } }, h("label.field", {}, "From", minIn), h("label.field", {}, "To", maxIn));
+  const types = h("div.lang-grid");
+  const drawTypes = () => {
+    types.replaceChildren(...Object.entries(KIND_NAMES).map(([k, name]) =>
+      h("button.toggle", { type: "button", "aria-pressed": String(k === kind), onclick: () => ((kind = k), drawTypes()) }, name)));
+    choiceBox.hidden = !["choice", "rank"].includes(kind);
+    ratingBox.hidden = kind !== "rating";
+    tfNote.hidden = kind !== "tf";
+  };
+  drawTypes();
+  const send = h("button.btn.primary", { type: "button" }, "Send to the room");
+  const wrap = h("div.sheet-wrap", {}, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "560px", width: "100%" } },
+    h("h2", {}, "Ask the room"),
+    h("p.small.muted", {}, `Write in ${langName(lang, "en")}. Eco sends it in every listener's language, and you read the answers in yours.`),
+    types,
+    h("label.field", {}, "Question", qIn),
+    choiceBox, ratingBox, tfNote,
+    h("label.row", { style: { gap: "8px", alignItems: "center" } }, share, h("span.small", {}, "Show results to the audience")),
+    h("div.row", {}, h("span.spacer"), h("button.btn", { type: "button", onclick: () => wrap.remove() }, "Cancel"), send)));
+  send.onclick = async () => {
+    const options = kind === "tf" ? [t(lang, "true"), t(lang, "false")] : [...optsEl.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean);
+    if (!qIn.value.trim()) return toast("Write the question");
+    if (["choice", "rank"].includes(kind) && options.length < 2) return toast("Add at least two options");
+    send.disabled = true;
+    try {
+      await api(`/api/rooms/${id}/poll`, { method: "POST", key, body: { kind, lang, q: qIn.value, options, min: Number(minIn.value), max: Number(maxIn.value), share: share.checked } });
+      toast("Sent to the room ✓");
+      wrap.remove();
+    } catch (err) {
+      toast(err.data?.fallback ? `Not sent (${err.data.fallback})` : err.message || "Couldn't send");
+      send.disabled = false;
+    }
+  };
+  document.body.append(wrap);
+  qIn.focus();
+}
+
 // ---------- live ----------
 const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
   if (m.type === "deck" || m.type === "slides") return location.reload(); // new slides: simplest to start fresh
@@ -352,7 +463,9 @@ const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
     Object.assign(meta, m.meta);
     lines = m.lines ?? [];
     board = m.board ?? board;
+    polls = m.polls ?? polls;
   }
+  if (m.type === "polls") polls = m.polls;
   if (m.type === "line") lines.push(m.line), (lines = lines.slice(-50));
   if (m.type === "slide") meta.slide = m.n;
   if (m.type === "status") Object.assign(meta, { status: m.status, startedAt: m.startedAt, endedAt: m.endedAt });
@@ -366,6 +479,7 @@ const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
   if (["hello", "status", "reset"].includes(m.type)) drawStatus();
   if (["hello", "line", "reset"].includes(m.type)) drawLines();
   if (["hello", "board", "slide"].includes(m.type)) drawBoard();
+  if (["hello", "polls"].includes(m.type)) drawPolls();
 }, (s) => s === "offline" && toast("Connection lost, reconnecting…"));
 
 drawStatus();
