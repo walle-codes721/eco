@@ -3,6 +3,7 @@ import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { t } from "/js/i18n.js";
 import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
+import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 
 const id = roomId();
 let meta;
@@ -18,6 +19,10 @@ let lang = store(`eco:lang:${id}`) ?? (choices.includes(phoneLang()) ? phoneLang
 let lines = [];
 let summary = null; // { text: { en, it, ... } } once the speaker has made one
 const myQs = store(`eco:qs:${id}`) ?? [];
+let polls = []; // what the speaker asked: open polls, plus closed ones whose results they shared
+const votes = store(`eco:votes:${id}`) ?? {}; // poll id -> my answer
+const rankDraft = {}; // poll id -> option order, before Send
+const voter = store("eco:voter") ?? ((v) => (store("eco:voter", v), v))(crypto.randomUUID()); // one answer per phone per poll
 let live = null;
 let atBottom = true; // smart follow: pinned to live unless the listener scrolls up
 let newCount = 0; // lines that arrived while reading history
@@ -39,9 +44,12 @@ const qSend = h("button.send", { type: "submit", "aria-label": "Send" }, icon("u
 const qForm = h("form.ask-box", {}, qInput, qSend);
 const qList = h("div");
 const askHead = h("h2", { style: { fontSize: "20px" } });
+const pollHead = h("h2", { style: { fontSize: "20px" } });
+const pollList = h("div");
+const pollBox = h("section", { hidden: true, style: { paddingTop: "28px" } }, h("div.divider"), pollHead, pollList);
 const askSub = h("p.small.muted");
 const main = h("main.phone", {},
-  statusRow, capsWrap,
+  statusRow, capsWrap, pollBox,
   h("section", { style: { padding: "28px 0 48px" } },
     h("div.divider"),
     h("div.row", { style: { alignItems: "baseline", marginBottom: "4px" } }, askHead),
@@ -56,6 +64,7 @@ function labels() {
   document.documentElement.lang = lang;
   qInput.placeholder = T("askPh");
   askHead.textContent = T("ask");
+  pollHead.textContent = T("poll");
   askSub.textContent = T("fromTalk");
   soundBtn.replaceChildren(icon(voice.on ? "sound" : "mute"));
   soundBtn.setAttribute("aria-label", voice.on ? T("soundOn") : T("soundOff"));
@@ -168,6 +177,58 @@ function drawQs() {
     )));
 }
 
+// ---------- polls from the speaker ----------
+function drawPolls() {
+  pollBox.hidden = !polls.length;
+  pollList.replaceChildren(...polls.slice().reverse().map(pollCard));
+}
+
+function pollCard(p) {
+  const mine = votes[p.id];
+  const opts = pollOpts(p, lang);
+  const pick = (label, a) => h("button.toggle", { type: "button", "aria-pressed": String(mine === a), onclick: () => vote(p, a) }, label);
+  let input = null;
+  if (p.open && (p.kind === "choice" || p.kind === "tf")) input = h("div.lang-grid", {}, ...opts.map((o, i) => pick(o, i)));
+  if (p.open && p.kind === "rating") input = h("div.lang-grid", {}, ...Array.from({ length: p.max - p.min + 1 }, (_, i) => pick(String(p.min + i), p.min + i)));
+  if (p.open && p.kind === "rank") {
+    const order = (rankDraft[p.id] ??= mine ?? opts.map((_, i) => i));
+    const move = (i, d) => { [order[i], order[i + d]] = [order[i + d], order[i]]; drawPolls(); };
+    input = h("div.stack", { style: { gap: "6px" } },
+      ...order.map((o, i) => h("div.row", { style: { gap: "6px" } },
+        h("span.chip", {}, String(i + 1)), h("span", { style: { flex: 1 } }, opts[o]),
+        h("button.btn.icon-btn", { type: "button", "aria-label": "Up", disabled: i === 0, onclick: () => move(i, -1) }, icon("up")),
+        h("button.btn.icon-btn", { type: "button", "aria-label": "Down", disabled: i === order.length - 1, onclick: () => move(i, 1) }, icon("down")))),
+      h("div", {}, h("button.btn.sm", { type: "button", onclick: () => vote(p, order.slice()) }, T("send"))));
+  }
+  if (p.open && p.kind === "free") {
+    const inp = h("input", { type: "text", maxlength: 200, placeholder: T("typeAnswer"), enterkeyhint: "send" });
+    if (typeof mine === "string") inp.value = mine;
+    const form = h("form.ask-box", {}, inp, h("button.send", { type: "submit", "aria-label": T("send") }, icon("up")));
+    form.onsubmit = (e) => (e.preventDefault(), inp.value.trim() && vote(p, inp.value.trim()));
+    input = form;
+  }
+  return h("div.qa", {},
+    h("div.q", {}, pollQ(p, lang)),
+    input,
+    h("div.meta", {}, !p.open ? h("span.chip", {}, T("closed")) : mine !== undefined ? h("span", {}, T("sent")) : null),
+    p.tally && (mine !== undefined || !p.open) ? pollResults(p, lang) : null,
+  );
+}
+
+async function vote(p, a) {
+  const before = votes[p.id];
+  votes[p.id] = a;
+  drawPolls();
+  try {
+    await api(`/api/rooms/${id}/vote`, { method: "POST", body: { pid: p.id, voter, lang, a } });
+    store(`eco:votes:${id}`, votes);
+  } catch (err) {
+    before === undefined ? delete votes[p.id] : (votes[p.id] = before);
+    drawPolls();
+    toast(err.status === 409 ? T("closed") : T("busy"));
+  }
+}
+
 qForm.onsubmit = async (e) => {
   e.preventDefault();
   const text = qInput.value.trim();
@@ -198,6 +259,7 @@ langSel.onchange = () => {
   drawSummary();
   drawJump();
   drawStatus();
+  drawPolls();
 };
 soundBtn.onclick = () => {
   voice.on ? voice.off() : voice.unlock();
@@ -291,12 +353,17 @@ if (meta.status === "ended") {
     if (m.type === "hello") {
       Object.assign(meta, m.meta);
       lines = m.lines ?? [];
+      polls = m.polls ?? [];
+      drawPolls();
       snapToLive(); // (re)connect: anchor on the newest line, clear any stale pill
       drawCaps();
       if (meta.status === "ended") return recap();
     }
     if (m.type === "line") addLine(m.line);
     if (m.type === "audio") onAudio(m);
+    if (m.type === "poll") polls.push(m.poll), drawPolls();
+    if (m.type === "tally") { const p = polls.find((x) => x.id === m.pid); if (p) (p.tally = m.tally), drawPolls(); }
+    if (m.type === "pollclose") (polls = m.poll ? polls.map((x) => (x.id === m.pid ? m.poll : x)) : polls.filter((x) => x.id !== m.pid)), drawPolls();
     if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") meta.slide = m.n;

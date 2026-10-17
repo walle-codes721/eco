@@ -58,6 +58,10 @@ A line as one listener reads it, in that listener's language.
 The room's live signal of which speaker is talking at this moment, driven by speech detection on each speaker's device, never by an AI call.
 _Avoid_: active speaker
 
+**Poll**:
+A question the speaker sends the listeners — free response, multiple choice, true/false, rating or ranking — answered on their phones. The speaker writes and reads results in their own language; each listener reads it in theirs. Results stay with the speaker unless they choose to share them.
+_Avoid_: survey, quiz
+
 ## Questions and grounding
 
 **Ask the talk**:

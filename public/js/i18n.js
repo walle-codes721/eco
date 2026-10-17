@@ -1,6 +1,7 @@
 // UI strings for the pages strangers open: listener and customer. Falls back to English.
 const S = {
   en: {
+    poll: "Question from the speaker", send: "Send", sent: "Sent ✓", true: "True", false: "False", typeAnswer: "Type your answer…", results: "Results", closed: "Closed", votes: "answers",
     listen: "Listen to the talk", textOnly: "Text only", by: "by", joinNote: "No app, no account. Keep your screen on.",
     waiting: "The talk will start soon", waitingSub: "Captions appear here as soon as the speaker begins.",
     ask: "Ask the talk", askPh: "Ask a question about the talk…", fromTalk: "Answers come only from the talk and its slides",
@@ -14,6 +15,7 @@ const S = {
     micDenied: "Microphone blocked. Allow it in your browser settings, or type instead.",
   },
   it: {
+    poll: "Domanda dal relatore", send: "Invia", sent: "Inviata ✓", true: "Vero", false: "Falso", typeAnswer: "Scrivi la tua risposta…", results: "Risultati", closed: "Chiusa", votes: "risposte",
     listen: "Ascolta il talk", textOnly: "Solo testo", by: "di", joinNote: "Nessuna app, nessun account. Tieni lo schermo acceso.",
     waiting: "Il talk inizierà a breve", waitingSub: "I sottotitoli appaiono qui appena il relatore inizia.",
     ask: "Chiedi al talk", askPh: "Fai una domanda sul talk…", fromTalk: "Le risposte arrivano solo dal talk e dalle slide",
@@ -27,6 +29,7 @@ const S = {
     micDenied: "Microfono bloccato. Consentilo nelle impostazioni del browser oppure scrivi.",
   },
   es: {
+    poll: "Pregunta del ponente", send: "Enviar", sent: "Enviada ✓", true: "Verdadero", false: "Falso", typeAnswer: "Escribe tu respuesta…", results: "Resultados", closed: "Cerrada", votes: "respuestas",
     listen: "Escuchar la charla", textOnly: "Solo texto", by: "por", joinNote: "Sin app, sin cuenta. Mantén la pantalla encendida.",
     waiting: "La charla empezará pronto", waitingSub: "Los subtítulos aparecerán aquí en cuanto empiece.",
     ask: "Pregunta a la charla", askPh: "Haz una pregunta sobre la charla…", fromTalk: "Las respuestas salen solo de la charla y sus diapositivas",
@@ -40,6 +43,7 @@ const S = {
     micDenied: "Micrófono bloqueado. Permítelo en el navegador o escribe.",
   },
   hi: {
+    poll: "वक्ता का प्रश्न", send: "भेजें", sent: "भेजा गया ✓", true: "सही", false: "गलत", typeAnswer: "अपना उत्तर लिखें…", results: "परिणाम", closed: "बंद", votes: "उत्तर",
     listen: "टॉक सुनें", textOnly: "सिर्फ़ टेक्स्ट", by: "द्वारा", joinNote: "कोई ऐप नहीं, कोई अकाउंट नहीं। स्क्रीन चालू रखें।",
     waiting: "टॉक जल्द शुरू होगा", waitingSub: "वक्ता के शुरू करते ही सबटाइटल यहाँ दिखेंगे।",
     ask: "टॉक से पूछें", askPh: "टॉक के बारे में सवाल पूछें…", fromTalk: "जवाब सिर्फ़ टॉक और उसकी स्लाइड्स से आते हैं",
@@ -53,6 +57,7 @@ const S = {
     micDenied: "माइक्रोफ़ोन ब्लॉक है। ब्राउज़र सेटिंग में अनुमति दें या लिखें।",
   },
   fr: {
+    poll: "Question de l'intervenant", send: "Envoyer", sent: "Envoyée ✓", true: "Vrai", false: "Faux", typeAnswer: "Écrivez votre réponse…", results: "Résultats", closed: "Fermée", votes: "réponses",
     listen: "Écouter la conférence", textOnly: "Texte seul", by: "par", joinNote: "Sans appli, sans compte. Gardez l'écran allumé.",
     waiting: "La conférence va commencer", waitingSub: "Les sous-titres s'affichent dès que l'orateur commence.",
     ask: "Demander à la conférence", askPh: "Posez une question sur la conférence…", fromTalk: "Les réponses viennent uniquement de la conférence et des diapositives",
@@ -66,6 +71,7 @@ const S = {
     micDenied: "Micro bloqué. Autorisez-le dans le navigateur ou écrivez.",
   },
   de: {
+    poll: "Frage vom Podium", send: "Senden", sent: "Gesendet ✓", true: "Wahr", false: "Falsch", typeAnswer: "Deine Antwort…", results: "Ergebnisse", closed: "Geschlossen", votes: "Antworten",
     listen: "Vortrag anhören", textOnly: "Nur Text", by: "von", joinNote: "Keine App, kein Konto. Bildschirm anlassen.",
     waiting: "Der Vortrag beginnt gleich", waitingSub: "Untertitel erscheinen hier, sobald es losgeht.",
     ask: "Frag den Vortrag", askPh: "Stell eine Frage zum Vortrag…", fromTalk: "Antworten kommen nur aus dem Vortrag und den Folien",

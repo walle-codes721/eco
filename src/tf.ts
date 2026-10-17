@@ -91,7 +91,7 @@ export async function tf<T>(
           temperature: 0.2,
           ...(model.startsWith("MiMo") ? { reasoning_effort: "none" } : {}), // thinking off (token rule 6)
         }),
-        signal: AbortSignal.timeout(kind === "extract" ? 60_000 : kind === "summary" ? 30_000 : 15_000), // a 4-language summary writes ~1,000 tokens
+        signal: AbortSignal.timeout(kind === "extract" ? 60_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000), // a 4-language summary writes ~1,000 tokens
       });
       status = res.status;
       // Token rule 7: retry 429 and gateway 502/503 only, at most twice, never when the wait would kill the latency target.
