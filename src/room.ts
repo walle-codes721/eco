@@ -4,6 +4,7 @@ import type { Env } from "./env";
 import { tf, isLive } from "./tf";
 import { MODELS, LANG_NAMES, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
+import { lineKey, validReaction, tallyReactions, topLines, type LineReactions } from "./reaction";
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
 import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
@@ -56,7 +57,7 @@ function cleanCounterLang(v: unknown): string | null {
 }
 
 export const DEMOS: Record<string, "stage" | "counter"> = { "stage/eco/demo": "stage", "counter/eco/gelato": "counter", "counter/eco/farmacia": "counter" };
-const LIMITS = { ask: [3, 10], voice: [4, 40], turn: [8, 60] } as const; // per visitor per hour: [demo, normal]
+const LIMITS = { ask: [3, 10], voice: [4, 40], turn: [8, 60], react: [60, 300] } as const; // per visitor per hour: [demo, normal]
 
 const rid = () => crypto.randomUUID().replaceAll("-", "");
 const MOCK_LINE = "(Mock mode: Eco heard you. Real transcripts and translations need live mode.)";
@@ -77,6 +78,7 @@ export class Room extends DurableObject<Env> {
   peak = 0;
   summary: Summary | null = null;
   polls: Poll[] = [];
+  reactions: Record<string, LineReactions> = {};
   deckPages: DeckPageRows[] = [];
   /** Teleprompter script text. Host only: never in publicMeta, pages or chunks. */
   script = "";
@@ -93,7 +95,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -107,10 +109,11 @@ export class Room extends DurableObject<Env> {
       this.deckPages = (s.get("deckPages") as DeckPageRows[]) ?? [];
       this.slideTranslations = (s.get("slideTranslations") as typeof this.slideTranslations) ?? {};
       this.script = cleanScript(s.get("script"));
+      this.reactions = (s.get("reactions") as typeof this.reactions) ?? {};
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations" | "script")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations" | "script" | "reactions")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -246,6 +249,8 @@ export class Room extends DurableObject<Env> {
         return this.ask(await req.json(), ip);
       case "POST vote":
         return this.vote(await req.json().catch(() => ({})));
+      case "POST react":
+        return this.react(await req.json().catch(() => ({})), ip);
       case "POST turn":
         return this.turn(req, isHost, ip);
       case "GET board":
@@ -775,7 +780,39 @@ export class Room extends DurableObject<Env> {
       unanswered: b.queue.filter((g) => !g.answeredAt).map((g) => ({ q: g.q, count: g.count })),
       p50: b.p50,
       speakers: (m.speakers ?? []).map((s) => ({ name: s.name, lines: this.lines.filter((l) => (l.speaker ?? "s0") === s.id).length })),
+      reactions: this.reactionCard(),
     };
+  }
+
+  /** Reactions for the Post-talk card: the series per Line (for a later chart) and the 3 Lines that drew the most. */
+  private reactionCard() {
+    const series = tallyReactions(this.reactions);
+    const byKind: Record<string, number> = {};
+    for (const x of series) for (const [r, n] of Object.entries(x.counts)) byKind[r] = (byKind[r] ?? 0) + n!;
+    const top = topLines(series.filter((x) => this.lines.some((l) => l.seq === x.seq && l.t === x.t)))
+      .map((x) => ({ ...x, text: this.lines.find((l) => l.seq === x.seq && l.t === x.t)!.src }));
+    return { total: series.reduce((s, x) => s + x.n, 0), byKind, series, top };
+  }
+
+  // ---------- Reactions ----------
+
+  /** A Listener reacts to a Line: one reaction per voter per Line, the last one counts, null clears. Private: only the Screen hears it, anonymously. */
+  private async react(body: any, ip: string): Promise<Response> {
+    const voter = String(body.voter ?? "").slice(0, 40);
+    const r = validReaction(body.r);
+    if (!voter || r === undefined) return json({ error: "Bad reaction" }, 400);
+    const l = this.lines.find((x) => x.seq === body.seq && x.t === body.t);
+    if (!l) return json({ error: "That line is gone" }, 404);
+    if (!this.allow(ip, "react")) return json({ error: "busy" }, 429);
+    const k = lineKey(l.seq, l.t);
+    const x = (this.reactions[k] ??= { seq: l.seq, t: l.t, at: l.at, slide: l.slide, by: {} });
+    if (r === null) delete x.by[voter];
+    else if (!x.by[voter] && Object.keys(x.by).length >= 2000) return json({ error: "full" }, 409);
+    else x.by[voter] = r;
+    if (!Object.keys(x.by).length) delete this.reactions[k];
+    await this.save("reactions");
+    if (r) this.send(["screen"], { type: "react", r });
+    return json({ ok: true });
   }
 
   // ---------- Polls ----------
@@ -878,11 +915,12 @@ export class Room extends DurableObject<Env> {
     if (this.replayI >= DEMO_TALK.length || (this.replayI === 0 && this.lines.length)) {
       this.replayI = 0;
       this.lines = [];
+      this.reactions = {}; // they were on the old loop's Lines
       this.summary = null; // it described the old loop
       this.questions = this.questions.slice(-30);
       m.startedAt = Date.now();
       m.slide = 1;
-      await this.save("lines", "meta", "questions", "summary");
+      await this.save("lines", "meta", "questions", "summary", "reactions");
       this.send(["listener", "screen", "host"], { type: "reset", meta: this.publicMeta() });
       return void this.ctx.storage.setAlarm(Date.now() + 3000);
     }

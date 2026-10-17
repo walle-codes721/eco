@@ -77,6 +77,7 @@ connect(id, { role: "screen" }, (m) => {
   if (m.type === "reset") Object.assign(meta, m.meta), (last = null);
   if (m.type === "speakers") return void (meta.speakers = m.speakers);
   if (m.type === "speaking") return;
+  if (m.type === "react") return floatReaction(m.r);
   if (m.type === "line") {
     last = m.line;
     capLangI++; // rotate the projector caption through the room's languages
@@ -85,3 +86,12 @@ connect(id, { role: "screen" }, (m) => {
   draw();
 });
 draw();
+
+// Listeners' reactions drift up the right edge, anonymously.
+// ponytail: client-side cap only; throttle on the server if rooms get huge
+function floatReaction(r) {
+  if (document.querySelectorAll(".emo-float").length >= 15) return;
+  const el = h("span.emo.emo-float", { style: { right: `${2 + Math.random() * 8}vw` } }, r);
+  el.addEventListener("animationend", () => el.remove());
+  document.body.append(el);
+}
