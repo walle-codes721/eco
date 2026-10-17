@@ -40,6 +40,7 @@ describe("budget admission", () => {
   const base = { today: 0, max: 50, window: 0, inflight: 0, tripped: false, pubHour: 0, pubMax: 30 };
   it("admits under every limit", () => expect(admit(base, "utterance", false)).toBeNull());
   it("enforces the daily ceiling", () => expect(admit({ ...base, today: 50 }, "utterance", false)).toBe("ceiling"));
+  it("has no daily ceiling when max is 0", () => expect(admit({ ...base, max: 0, today: 10_000 }, "utterance", false)).toBeNull());
   it("enforces 12 rpm and keeps the last 2 slots for translation", () => {
     expect(admit({ ...base, window: 10 }, "ask", false)).toBe("rpm");
     expect(admit({ ...base, window: 10 }, "utterance", false)).toBeNull();

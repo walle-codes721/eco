@@ -94,8 +94,8 @@ export const uploadDeck = (id, bytes, key) =>
   fetch(`/api/rooms/${id}/deck`, { method: "PUT", headers: { "content-type": "application/pdf", ...(key ? { "x-key": key } : {}) }, body: bytes }).then((r) => r.ok);
 
 /** A deck abstraction used by presenter and projector: the uploaded PDF if there is one, text otherwise. */
-export async function deckFor(id, meta) {
-  let bytes = await loadDeck(id);
+export async function deckFor(id, meta, { fresh = false } = {}) {
+  let bytes = fresh ? null : await loadDeck(id);
   if (!bytes && meta.deck) {
     bytes = await fetch(`/api/rooms/${id}/deck`).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => b && new Uint8Array(b)).catch(() => null);
     if (bytes) saveDeck(id, bytes);

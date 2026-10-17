@@ -28,9 +28,10 @@
     { "tag": "v2", "new_sqlite_classes": ["Account"] }
   ],
   // Live needs ECO_LIVE="1" AND the RADEON_API_KEY secret; without the key it stays mock. Seb sets the key.
+  // ECO_MAX_CALLS "0" = no daily ceiling (Seb, 17 Oct). The per-minute, concurrency and 3-failures stops still apply.
   "vars": {
     "ECO_LIVE": "1",
-    "ECO_MAX_CALLS": "50",
+    "ECO_MAX_CALLS": "0",
     "ECO_PUBLIC_HOURLY": "30"
   }
   // Secrets (set by Seb, never in this file): RADEON_API_KEY, ADMIN_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SESSION_SECRET

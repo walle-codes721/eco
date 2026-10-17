@@ -302,7 +302,7 @@ addEventListener("keydown", (e) => {
 async function refreshCalls() {
   const s = await api("/api/stats").catch(() => null);
   if (!s) return;
-  calls.replaceChildren(h("span.dot"), s.live ? `${s.today}/${s.max} calls` : "0 calls (mock)");
+  calls.replaceChildren(h("span.dot"), s.live ? (s.max ? `${s.today}/${s.max} calls` : `${s.today} calls`) : "0 calls (mock)");
   calls.className = `pill ${s.tripped ? "mock" : ""}`;
 }
 refreshCalls();

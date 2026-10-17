@@ -51,7 +51,7 @@ export class Budget extends DurableObject<Env> {
       const reason = admit(
         {
           today: this.count(this.dayStart()),
-          max: Number(this.env.ECO_MAX_CALLS ?? 50),
+          max: Number(this.env.ECO_MAX_CALLS ?? 0),
           window: this.window.length,
           inflight: this.inflight,
           tripped: this.tripped,
@@ -105,7 +105,7 @@ export class Budget extends DurableObject<Env> {
     return {
       live: this.env.ECO_LIVE === "1" && !!this.env.RADEON_API_KEY, // same rule as tf.ts isLive
       today: rows.length,
-      max: Number(this.env.ECO_MAX_CALLS ?? 50),
+      max: Number(this.env.ECO_MAX_CALLS ?? 0),
       tripped: this.tripped,
       p50: { utterance: p50("utterance"), ask: p50("ask"), turn: p50("turn"), summary: p50("summary") },
       tokens: { in: ok.reduce((s, r) => s + r.tin, 0), out: ok.reduce((s, r) => s + r.tout, 0) },

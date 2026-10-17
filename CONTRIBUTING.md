@@ -40,7 +40,7 @@ Demo rooms that work with no key: `/stage/eco/demo/speak`, `/stage/eco/demo`, `/
 6. **Thinking off, tight `max_tokens`.** Keep prompts and outputs small.
 7. **Retry only on 429/502/503, at most twice**, and never retry 400/401/403/404/422.
 8. **Stop after 3 failed live calls in a row** and report it. Don't keep trying.
-9. **Limits are enforced in `src/budget.ts` and `src/limits.ts`:** at most 12 requests a minute, 3 at once, a daily call ceiling (`ECO_MAX_CALLS`), and an hourly cap for the public demo. Don't weaken or bypass them. Add unit tests when you change them.
+9. **Limits are enforced in `src/budget.ts` and `src/limits.ts`:** at most 12 requests a minute, 3 at once, a daily call ceiling (`ECO_MAX_CALLS`, `0` = off), and an hourly cap for the public demo. Don't weaken or bypass them. Add unit tests when you change them.
 10. **Prompts are logged by Token Factory for about 2 days.** Don't send real personal data, even in tests.
 
 ## Voices

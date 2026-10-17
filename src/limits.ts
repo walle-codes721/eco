@@ -15,7 +15,7 @@ export function admit(
   pub: boolean,
 ): Denied | null {
   if (s.tripped) return "tripped";
-  if (s.today >= s.max) return "ceiling";
+  if (s.max > 0 && s.today >= s.max) return "ceiling"; // max 0 = no daily ceiling
   if (pub && s.pubHour >= s.pubMax) return "public-hourly";
   const translation = kind === "utterance" || kind === "turn";
   if (s.window >= (translation ? RPM : RPM - RESERVED)) return "rpm";
