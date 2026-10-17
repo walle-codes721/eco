@@ -2,6 +2,7 @@
 import type { Env } from "./env";
 import type { Kind, Denied } from "./budget";
 import { MODELS } from "./prompts";
+import type { TranslationTiming } from "./timing";
 
 const BASE = "https://developer.amd.com.cn/radeon/api/v1";
 
@@ -66,14 +67,16 @@ export async function tf<T>(
   kind: Kind,
   model: string,
   req: TfRequest,
-  opts: { pub: boolean; mock: () => T },
+  opts: { pub: boolean; mock: () => T; timing?: TranslationTiming },
 ): Promise<TfResult<T>> {
   if (!isLive(env)) return { data: opts.mock(), live: false, ms: 0 };
   if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = TEXT_FALLBACK;
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
   const translation = kind === "utterance" || kind === "turn";
+  const admissionAt = Date.now();
   const gate = await budget.acquire(kind, opts.pub, translation ? 1500 : 0);
+  if (opts.timing) opts.timing.budgetMs = Date.now() - admissionAt;
   if (!gate.ok) return { data: null, live: true, ms: 0, fallback: gate.reason };
 
   const t0 = Date.now();
@@ -84,55 +87,69 @@ export async function tf<T>(
   let why = "";
   try {
     for (let attempt = 0; ; attempt++) {
-      const res = await fetch(`${BASE}/chat/completions`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          model,
-          ...req,
-          temperature: 0.2,
-          ...(model.startsWith("MiMo") ? { reasoning_effort: "none" } : {}), // thinking off (token rule 6)
-        }),
-        signal: AbortSignal.timeout(kind === "extract" ? 60_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000), // a 4-language summary writes ~1,000 tokens
-      });
-      status = res.status;
-      // Token rule 7: retry 429 and gateway 502/503 only, at most twice, never when the wait would kill the latency target.
-      if ([429, 502, 503].includes(status) && attempt < 2) {
-        const wait = Number(res.headers.get("retry-after") ?? 0) * 1000 || 400 * 2 ** attempt;
-        if (wait <= (translation ? 1500 : 4000)) {
-          await new Promise((r) => setTimeout(r, wait + Math.random() * 200));
-          continue;
+      const attemptAt = Date.now();
+      const measured = { model, status: 0, ms: 0 };
+      opts.timing?.attempts.push(measured);
+      let retryMs = 0;
+      try {
+        const res = await fetch(`${BASE}/chat/completions`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
+          body: JSON.stringify({
+            model,
+            ...req,
+            temperature: 0.2,
+            ...(model.startsWith("MiMo") ? { reasoning_effort: "none" } : {}), // thinking off (token rule 6)
+          }),
+          signal: AbortSignal.timeout(kind === "extract" ? 60_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000), // a 4-language summary writes ~1,000 tokens
+        });
+        status = res.status;
+        measured.status = status;
+        // Token rule 7: retry 429 and gateway 502/503 only, at most twice, never when the wait would kill the latency target.
+        if ([429, 502, 503].includes(status) && attempt < 2) {
+          const wait = Number(res.headers.get("retry-after") ?? 0) * 1000 || 400 * 2 ** attempt;
+          if (wait <= (translation ? 1500 : 4000)) {
+            const waitAt = Date.now();
+            await new Promise((r) => setTimeout(r, wait + Math.random() * 200));
+            retryMs = Date.now() - waitAt;
+            if (opts.timing) opts.timing.retryMs += retryMs;
+            continue;
+          }
         }
-      }
-      if (status === 200) {
-        const j = (await res.json()) as { choices: { message: { content: string }; finish_reason?: string }[]; usage?: typeof usage };
-        const value = j.choices[0]?.message?.content;
-        content = typeof value === "string" ? value : "";
-        finishReason = j.choices[0]?.finish_reason;
-        usage = j.usage ?? usage;
-      } else {
-        // Gateway errors are {"error":{...}}, platform errors {"detail":{"error":{...}}}. Never includes the key.
-        const body = await res.text().catch(() => "");
-        let msg = body;
-        try {
-          const e = JSON.parse(body);
-          msg = (e.error ?? e.detail?.error ?? e.detail)?.message ?? JSON.stringify(e.error ?? e.detail ?? e);
-        } catch {}
-        why = `${status}: ${String(msg).slice(0, 160)}`;
-        // Gemma off the catalog: same request on the fallback, no retry. This 400 never reaches finish(), so it can't trip the stop.
-        if (status === 400 && model === MODELS.answer && /not supported/i.test(msg)) {
-          gemmaMissingUntil = Date.now() + GEMMA_RECHECK_MS;
-          model = TEXT_FALLBACK;
-          why = "";
-          continue;
+        if (status === 200) {
+          const j = (await res.json()) as { choices: { message: { content: string }; finish_reason?: string }[]; usage?: typeof usage };
+          const value = j.choices[0]?.message?.content;
+          content = typeof value === "string" ? value : "";
+          finishReason = j.choices[0]?.finish_reason;
+          usage = j.usage ?? usage;
+        } else {
+          // Gateway errors are {"error":{...}}, platform errors {"detail":{"error":{...}}}. Never includes the key.
+          const body = await res.text().catch(() => "");
+          let msg = body;
+          try {
+            const e = JSON.parse(body);
+            msg = (e.error ?? e.detail?.error ?? e.detail)?.message ?? JSON.stringify(e.error ?? e.detail ?? e);
+          } catch {}
+          why = `${status}: ${String(msg).slice(0, 160)}`;
+          // Gemma off the catalog: same request on the fallback, no retry. This 400 never reaches finish(), so it can't trip the stop.
+          if (status === 400 && model === MODELS.answer && /not supported/i.test(msg)) {
+            gemmaMissingUntil = Date.now() + GEMMA_RECHECK_MS;
+            model = TEXT_FALLBACK;
+            why = "";
+            continue;
+          }
         }
+        break;
+      } finally {
+        // Provider round trip and body decoding; excludes explicit retry sleeps.
+        measured.ms = Date.now() - attemptAt - retryMs;
       }
-      break;
     }
   } catch (e) {
     status = status || 599; // timeout or network
     why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
   } finally {
+    const accountingAt = Date.now();
     await budget.finish({
       kind,
       model,
@@ -143,6 +160,7 @@ export async function tf<T>(
       pub: opts.pub,
       why,
     });
+    if (opts.timing) opts.timing.accountingMs = Date.now() - accountingAt;
   }
   const ms = Date.now() - t0;
   if (status !== 200) {

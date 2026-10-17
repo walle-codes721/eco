@@ -7,6 +7,7 @@ import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Pol
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
 import { phraseEvidence } from "./utterance";
+import { translationTiming, timingHeader } from "./timing";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
 type Status = "lobby" | "live" | "ended";
@@ -428,17 +429,24 @@ export class Room extends DurableObject<Env> {
   // ---------- Stage ----------
 
   private async utterance(req: Request, tryVoice: boolean, speaker: string): Promise<Response> {
+    const receivedAt = Date.now();
+    const timing = req.headers.get("x-eco-timing") === "1" ? translationTiming() : undefined;
+    const reply = (body: unknown, status = 200) => {
+      const res = json(body, status);
+      if (timing) res.headers.set("server-timing", timingHeader(timing, Date.now() - receivedAt));
+      return res;
+    };
     const m = this.meta!;
-    if (m.status === "ended") return json({ error: "Talk ended" }, 409);
+    if (m.status === "ended") return reply({ error: "Talk ended" }, 409);
     // Text from the browser's speech recognition (JSON), or a WAV for MiMo.
     let input: { text?: string; wavB64?: string };
     if (req.headers.get("content-type")?.startsWith("application/json")) {
       const text = String(((await req.json().catch(() => ({}))) as { text?: unknown }).text ?? "").trim().slice(0, 500);
-      if (!text) return json({ empty: true });
+      if (!text) return reply({ empty: true });
       input = { text };
     } else {
       const buf = await req.arrayBuffer();
-      if (buf.byteLength < 1000 || buf.byteLength > 800_000) return json({ error: "Bad audio" }, 413);
+      if (buf.byteLength < 1000 || buf.byteLength > 800_000) return reply({ error: "Bad audio" }, 413);
       input = { wavB64: b64(buf) };
     }
     const t0 = Date.now();
@@ -450,6 +458,7 @@ export class Room extends DurableObject<Env> {
     const langs = [...new Set(["en", ...m.langs])];
     const r = await tf(this.env, "utterance", turnModel(input), utterancePrompt(input, langs, prev), {
       pub: m.demo,
+      timing,
       mock: () => {
         // Mock mode cannot translate arbitrary speech: keep original-text fallback for missing English.
         if (!m.demo) return { src: input.text ?? MOCK_LINE, out: Object.fromEntries(m.langs.map((l) => [l, MOCK_LINE])), flags: ["mock"] };
@@ -460,20 +469,20 @@ export class Room extends DurableObject<Env> {
     if (r.data === null && !(r.invalidOutput && input.text)) {
       const why = "why" in r && r.why ? `${r.fallback}, ${r.why}` : r.fallback;
       this.send(["host"], { type: "notice", level: "warn", text: `Translation paused (${why}).` });
-      return json({ fallback: why }, 503);
+      return reply({ fallback: why }, 503);
     }
     const evidence = phraseEvidence(r.data, m.demo && !r.live ? undefined : input.text, langs);
     if (!evidence.src) {
-      if (r.data && typeof r.data.src === "string" && !r.data.src.trim()) return json({ empty: true });
-      return json({ fallback: "No complete transcript was returned" }, 503);
+      if (r.data && typeof r.data.src === "string" && !r.data.src.trim()) return reply({ empty: true });
+      return reply({ fallback: "No complete transcript was returned" }, 503);
     }
-    if (r.live && isEcho(this.lines, speaker, evidence.src, Date.now())) return json({ dup: true });
+    if (r.live && isEcho(this.lines, speaker, evidence.src, Date.now())) return reply({ dup: true });
     if (r.live && evidence.incomplete) {
       this.send(["host", "speaker"], { type: "notice", level: "warn", text: "Some translations are unavailable. The original speech was kept; no translation retry was made." });
     }
     if (m.status === "lobby") await this.setStatus("live");
     const line = await this.addLine({ speaker, src: evidence.src, out: evidence.out, flags: evidence.flags, ms: Date.now() - t0, live: r.live });
-    return json({ line });
+    return reply({ line });
   }
 
   private async addLine(p: Pick<Line, "speaker" | "src" | "out" | "flags" | "ms" | "live">): Promise<Line> {
@@ -501,17 +510,20 @@ export class Room extends DurableObject<Env> {
         this.samples.set(sp.id, sample);
       }
       const audio: Record<string, string> = {};
-      await Promise.all(langs.map(async (lang) => {
+      await Promise.allSettled(langs.map(async (lang) => {
         const wav = await voiceFor(this.env, sample!, line.out[lang], lang);
-        if (!wav) return;
-        const k = `${line.seq}-${lang}`;
+        if (!wav || !this.lines.includes(line)) return;
+        const k = `${line.seq}-${line.t}-${lang}`;
         await this.env.FILES.put(`${this.meta!.id}/audio/${k}.wav`, wav);
-        audio[lang] = `/api/rooms/${this.meta!.id}/audio?k=${k}`;
+        // A reset may have reused the sequence number while this clip was generated.
+        if (!this.lines.includes(line)) return;
+        const url = `/api/rooms/${this.meta!.id}/audio?k=${k}`;
+        audio[lang] = url;
+        line.audio = { ...line.audio, [lang]: url };
+        this.send(["listener"], { type: "audio", seq: line.seq, audio: { [lang]: url } });
       }));
       if (!Object.keys(audio).length) return;
-      const stored = this.lines.find((l) => l.seq === line.seq);
-      if (stored) (stored.audio = { ...stored.audio, ...audio }), await this.save("lines");
-      this.send(["listener"], { type: "audio", seq: line.seq, audio });
+      if (this.lines.includes(line)) await this.save("lines");
     } finally {
       this.cloning--;
     }
