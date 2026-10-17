@@ -106,7 +106,8 @@ export class Room extends DurableObject<Env> {
   /** HACKATHON mode: the script lines sent by the speaker's laptop and what prep has made for them, saved as each piece lands. */
   prepLines: { h: string; text: string }[] = [];
   prepTr: Record<string, Record<string, string>> = {};
-  prepClips: Record<string, 1> = {};
+  /** 1 = the clip is in this room's own audio folder; a string = its R2 key (no extension) elsewhere, shared by a duplicate. */
+  prepClips: Record<string, 1 | string> = {};
   private prepFails: Record<string, number> = {};
   private prepTrFails = 0;
   slideTranslations: Record<number, Record<string, string[]>> = {};
@@ -122,28 +123,31 @@ export class Room extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions", "prepLines", "prepTr", "prepClips", "slideLog", "reactLog"]);
-      this.meta = (s.get("meta") as Meta) ?? null;
-      this.pages = (s.get("pages") as typeof this.pages) ?? [];
-      this.chunks = (s.get("chunks") as Chunk[]) ?? [];
-      this.lines = (s.get("lines") as Line[]) ?? [];
-      this.questions = (s.get("questions") as Question[]) ?? [];
-      this.convos = (s.get("convos") as Convo[]) ?? [];
-      this.cache = (s.get("cache") as Record<string, Answer>) ?? {};
-      this.peak = (s.get("peak") as number) ?? 0;
-      this.summary = (s.get("summary") as Summary) ?? null;
-      this.polls = (s.get("polls") as Poll[]) ?? [];
-      this.deckPages = (s.get("deckPages") as DeckPageRows[]) ?? [];
-      this.slideTranslations = (s.get("slideTranslations") as typeof this.slideTranslations) ?? {};
-      this.script = cleanScript(s.get("script"));
-      this.reactions = (s.get("reactions") as typeof this.reactions) ?? {};
-      this.prepLines = (s.get("prepLines") as typeof this.prepLines) ?? [];
-      this.prepTr = (s.get("prepTr") as typeof this.prepTr) ?? {};
-      this.prepClips = (s.get("prepClips") as typeof this.prepClips) ?? {};
-      this.slideLog = (s.get("slideLog") as SlideMark[]) ?? [];
-      this.reactLog = (s.get("reactLog") as ReactMark[]) ?? [];
-    });
+    ctx.blockConcurrencyWhile(() => this.load());
+  }
+
+  /** Everything the room keeps, from storage. Also run after a delete, so a re-used name starts clean. */
+  private async load() {
+    const s = await this.ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions", "prepLines", "prepTr", "prepClips", "slideLog", "reactLog"]);
+    this.meta = (s.get("meta") as Meta) ?? null;
+    this.pages = (s.get("pages") as typeof this.pages) ?? [];
+    this.chunks = (s.get("chunks") as Chunk[]) ?? [];
+    this.lines = (s.get("lines") as Line[]) ?? [];
+    this.questions = (s.get("questions") as Question[]) ?? [];
+    this.convos = (s.get("convos") as Convo[]) ?? [];
+    this.cache = (s.get("cache") as Record<string, Answer>) ?? {};
+    this.peak = (s.get("peak") as number) ?? 0;
+    this.summary = (s.get("summary") as Summary) ?? null;
+    this.polls = (s.get("polls") as Poll[]) ?? [];
+    this.deckPages = (s.get("deckPages") as DeckPageRows[]) ?? [];
+    this.slideTranslations = (s.get("slideTranslations") as typeof this.slideTranslations) ?? {};
+    this.script = cleanScript(s.get("script"));
+    this.reactions = (s.get("reactions") as typeof this.reactions) ?? {};
+    this.prepLines = (s.get("prepLines") as typeof this.prepLines) ?? [];
+    this.prepTr = (s.get("prepTr") as typeof this.prepTr) ?? {};
+    this.prepClips = (s.get("prepClips") as typeof this.prepClips) ?? {};
+    this.slideLog = (s.get("slideLog") as SlideMark[]) ?? [];
+    this.reactLog = (s.get("reactLog") as ReactMark[]) ?? [];
   }
 
   private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations" | "script" | "reactions" | "prepLines" | "prepTr" | "prepClips" | "slideLog" | "reactLog")[]) {
@@ -269,7 +273,7 @@ export class Room extends DurableObject<Env> {
 
     switch (`${req.method} ${action}`) {
       case "GET meta":
-        return json({ ...this.publicMeta(), host: isHost, me: me?.id ?? null, ...(me ? { sampleText: SAMPLE_TEXT } : {}), ...(isHost ? { joinKey: m.joinKey, script: this.script } : {}) });
+        return json({ ...this.publicMeta(), host: isHost, me: me?.id ?? null, ...(me ? { sampleText: SAMPLE_TEXT } : {}), ...(isHost ? { joinKey: m.joinKey, script: this.script, prep: this.prepStatus() } : {}) });
       case "GET ws":
         return this.openSocket(url, isHost, me);
       case "GET transcript":
@@ -303,8 +307,9 @@ export class Room extends DurableObject<Env> {
       }
       case "GET audio": {
         const k = (url.searchParams.get("k") ?? "").replace(/[^a-z0-9-]/g, "");
-        const mp3 = await this.env.FILES.get(`${m.id}/audio/${k}.mp3`);
-        const obj = mp3 ?? (await this.env.FILES.get(`${m.id}/audio/${k}.wav`)); // clips stored before mp3 are wav
+        const base = this.prepClips[k] ? this.clipBase(k) : `${m.id}/audio/${k}`; // a duplicate's prepared clips live with the original
+        const mp3 = await this.env.FILES.get(`${base}.mp3`);
+        const obj = mp3 ?? (await this.env.FILES.get(`${base}.wav`)); // clips stored before mp3 are wav
         return obj ? new Response(obj.body, { headers: { "content-type": mp3 ? "audio/mpeg" : "audio/wav", "cache-control": "public, max-age=86400" } }) : json({ error: "No clip" }, 404);
       }
       case "POST join": {
@@ -424,6 +429,51 @@ export class Room extends DurableObject<Env> {
         return this.closePoll(String(body.pid ?? ""));
       case "POST addanswer":
         return m.mode === "stage" ? this.teachQuestion(body) : this.teachAnswer(body);
+      case "GET export": {
+        // Everything a duplicate needs to give this presentation again from the start (worker.ts duplicate). Not what was said.
+        if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
+        return json({
+          title: m.title, speaker: m.speaker, langs: m.langs, voice: m.voiceMode, presetsEnabled: !!m.presetsEnabled, about: m.about, keep: m.keep,
+          pages: this.pages, script: this.script, deck: !!m.deck, deckLang: m.deckLang, deckPages: this.deckPages, slideTranslations: this.slideTranslations,
+          prepLines: this.prepLines, prepTr: this.prepTr, prepClips: this.clipRefs(), s0voice: !!m.speakers?.[0]?.voice,
+        });
+      }
+      case "POST import": {
+        // Internal only (worker.ts sets x-internal; a browser can't): prepClips name R2 keys that GET audio serves.
+        if (req.headers.get("x-internal") !== "1") return json({ error: "Not allowed" }, 403);
+        m.deck = !!body.deck;
+        m.deckLang = deckLang(body.deckLang);
+        this.deckPages = sanitizeDeckPages(body.deckPages);
+        this.slideTranslations = body.slideTranslations ?? {};
+        this.prepLines = Array.isArray(body.prepLines) ? body.prepLines : [];
+        this.prepTr = body.prepTr ?? {};
+        this.prepClips = body.prepClips ?? {};
+        if (body.s0voice && m.speakers?.[0]) m.speakers[0].voice = true;
+        await this.save("meta", "deckPages", "slideTranslations", "prepLines", "prepTr", "prepClips");
+        return json({ ok: true });
+      }
+      case "GET cliprefs":
+        return json({ refs: Object.values(this.clipRefs()) });
+      case "POST destroy": {
+        // Internal only: delete this presentation, its files and recordings, except clips another presentation still plays.
+        if (req.headers.get("x-internal") !== "1") return json({ error: "Not allowed" }, 403);
+        const keep = new Set<string>(Array.isArray(body.keep) ? body.keep : []);
+        const keys = Object.values(this.clipRefs()).filter((b) => !b.startsWith(`${m.id}/`)).flatMap((b) => [`${b}.mp3`, `${b}.wav`]);
+        for (let cursor: string | undefined, more = true; more; ) {
+          const page = await this.env.FILES.list({ prefix: `${m.id}/`, cursor });
+          keys.push(...page.objects.map((o) => o.key));
+          (more = page.truncated), (cursor = page.truncated ? page.cursor : undefined);
+        }
+        const gone = keys.filter((k) => !keep.has(k.replace(/\.(mp3|wav)$/, "")));
+        for (let i = 0; i < gone.length; i += 1000) await this.env.FILES.delete(gone.slice(i, i + 1000));
+        for (const ws of this.ctx.getWebSockets()) try { ws.close(1000, "Deleted"); } catch {}
+        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAll();
+        this.samples.clear();
+        this.sampleMime.clear();
+        await this.load();
+        return json({ ok: true, deleted: gone.length });
+      }
       case "POST prep": {
         // HACKATHON mode: translate and clone every script line once, before the talk. The alarm does the work.
         if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
@@ -790,6 +840,17 @@ export class Room extends DurableObject<Env> {
     return [...(m.speakers?.[0]?.voice ? [null] : []), ...(m.presetsEnabled ? PRESET_VOICES : [])];
   }
 
+  /** R2 key (no extension) of a prepared clip: this room's audio folder, or where a duplicated original keeps it. */
+  private clipBase(k: string) {
+    const ref = this.prepClips[k];
+    return typeof ref === "string" ? ref : `${this.meta!.id}/audio/${k}`;
+  }
+
+  /** Every prepared clip as its R2 key: what a duplicate shares, and what a delete must keep for the others. */
+  private clipRefs() {
+    return Object.fromEntries(Object.keys(this.prepClips).map((k) => [k, this.clipBase(k)]));
+  }
+
   /** Every clip the script needs: line × room language × voice. */
   private prepJobs() {
     const voices = this.prepVoices();
@@ -832,19 +893,23 @@ export class Room extends DurableObject<Env> {
       const jobs = this.prepJobs().filter((j) => !this.prepClips[j.key] && this.prepTr[j.h]?.[j.lang] && (this.prepFails[j.key] ?? 0) < PREP_TRIES);
       const ref = jobs.some((j) => !j.voice) ? await this.speakerSample("s0") : null;
       await Promise.allSettled(jobs.slice(0, PREP_IN_FLIGHT).map(async (j) => {
-        const out: SpeechStatus = { status: 0, retryAfter: 0 };
-        const text = this.prepTr[j.h]![j.lang]!;
-        if (!j.voice && !ref) return void (this.prepFails[j.key] = PREP_TRIES); // the sample is gone: nothing to clone from
-        const wav = j.voice
-          ? await voiceFor(this.env, j.voice.clip(), text, j.lang, j.voice.mime, j.voice.referenceTranscript, "prep", out)
-          : await voiceFor(this.env, ref!.sample, text, j.lang, ref!.mime, SAMPLE_TEXT, "prep", out);
-        if (wav) {
-          const fmt = clipFormat(wav);
-          await this.env.FILES.put(`${m.id}/audio/${j.key}.${fmt.ext}`, wav, { httpMetadata: { contentType: fmt.mime } });
-          this.prepClips[j.key] = 1;
-          await this.save("prepClips");
-        } else if (live && (out.status === 0 || out.status === 429)) wait = Math.max(wait, out.retryAfter || 3_000);
-        else (this.prepFails[j.key] = (this.prepFails[j.key] ?? 0) + 1), (wait = Math.max(wait, 2_000));
+        try {
+          const out: SpeechStatus = { status: 0, retryAfter: 0 };
+          const text = this.prepTr[j.h]![j.lang]!;
+          if (!j.voice && !ref) return void (this.prepFails[j.key] = PREP_TRIES); // the sample is gone: nothing to clone from
+          const wav = j.voice
+            ? await voiceFor(this.env, j.voice.clip(), text, j.lang, j.voice.mime, j.voice.referenceTranscript, "prep", out)
+            : await voiceFor(this.env, ref!.sample, text, j.lang, ref!.mime, SAMPLE_TEXT, "prep", out);
+          if (wav) {
+            const fmt = clipFormat(wav);
+            await this.env.FILES.put(`${m.id}/audio/${j.key}.${fmt.ext}`, wav, { httpMetadata: { contentType: fmt.mime } });
+            this.prepClips[j.key] = 1;
+            await this.save("prepClips");
+          } else if (live && (out.status === 0 || out.status === 429)) wait = Math.max(wait, out.retryAfter || 3_000);
+          else (this.prepFails[j.key] = (this.prepFails[j.key] ?? 0) + 1), (wait = Math.max(wait, 2_000));
+        } catch {
+          this.prepFails[j.key] = (this.prepFails[j.key] ?? 0) + 1; // a throw (reference clip, R2) is a real failure too
+        }
       }));
     }
     this.send(["host"], { type: "prep", ...this.prepStatus() });

@@ -140,6 +140,8 @@ const section = (head, sub, ...body) =>
   h("section.form-section", {}, h("header", {}, h("h2", {}, head), h("p", {}, sub)), h("div.stack", {}, ...body));
 
 const create = h("button.btn.primary.big", { type: "submit" }, "Create the room", icon("right"));
+// Signed in: save it to your presentations and come back to it another day (its prep keeps going without this page).
+const later = user ? h("button.btn.big", { type: "submit" }, "Save for later") : null;
 const form = h("form", {},
   section("Your talk", "Shown on every listener's phone.", h("label.field", {}, "Title", title), h("label.field", {}, "Speaker", speaker), link.el),
   section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs, deckPreview),
@@ -150,12 +152,14 @@ const form = h("form", {},
   section("Script", "Optional. Only you see it, as a teleprompter above your slides. Word, PDF or text.", script, h("div.row", { style: { gap: "10px" } }, scriptUpload, scriptFile, scriptInfo)),
   section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
   section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices)), sampleScript, presetField),
-  h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end" } }, create),
+  h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end", gap: "10px" } }, later, create),
 );
 
 form.onsubmit = async (e) => {
   e.preventDefault();
   if (!state.langs.length) return toast("Pick at least one language");
+  const saving = !!later && e.submitter === later;
+  if (later) later.disabled = true;
   create.disabled = true;
   create.firstChild.textContent = "Creating…";
   try {
@@ -179,9 +183,11 @@ form.onsubmit = async (e) => {
     const lines = parseScript(script.value).lines.map((l) => l.text);
     const prepping = (user?.hackathon ?? true) && lines.length > 0
       && (await api(`/api/rooms/${id}/prep`, { method: "POST", key: hostKey, body: { lines } }).then(() => true, () => false));
+    if (saving) return void (location.href = "/me");
     ready(id, hostKey, prepping);
   } catch (err) {
     toast(err.message || "Couldn't create the room");
+    if (later) later.disabled = false;
     create.disabled = false;
     create.firstChild.textContent = "Create the room";
   }
