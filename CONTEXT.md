@@ -54,6 +54,10 @@ _Avoid_: caption, message, utterance
 **Caption**:
 A line as one listener reads it, in that listener's language.
 
+**Reaction**:
+A listener's single emoji on a line (👍 👎 😂 🤯 ❤️ 🤔), chosen by tapping its caption; they can change or clear it. Private to that listener: only the projector shows it, anonymously, and the speaker reads them on the Post-talk card. Not a Poll.
+_Avoid_: like, vote, feedback
+
 **Deck**:
 The speaker's slides for a Stage. Its written words are in one language, English unless the speaker chooses another.
 _Avoid_: presentation, slideshow

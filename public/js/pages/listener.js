@@ -3,7 +3,7 @@ import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { stageAudio } from "/js/stage-audio.js";
 import { t } from "/js/i18n.js";
-import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
+import { captionFor, focusIndex, nearBottom, nextNewCount } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
 import { paintSlideRows, showDesignedPage, slideViewToggleVisible } from "/js/slide-repaint.js";
@@ -25,6 +25,10 @@ const myQs = store(`eco:qs:${id}`) ?? [];
 let polls = []; // what the speaker asked: open polls, plus closed ones whose results they shared
 const votes = store(`eco:votes:${id}`) ?? {}; // poll id -> my answer
 const rankDraft = {}; // poll id -> option order, before Send
+const reacts = store(`eco:reacts:${id}`) ?? {}; // `${seq}-${t}` -> my reaction on that Line
+const keyOf = (l) => `${l.seq}-${l.t}`;
+let picked = null; // the Line whose overlay is open
+const REACTIONS = ["👍", "👎", "😂", "🤯", "❤️", "🤔"]; // same list as src/reaction.ts
 const voter = store("eco:voter") ?? ((v) => (store("eco:voter", v), v))(crypto.randomUUID()); // one answer per phone per poll
 let live = null;
 let atBottom = true; // smart follow: pinned to live unless the listener scrolls up
@@ -133,39 +137,99 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", { onclick: () => showMsg(l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
-    !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l))));
+  caps.replaceChildren(...lines.slice(-50).map((l) => h(keyOf(l) === picked ? "p.picked" : "p", { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
+    !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l),
+    reacts[keyOf(l)] ? h("span.emo.my-react", {}, reacts[keyOf(l)]) : null)));
   if (atBottom) caps.scrollTop = caps.scrollHeight;
+  markFocus();
+}
+
+// Bold follows the scroll: the bottom-most fully visible line, or the latest while following live.
+function markFocus() {
+  const ps = [...caps.children];
+  const i = focusIndex(ps.map((p) => p.getBoundingClientRect()), caps.getBoundingClientRect().bottom, atBottom);
+  ps.forEach((p, j) => p.classList.toggle("focus", j === i));
+}
+
+// One tap opens the caption; a quick second tap likes it without opening (dblclick is unreliable on phones).
+let tapTimer = 0, tapLine = null;
+function tapCap(el, l) {
+  if (tapTimer && tapLine === l) {
+    clearTimeout(tapTimer), (tapTimer = 0);
+    burst(el, "👍");
+    if (reacts[keyOf(l)] !== "👍") react(l, "👍");
+    return;
+  }
+  clearTimeout(tapTimer);
+  tapLine = l;
+  tapTimer = setTimeout(() => ((tapTimer = 0), showMsg(l)), 250);
+}
+
+async function react(l, r) {
+  const k = keyOf(l), before = reacts[k];
+  r ? (reacts[k] = r) : delete reacts[k];
+  drawCaps();
+  try {
+    await api(`/api/rooms/${id}/react`, { method: "POST", body: { voter, seq: l.seq, t: l.t, r } });
+    store(`eco:reacts:${id}`, Object.fromEntries(Object.entries(reacts).slice(-200)));
+  } catch (err) {
+    before ? (reacts[k] = before) : delete reacts[k];
+    drawCaps();
+    if (err.status !== 404) toast(T("busy")); // 404: the Line has left the room
+  }
+}
+
+function burst(anchor, r) {
+  const b = anchor.getBoundingClientRect();
+  const el = h("span.emo.emo-burst", { style: { left: `${b.left + b.width / 2}px`, top: `${b.top + b.height / 2}px` } }, r);
+  el.addEventListener("animationend", () => el.remove());
+  document.body.append(el);
+  navigator.vibrate?.(10);
 }
 
 // Tap a caption to read it comfortably: same overlay as the welcome sheet, centered.
 function showMsg(l) {
   const textLang = captionFor(l, lang).lang;
   const close = h("button.btn.ghost", { type: "button" }, icon("x"), T("close"));
+  const reactRow = h("div.msg-react");
+  const drawReact = () => reactRow.replaceChildren(...REACTIONS.map((r, i) => [
+    i === 2 ? h("span.msg-react-gap") : null,
+    h("button.toggle.emo", { type: "button", "aria-pressed": String(reacts[keyOf(l)] === r), "aria-label": r, onclick: (e) => {
+      const off = reacts[keyOf(l)] === r;
+      if (!off) burst(e.currentTarget, r);
+      react(l, off ? null : r).then(drawReact);
+      drawReact();
+    } }, r),
+  ]).flat().filter(Boolean));
+  drawReact();
+  picked = keyOf(l);
+  drawCaps();
   const wrap = h("div.sheet-wrap.msg-wrap", { onclick: (e) => { if (e.target === wrap) done(); } },
     h("div.msg-modal", {},
       h("p.msg-meta", {}, who(meta, l), h("span.when", {}, fmtTime(l.at)), h("span.msg-lang", {}, textLang ? langName(textLang, textLang) : T("original"))),
       h("p.msg-text", {}, textOf(l)),
+      reactRow,
       h("div.msg-end", {}, close),
     ));
   const onKey = (e) => { if (e.key === "Escape") done(); };
-  function done() { wrap.remove(); removeEventListener("keydown", onKey); }
+  function done() { wrap.remove(); removeEventListener("keydown", onKey); picked = null; drawCaps(); }
   close.onclick = done;
   addEventListener("keydown", onKey);
   document.body.append(wrap);
 }
 
 function drawJump() {
-  jumpBtn.replaceChildren(`${newCount} ${T("newLines")}`, icon("down"));
-  jumpBtn.classList.toggle("show", !atBottom && newCount > 0);
+  jumpBtn.replaceChildren(...(newCount ? [`${newCount} ${T("newLines")}`] : []), icon("down"));
+  jumpBtn.setAttribute("aria-label", T("latest"));
+  jumpBtn.classList.toggle("show", !atBottom);
 }
 
 function snapToLive() {
   atBottom = true;
   newCount = 0;
   drawJump();
-  if (caps.scrollTo) caps.scrollTo({ top: caps.scrollHeight, behavior: "smooth" });
-  else caps.scrollTop = caps.scrollHeight;
+  caps.scrollTop = caps.scrollHeight; // instant: a smooth scroll's onscroll ticks would flip atBottom back mid-way
+  markFocus();
 }
 
 caps.onscroll = () => {
@@ -175,6 +239,7 @@ caps.onscroll = () => {
   // counting up is addLine's job, so mere scrolling never bumps the count.
   if (atBottom) newCount = 0;
   if (atBottom !== was) drawJump();
+  markFocus();
 };
 
 jumpBtn.onclick = snapToLive;
