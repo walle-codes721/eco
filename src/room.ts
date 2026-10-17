@@ -10,7 +10,7 @@ import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLin
 import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
 import { phraseEvidence } from "./utterance";
 import { translationTiming, timingHeader } from "./timing";
-import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
+import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_PHARMACY, DEMO_PHARMACY_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 
 type Status = "lobby" | "live" | "ended";
 
@@ -47,7 +47,7 @@ export interface Summary { n: number; text: Record<string, string>; live: boolea
 type Answer = { covered: boolean; answer: string; cite: string; q_en: string; sourceSeq?: number; sourceContext?: string };
 type CustomerTurn = { src: string; lang: string; to_owner: string; answer: { covered: boolean; text: string; text_owner: string; cite: string } };
 
-export const DEMOS: Record<string, "stage" | "counter"> = { "stage/eco/demo": "stage", "counter/eco/gelato": "counter" };
+export const DEMOS: Record<string, "stage" | "counter"> = { "stage/eco/demo": "stage", "counter/eco/gelato": "counter", "counter/eco/farmacia": "counter" };
 const LIMITS = { ask: [3, 10], voice: [4, 40], turn: [8, 60] } as const; // per visitor per hour: [demo, normal]
 
 const rid = () => crypto.randomUUID().replaceAll("-", "");
@@ -142,14 +142,25 @@ export class Room extends DurableObject<Env> {
     if (DEMOS[id] === "stage") {
       await this.init(id, { mode: "stage", title: "Eco: one engine, two rooms", speaker: "Seb", langs: ["it", "es", "hi"], pages: DEMO_SLIDES, demo: true });
     } else {
-      await this.init(id, { mode: "counter", title: DEMO_SHOP.name, bizType: DEMO_SHOP.type, ownerLang: DEMO_SHOP.ownerLang, pages: DEMO_SHOP.sources, demo: true });
+      const pharmacy = id.endsWith("/farmacia");
+      const shop = pharmacy ? DEMO_PHARMACY : DEMO_SHOP;
+      await this.init(id, { mode: "counter", title: shop.name, bizType: shop.type, ownerLang: shop.ownerLang, pages: shop.sources, demo: true });
       const t0 = Date.now() - 20 * 60_000;
-      this.convos = DEMO_CONVOS.map((c, i) => {
-        const t = t0 + i * 6 * 60_000;
-        const turns: Turn[] = [{ id: uid(), t, side: "customer", lang: c.lang, src: c.customer, out: c.to_owner, live: false }];
-        if (c.answer.covered) turns.push({ id: uid(), t: t + 2500, side: "eco", lang: c.lang, src: c.answer.text, out: c.answer.text_owner, cite: c.answer.cite, live: false });
-        return { id: `seed${i}`, lang: c.lang, started: t, open: !c.answer.covered, turns };
-      });
+      this.convos = pharmacy
+        ? DEMO_PHARMACY_CONVOS.map((c, i) => {
+            const t = t0 + i * 6 * 60_000;
+            const turns: Turn[] = [{ id: uid(), t, side: "customer", lang: c.lang, src: c.customer, out: c.to_owner, live: false, ...(c.health ? { health: c.health } : {}) }];
+            const line = (lang: string) => (c.health === "emergency" ? emergencyLine(lang, "pharmacy") : adviceLine(lang, "pharmacy"));
+            if (c.health) turns.push({ id: uid(), t: t + 2500, side: "eco", lang: c.lang, src: line(c.lang), out: line(shop.ownerLang), cite: "", live: false });
+            else if (c.answer?.covered) turns.push({ id: uid(), t: t + 2500, side: "eco", lang: c.lang, src: c.answer.text, out: c.answer.text_owner, cite: c.answer.cite, live: false });
+            return { id: `seed${i}`, lang: c.lang, started: t, open: !!c.health || !c.answer?.covered, turns };
+          })
+        : DEMO_CONVOS.map((c, i) => {
+            const t = t0 + i * 6 * 60_000;
+            const turns: Turn[] = [{ id: uid(), t, side: "customer", lang: c.lang, src: c.customer, out: c.to_owner, live: false }];
+            if (c.answer.covered) turns.push({ id: uid(), t: t + 2500, side: "eco", lang: c.lang, src: c.answer.text, out: c.answer.text_owner, cite: c.answer.cite, live: false });
+            return { id: `seed${i}`, lang: c.lang, started: t, open: !c.answer.covered, turns };
+          });
       await this.save("convos");
     }
   }
@@ -837,7 +848,7 @@ export class Room extends DurableObject<Env> {
         pub: m.demo,
         mock: () => {
           if (!text && !m.demo) return { src: MOCK_LINE, lang: hint, to_owner: MOCK_LINE, answer: { covered: false, text: "", text_owner: "", cite: "" } };
-          const seed = !m.demo ? null : text ? DEMO_CONVOS.find((c) => normalize(c.customer) === normalize(text)) : DEMO_CONVOS[this.mockI++ % DEMO_CONVOS.length];
+          const seed = !m.demo || !m.id.endsWith("/gelato") ? null : text ? DEMO_CONVOS.find((c) => normalize(c.customer) === normalize(text)) : DEMO_CONVOS[this.mockI++ % DEMO_CONVOS.length];
           if (seed) return { src: seed.customer, lang: seed.lang, to_owner: seed.to_owner, answer: seed.answer };
           const b = bestSentence(text, selectContext(this.chunks, text).best);
           return { src: text, lang: hint, to_owner: text, answer: { covered: b.covered, text: b.text, text_owner: b.text, cite: b.cite } };

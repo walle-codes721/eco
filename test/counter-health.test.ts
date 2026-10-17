@@ -282,3 +282,69 @@ describe("pharmacy, clinic and hospital: mock mode, with no AI at all", () => {
     expect(eco(await say("I have chest pain", "en", "c2")).src).toBe(emergencyLine("en", "pharmacy"));
   });
 });
+
+async function demo(id: string) {
+  const saved = new Map<string, unknown>();
+  let ready: Promise<unknown>;
+  const ctx = {
+    storage: {
+      get: async (keys: string[]) => new Map(keys.map((key) => [key, saved.get(key)])),
+      put: async (values: Record<string, unknown>) => { for (const [key, value] of Object.entries(values)) saved.set(key, value); },
+    },
+    blockConcurrencyWhile: (fn: () => Promise<unknown>) => (ready = fn()),
+    getWebSockets: () => [],
+    waitUntil: (promise: Promise<unknown>) => { void promise; },
+  };
+  const room = new Room(ctx as unknown as DurableObjectState, { ECO_LIVE: "0" } as Env);
+  await ready!;
+  const call = async (action: string, init: RequestInit = {}) => {
+    const res = await room.fetch(new Request(`https://room/${action}`, { ...init, headers: { "x-room": id, "x-ip": "visitor", "content-type": "application/json", ...(init.headers as object) } }));
+    return { status: res.status, body: (await res.json()) as any };
+  };
+  return { room, call };
+}
+
+describe("the public demo pharmacy", () => {
+  it("opens as a pharmacy with the default emergency number, and the visitor can read its conversations", async () => {
+    const { call } = await demo("counter/eco/farmacia");
+    const meta = await call("meta");
+    expect(meta.body).toMatchObject({ bizType: "pharmacy", demo: true, emergency: "112", title: "Farmacia Centrale", ownerLang: "it" });
+    const convos = await call("convos");
+    expect(convos.status).toBe(200);
+    expect(convos.body.convos).toHaveLength(3);
+  });
+
+  it("starts with an ordinary question, a medical question and an emergency, the last two waiting for the owner", async () => {
+    const { call } = await demo("counter/eco/farmacia");
+    const { convos } = (await call("convos")).body as { convos: { open: boolean; lang: string; turns: { side: string; src: string; out: string; health?: string }[] }[] };
+    expect(convos.map((c) => c.open)).toEqual([false, true, true]);
+    expect(convos[0].turns[0].health).toBeUndefined();
+    expect(convos[1].turns[0].health).toBe("advice");
+    expect(convos[2].turns[0].health).toBe("emergency");
+    // the fixed replies are the real ones, in the customer's language and in the owner's
+    expect(convos[1].turns[1]).toMatchObject({ side: "eco", src: adviceLine("en", "pharmacy"), out: adviceLine("it", "pharmacy") });
+    expect(convos[2].turns[1]).toMatchObject({ side: "eco", src: emergencyLine("es", "pharmacy"), out: emergencyLine("it", "pharmacy") });
+  });
+
+  it("gives a visitor the fixed lines too, with no AI", async () => {
+    const { call } = await demo("counter/eco/farmacia");
+    const ask = async (text: string, cid: string) =>
+      (await call("turn", { method: "POST", body: JSON.stringify({ side: "customer", cid, lang: "en", text }) })).body.turns.find((t: { side: string }) => t.side === "eco").src;
+    expect(await ask("What dose of paracetamol should I take?", "v1")).toBe(adviceLine("en", "pharmacy"));
+    expect(await ask("I have chest pain", "v2")).toBe(emergencyLine("en", "pharmacy"));
+  });
+
+  it("does not borrow the gelato demo's canned answers", async () => {
+    const { call } = await demo("counter/eco/farmacia");
+    const r = await call("turn", { method: "POST", body: JSON.stringify({ side: "customer", cid: "v3", lang: "en", text: "Is the pistachio gluten free?" }) });
+    expect(JSON.stringify(r.body)).not.toContain("pistachio nuts and milk");
+  });
+
+  it("the gelato demo is unchanged", async () => {
+    const { call } = await demo("counter/eco/gelato");
+    const meta = await call("meta");
+    expect(meta.body).toMatchObject({ bizType: "restaurant", demo: true, title: "Gelateria Luna" });
+    expect(meta.body.emergency).toBeUndefined();
+    expect((await call("convos")).body.convos.length).toBeGreaterThan(0);
+  });
+});
