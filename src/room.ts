@@ -11,7 +11,7 @@ import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLin
 import {
   voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, type VoiceMode, type VoiceSampleMime,
 } from "./voice";
-import { PRESET_VOICES, ensurePresetTranscript, presetAudioKey, publicPresets } from "./preset-voice";
+import { PRESET_VOICES, presetAudioKey, publicPresets } from "./preset-voice";
 import { cloneDemand, parseListenerVoice, type ListenerVoice } from "./voice-choice";
 import { VOICE_CLIPS_IN_FLIGHT } from "./limits";
 import { phraseEvidence } from "./utterance";
@@ -706,8 +706,7 @@ export class Room extends DurableObject<Env> {
     for (const preset of PRESET_VOICES) {
       const langs = demand.presetLangs[preset.id] ?? [];
       if (!langs.length) continue;
-      const refText = await ensurePresetTranscript(this.env, this.env.FILES, preset.id);
-      if (!refText) return;
+      const refText = preset.referenceTranscript;
       const sample = preset.clip();
       const audio: Record<string, string> = {};
       await Promise.allSettled(langs.map(async (lang) => {

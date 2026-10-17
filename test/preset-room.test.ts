@@ -86,35 +86,23 @@ describe("preset voice at the room boundary", () => {
     }
   });
 
-  it("dedupes simultaneous transcript fetches into one MiMo call", async () => {
+  it("uses the reviewed bundled transcript live, with no extra MiMo call", async () => {
     vi.spyOn(client, "isLive").mockReturnValue(true);
+    const tfSpy = vi.spyOn(client, "tf");
     vi.spyOn(presets.PRESET_VOICES[0]!, "clip").mockReturnValue(new ArrayBuffer(30_000));
-    let resolves!: (v: { data: { transcript: string }; live: boolean; ms: number }) => void;
-    const pending = new Promise<{ data: { transcript: string }; live: boolean; ms: number }>((r) => { resolves = r; });
-    const tfSpy = vi.spyOn(client, "tf").mockReturnValue(pending as never);
-    const env = { ECO_LIVE: "1", RADEON_API_KEY: "k", FILES: { get: async () => null, put: async () => {} } } as unknown as Env;
-    const first = presets.ensurePresetTranscript(env, env.FILES, "morgan-freeman");
-    const second = presets.ensurePresetTranscript(env, env.FILES, "morgan-freeman");
-    resolves({ data: { transcript: "Stored once." }, live: true, ms: 1 });
-    expect(await first).toBe("Stored once.");
-    expect(await second).toBe("Stored once.");
-    expect(tfSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips preset cloning until a transcript exists in live mode", async () => {
-    vi.spyOn(client, "isLive").mockReturnValue(true);
-    vi.spyOn(presets, "ensurePresetTranscript").mockResolvedValue(null);
-    const { room, messages, tasks } = await presetRoom(true);
-    const voiceSpy = vi.spyOn(voices, "voiceFor");
+    const { room, tasks } = await presetRoom(true);
+    room.meta!.speakers![0].voice = false;
+    const voiceSpy = vi.spyOn(voices, "voiceFor").mockResolvedValue(new ArrayBuffer(8));
     try {
       await room.fetch(new Request("https://room/utterance", {
         method: "POST",
         headers: { "x-room": id, "x-key": room.meta!.hostKey, "content-type": "application/json" },
-        body: JSON.stringify({ text: "No preset yet." }),
+        body: JSON.stringify({ text: "Hello live." }),
       }));
       await Promise.all(tasks);
-      expect(voiceSpy).not.toHaveBeenCalled();
-      expect(messages.filter((m) => m.type === "audio")).toEqual([]);
+      expect(tfSpy.mock.calls.some((c) => c[1] === "extract")).toBe(false);
+      expect(voiceSpy).toHaveBeenCalled();
+      expect(voiceSpy.mock.calls[0]![5]).toBe(presets.PRESET_VOICES[0]!.referenceTranscript);
     } finally {
       voiceSpy.mockRestore();
     }
