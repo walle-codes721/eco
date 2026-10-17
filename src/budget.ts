@@ -27,12 +27,16 @@ export class Budget extends DurableObject<Env> {
   private trippedAt = 0; // 0 on trips stored before probes existed: the first call after deploy probes
   private probing = false;
   private lastError: LastError | null = null;
+  private dayMemo: { at: number; v: ReturnType<Budget["day"]> } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS calls (t INTEGER, kind TEXT, model TEXT, ms INTEGER, status INTEGER, tin INTEGER, tout INTEGER, pub INTEGER)",
     );
+    // Cloudflare's free tier caps Durable Object rows read per day, and a scan reads every call ever logged: with this
+    // index a `t >= ?` query reads only the matching rows (17 Oct 2026: prep's scans used the day's cap and took Eco down).
+    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS calls_t ON calls (t)");
     ctx.blockConcurrencyWhile(async () => {
       this.tripped = (await ctx.storage.get<boolean>("tripped")) ?? false;
       this.fails = (await ctx.storage.get<number>("fails")) ?? 0;
@@ -59,10 +63,11 @@ export class Budget extends DurableObject<Env> {
       this.window = this.window.filter((t) => now - t < 60_000);
       this.voiceWindow = this.voiceWindow.filter((t) => now - t < 60_000);
       const probe = probeDue(this.tripped, this.trippedAt, this.probing, now);
+      const max = Number(this.env.ECO_MAX_CALLS ?? 0);
       const reason = admit(
         {
-          today: this.count(this.dayStart()),
-          max: Number(this.env.ECO_MAX_CALLS ?? 0),
+          today: max ? this.count(this.dayStart()) : 0, // no daily ceiling, no count: every call would read the day's rows
+          max,
           window: this.window.length,
           inflight: this.inflight,
           voiceInflight: this.voiceInflight,
@@ -117,11 +122,24 @@ export class Budget extends DurableObject<Env> {
   }
 
   async stats() {
-    const since = this.dayStart();
+    // Pages poll this (the speaker page every 15 s): the day's figures are read at most once a minute.
+    if (!this.dayMemo || Date.now() - this.dayMemo.at > 60_000) this.dayMemo = { at: Date.now(), v: this.day() };
+    return {
+      live: this.env.ECO_LIVE === "1" && !!this.env.RADEON_API_KEY, // same rule as tf.ts isLive
+      max: Number(this.env.ECO_MAX_CALLS ?? 0),
+      tripped: this.tripped,
+      retryAt: this.tripped ? this.trippedAt + PROBE_MS : null,
+      lastError: this.lastError,
+      ...this.dayMemo.v,
+    };
+  }
+
+  /** Today's calls, latency and spend, from the log. */
+  private day() {
     const rows = this.ctx.storage.sql
       .exec<{ kind: string; model: string; ms: number; tin: number; tout: number; status: number }>(
         "SELECT kind, model, ms, tin, tout, status FROM calls WHERE t >= ?",
-        since,
+        this.dayStart(),
       )
       .toArray();
     const ok = rows.filter((r) => r.status === 200);
@@ -134,12 +152,7 @@ export class Budget extends DurableObject<Env> {
       return s + (r.tin * pi + r.tout * po) / 1e6;
     }, 0);
     return {
-      live: this.env.ECO_LIVE === "1" && !!this.env.RADEON_API_KEY, // same rule as tf.ts isLive
       today: rows.length,
-      max: Number(this.env.ECO_MAX_CALLS ?? 0),
-      tripped: this.tripped,
-      retryAt: this.tripped ? this.trippedAt + PROBE_MS : null,
-      lastError: this.lastError,
       p50: { utterance: p50("utterance"), ask: p50("ask"), turn: p50("turn"), summary: p50("summary"), slide: p50("slide") },
       tokens: { in: ok.reduce((s, r) => s + r.tin, 0), out: ok.reduce((s, r) => s + r.tout, 0) },
       points: Math.round(points * 1e4) / 1e4,
