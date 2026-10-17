@@ -3,7 +3,7 @@ import { tf } from "./tf";
 import { MODELS, extractPrompt } from "./prompts";
 import { authRoute, sessionSub } from "./auth";
 import { NAME, slugify } from "./names";
-import { SAMPLE_TEXT, savedKey, sampleObjectKey, parseVoiceUpload, deleteStoredSample, loadStoredSample, hasStoredSample, VOICE_SAMPLE_EXTS } from "./voice";
+import { SAMPLE_TEXT, savedKey, sampleObjectKey, parseVoiceUpload, deleteStoredSample, loadStoredSample, hasStoredSample, VOICE_SAMPLE_EXTS, shownSentence, sampleSentence } from "./voice";
 
 export { Room } from "./room";
 export { Budget } from "./budget";
@@ -112,7 +112,10 @@ async function api(req: Request, env: Env, url: URL, path: string, ip: string): 
       if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
       const prefix = savedKey(sub);
       await deleteStoredSample(env.FILES, prefix);
-      await env.FILES.put(sampleObjectKey(prefix, parsed.ext), parsed.bytes, { httpMetadata: { contentType: parsed.mime } });
+      await env.FILES.put(sampleObjectKey(prefix, parsed.ext), parsed.bytes, {
+        httpMetadata: { contentType: parsed.mime },
+        customMetadata: { sentence: shownSentence(req.headers.get("x-sample-text")) }, // what it says: every clone is told this
+      });
       return json({ ok: true });
     }
   }
@@ -192,9 +195,10 @@ async function internal<T>(env: Env, id: string, action: string, sub: string, bo
   return res.json() as Promise<T>;
 }
 
-async function copyFile(files: R2Bucket, from: string, to: string) {
+/** `sample`: a voice sample keeps the sentence it says (an older one is dated by its upload, which the copy would reset). */
+async function copyFile(files: R2Bucket, from: string, to: string, sample = false) {
   const obj = await files.get(from);
-  if (obj) await files.put(to, await obj.arrayBuffer(), { httpMetadata: obj.httpMetadata });
+  if (obj) await files.put(to, await obj.arrayBuffer(), { httpMetadata: obj.httpMetadata, customMetadata: sample ? { ...obj.customMetadata, sentence: sampleSentence(obj) } : obj.customMetadata });
 }
 
 /** The same presentation again, from the start: slides, context, script, translations and prepared voices, nothing that was said.
@@ -209,7 +213,7 @@ async function duplicate(env: Env, id: string, sub: string, handle: string): Pro
     script: src.script, pages: src.pages.filter((p) => p.tag !== "notes"), notes: src.pages.find((p) => p.tag === "notes")?.text ?? "",
   });
   if (src.deck) await copyFile(env.FILES, `${id}/deck.pdf`, `${to}/deck.pdf`);
-  if (src.voice === "sample" && src.s0voice) for (const ext of VOICE_SAMPLE_EXTS) await copyFile(env.FILES, sampleObjectKey(`${id}/voice/s0`, ext), sampleObjectKey(`${to}/voice/s0`, ext));
+  if (src.voice === "sample" && src.s0voice) for (const ext of VOICE_SAMPLE_EXTS) await copyFile(env.FILES, sampleObjectKey(`${id}/voice/s0`, ext), sampleObjectKey(`${to}/voice/s0`, ext), true);
   await internal(env, to, "import", sub, {
     deck: src.deck, deckLang: src.deckLang, deckPages: src.deckPages, slideTranslations: src.slideTranslations,
     prepLines: src.prepLines, prepTr: src.prepTr, prepClips: src.prepClips, s0voice: src.s0voice,

@@ -71,7 +71,7 @@ export function sampleCard({ url, headers = {}, sampleText, has, intro, onChange
     if (file.size < MIN) return toast("Too short: read the whole script aloud");
     if (file.size > MAX) return toast("File too large: use a shorter recording");
     status.textContent = "Saving…";
-    const res = await fetch(url, { method: "PUT", headers: { ...headers, "content-type": mime, "x-consent": "yes" }, body: file });
+    const res = await fetch(url, { method: "PUT", headers: { ...headers, "content-type": mime, "x-consent": "yes", "x-sample-text": encodeURIComponent(sampleText) }, body: file });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       status.textContent = err.error || "Couldn't save the sample";
@@ -88,7 +88,8 @@ export function sampleCard({ url, headers = {}, sampleText, has, intro, onChange
     if (!(blob instanceof Blob) || blob.size < MIN) return toast("Too short: read the whole passage");
     if (blob.size > MAX) return toast("File too large: use a shorter recording");
     status.textContent = "Saving…";
-    const res = await fetch(url, { method: "PUT", headers: { ...headers, "content-type": "audio/wav", "x-consent": "yes" }, body: blob });
+    // The sentence shown here goes with the recording: the voice model is told exactly what it says.
+    const res = await fetch(url, { method: "PUT", headers: { ...headers, "content-type": "audio/wav", "x-consent": "yes", "x-sample-text": encodeURIComponent(sampleText) }, body: blob });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       status.textContent = err.error || "Couldn't save the sample";
