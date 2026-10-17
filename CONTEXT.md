@@ -78,6 +78,14 @@ _Avoid_: ignored slide, hidden slide
 The written words on a slide that sit together on one baseline. A wide gap on that baseline starts another row. Translated as one string, then painted across that row. A row the speaker marks when uploading the deck stays in the deck's language on every phone.
 _Avoid_: line, text run, fragment, quotation
 
+**Prep**:
+HACKATHON mode, before the talk: every line of the speaker's teleprompter script translated into each room language and voiced in each offered voice, once, and saved. Editing the script redoes only the lines that changed.
+_Avoid_: pre-generation, cache
+
+**Cue**:
+HACKATHON mode, live: the speaker's laptop hears them start a script line and the room plays that line from prep, about a second behind them. A cue makes no call; speech that isn't in the script isn't sent.
+_Avoid_: trigger, match
+
 **Now speaking**:
 The room's live signal of which speaker is talking at this moment, driven by speech detection on each speaker's device, never by an AI call.
 _Avoid_: active speaker

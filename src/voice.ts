@@ -1,7 +1,7 @@
 // Cloned voice: the speaker's consented sample + a translated line → one clip.
-// Live: OmniVoice on Token Factory. Otherwise the Hugging Face Space in voice/ if VOICE_URL is set. Mock: echo the sample.
+// Live: OmniVoice on Token Factory, falling back to the Hugging Face Space in voice/ if VOICE_URL is set. Mock: echo the sample.
 import type { Env } from "./env";
-import { tfSpeech, isLive } from "./tf";
+import { tfSpeech, isLive, type SpeechStatus } from "./tf";
 
 /** The sentence every speaker reads for their sample, so the model gets the reference transcript for free. */
 export const SAMPLE_TEXT =
@@ -83,9 +83,14 @@ export async function voiceFor(
   lang: string,
   mime: VoiceSampleMime = "audio/wav",
   refText: string = SAMPLE_TEXT,
+  kind: "voice" | "prep" = "voice",
+  out: SpeechStatus = { status: 0, retryAfter: 0 },
 ): Promise<ArrayBuffer | null> {
-  if (isLive(env)) return tfSpeech(env, text, lang, refB64(sample), refText, mime);
-  if (!env.VOICE_URL) return sample; // mock: echo the recorded sample
+  if (isLive(env)) {
+    const wav = await tfSpeech(env, text, lang, refB64(sample), refText, mime, kind, out);
+    // Not admitted (0) or told to slow down (429): wait for Token Factory. Any other failure falls back to our own Space.
+    if (wav || !env.VOICE_URL || out.status === 0 || out.status === 429) return wav;
+  } else if (!env.VOICE_URL) return sample; // mock: echo the recorded sample
   const form = new FormData();
   form.append("text", text);
   form.append("lang", lang);

@@ -88,6 +88,67 @@ export function parseScript(text) {
   return { lines, cues, notes };
 }
 
+/** Lowercase words without punctuation or accents: what the script and speech recognition can agree on. */
+export const words = (s) => String(s ?? "").toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").match(/[\p{L}\p{N}]+/gu) ?? [];
+
+/**
+ * HACKATHON mode: follows the speaker word by word through the teleprompter `lines` and says which line they just started.
+ * heard(text, run) takes speech recognition's running text and returns the lines to fire, in order.
+ * Each heard word moves the place in the script: to the next match at most NEAR script words ahead (dropped or misheard
+ * words in between), or up to FAR ahead when the two words before it match too (the speaker skipped ahead).
+ * A line fires once two of its words were heard (one for one-word lines), so a stray "the" or "so" doesn't fire it.
+ * ponytail: words only, so a spoken "35" never meets a written "thirty-five" (the next words catch up); the ↓ key fires by hand.
+ */
+export function cueFollower(lines, from = -1) {
+  const NEAR = 2, FAR = 400;
+  const script = [], lineOf = [], start = [], size = [];
+  lines.forEach((l, i) => {
+    const w = words(l.text);
+    start.push(script.length);
+    size.push(w.length);
+    for (const x of w) script.push(x), lineOf.push(i);
+  });
+  let pos = start[from + 1] ?? script.length; // the next script word expected
+  let used = 0, seen = 0, run = null, last = ["", ""], hits = 0, hitLine = -1;
+  const step = (w) => {
+    let c = -1, far = false;
+    for (let k = pos; k < Math.min(script.length, pos + FAR); k++) {
+      if (script[k] !== w) continue;
+      if (k - pos <= NEAR) { c = k; break; }
+      if (script[k - 1] === last[1] && script[k - 2] === last[0]) { c = k; far = true; break; }
+    }
+    last = [last[1], w];
+    if (c < 0) return [];
+    pos = c + 1;
+    const i = lineOf[c];
+    // A jump is backed by three words in a row. A line is entered at its first or second word, not mid-line ("is a").
+    hits = i === hitLine ? hits + (far ? 3 : 1) : far ? 3 : c - start[i] <= 1 ? 1 : 0;
+    hitLine = i;
+    const reached = hits >= Math.min(2, size[i]) ? i : i - 1;
+    if (reached <= from) return [];
+    // A small step crossed a line the recogniser missed: it was said, so play it. A jump plays only where it landed.
+    const fire = far ? [reached] : Array.from({ length: reached - from }, (_, j) => from + 1 + j);
+    from = reached;
+    return fire;
+  };
+  return {
+    get from() { return from; },
+    heard(text, nextRun) {
+      if (nextRun !== run) (run = nextRun), (used = 0); // recognition restarted: its text starts from empty
+      const w = words(text);
+      seen = w.length;
+      const fire = [];
+      for (let k = Math.min(used, w.length); k < w.length; k++) fire.push(...step(w[k]));
+      used = w.length;
+      return fire;
+    },
+    /** The speaker fired line i by hand (↓): expect its words next, without firing it again. */
+    fired(i) { from = i; pos = start[i] ?? pos; hitLine = -1; },
+    /** The teleprompter moved by hand: wait for line n, ignoring what was heard before. */
+    reset(n) { from = n - 1; pos = start[n] ?? script.length; used = seen; hitLine = -1; },
+  };
+}
+
 /** "112 lines · 9 slide cues · 1 note", plus a warning when cues run past the deck. */
 export function scriptSummary(text, deckCount) {
   const { lines, cues, notes } = parseScript(text);

@@ -43,8 +43,25 @@ if (!user) {
     }
   };
 
+  // HACKATHON mode, on by default: talks with a script are translated and voiced before the talk, then played as you read.
+  const hackBox = h("input", { type: "checkbox", checked: user.hackathon !== false });
+  hackBox.onchange = async () => {
+    hackBox.disabled = true;
+    try {
+      await api("/api/me", { method: "POST", body: { hackathon: hackBox.checked } });
+      toast(hackBox.checked ? "HACKATHON mode on" : "HACKATHON mode off");
+    } catch {
+      hackBox.checked = !hackBox.checked;
+      toast("Couldn't save HACKATHON mode");
+    } finally {
+      hackBox.disabled = false;
+    }
+  };
+
   main.append(
     h("div.page-head", {}, h("p.eyebrow", {}, user.email), h("h1", {}, user.name || user.handle)),
+    h("section.form-section", {}, h("header", {}, h("h2", {}, "HACKATHON"), h("p", {}, "For talks with a teleprompter script.")),
+      h("label.check", {}, hackBox, h("span.small", {}, "When you create a talk, Eco translates every line of your script and records it in each voice ahead of time. During the talk it listens for the line you're starting and plays it to each listener, in their language and voice, about a second behind you. Anything off the script isn't translated."))),
     user.rooms.length ? h("p.small.muted", {}, "Your links start with ", h("span.mono", {}, `/${"stage"}/${user.handle}/`), ".")
       : h("section.form-section", {}, h("header", {}, h("h2", {}, "Your name"), h("p", {}, "It goes in every link you share. You can change it until you create your first talk or shop.")), nameForm),
     h("section.form-section", {}, h("header", {}, h("h2", {}, "Your saved voice"), h("p", {}, "Record it once. Any talk can use it: pick \"Your saved voice\" when you create the talk.")),
