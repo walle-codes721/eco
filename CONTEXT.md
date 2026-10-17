@@ -151,7 +151,7 @@ The most calls public visitors may spend in an hour, so the open URL can never b
 _Avoid_: rate limit
 
 **Tripped**:
-The breaker state after three failures in a row: no more live calls until someone resets it.
+The breaker state after three errors in a row that won't fix themselves (400/401/403/404/422): no live calls until a probe succeeds, one probe every 30 s. Timeouts, 429 and 5xx fail only their own phrase.
 _Avoid_: blocked, errored
 
 ## Voice

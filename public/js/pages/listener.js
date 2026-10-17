@@ -54,7 +54,7 @@ const pollNext = h("button.btn.icon-btn", { type: "button", "aria-label": "Next 
 const pollSlot = h("div.poll-slot");
 const pollDots = h("div.poll-dots");
 const newQBtn = h("button.btn.sm.primary", { type: "button", hidden: true, onclick: () => showPoll(polls.findIndex((p) => unseen.has(p.id))) });
-const pollBox = h("section", { hidden: true, style: { paddingTop: "28px" } }, h("div.divider"),
+const pollBox = h("section.lst-panel.lst-polls", { hidden: true },
   h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, pollHead, h("span.spacer"), newQBtn),
   h("div.poll-carousel", {}, pollPrev, pollSlot, pollNext), pollDots);
 // The deck: the live slide by default; listeners can page back, never ahead of the speaker.
@@ -64,20 +64,28 @@ const slideLabel = h("span.small.muted.mono");
 const slidePrev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous slide", onclick: () => goSlide(view - 1) }, icon("prev"));
 const slideNext = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(view + 1) }, icon("next"));
 const currentBtn = h("button.btn.sm", { type: "button", hidden: true, onclick: () => goSlide(Infinity) });
-const slideBox = h("section", { hidden: true, style: { paddingTop: "28px" } }, h("div.divider"),
-  h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, slideHead, h("span.spacer"), currentBtn),
+// Expand: the slide at ~80% of the screen over the dimmed page; Esc or a tap outside closes it.
+const zoomBtn = h("button.btn.icon-btn", { type: "button", onclick: () => zoom(true) }, icon("expand"));
+const slideBox = h("section.lst-panel.lst-slides", { hidden: true }, h("div.divider"),
+  h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, slideHead, h("span.spacer"), currentBtn, zoomBtn),
   slideFrame,
-  h("div.row", { style: { justifyContent: "center", gap: "12px", marginTop: "10px" } }, slidePrev, slideLabel, slideNext));
+  h("div.row", { style: { justifyContent: "center", gap: "12px", marginTop: "10px" } }, slidePrev, slideLabel, slideNext),
+  h("div.zoom-back", { onclick: () => zoom(false) }));
 const askSub = h("p.small.muted");
-const main = h("main.phone", {},
-  statusRow, capsWrap, slideBox, pollBox,
-  h("section", { style: { padding: "28px 0 48px" } },
-    h("div.divider"),
-    h("div.row", { style: { alignItems: "baseline", marginBottom: "4px" } }, askHead),
-    askSub,
-    h("div", { style: { margin: "14px 0" } }, qForm),
-    qList,
-  ),
+const askBox = h("section.lst-panel.lst-ask", {},
+  h("div.row", { style: { alignItems: "baseline", marginBottom: "4px" } }, askHead),
+  askSub,
+  h("div", { style: { margin: "14px 0" } }, qForm),
+  qList,
+);
+// Phones: polls + questions live in a sheet that peeks from the bottom. Laptops: the handle is hidden and both panels sit under the slides.
+const sheetLabel = h("span");
+const sheetDot = h("span.needs", { hidden: true });
+const sheet = h("div.qsheet", {},
+  h("button.qsheet-handle", { type: "button", onclick: () => sheet.classList.toggle("open") }, sheetLabel, sheetDot),
+  h("div.qsheet-body", {}, pollBox, askBox));
+const main = h("main.phone.listen", {},
+  h("div.lst-panel.lst-caps", {}, statusRow, capsWrap), slideBox, sheet,
 );
 document.body.replaceChildren(bar, main);
 
@@ -90,6 +98,8 @@ function labels() {
   currentBtn.textContent = T("current");
   newQBtn.textContent = T("newQuestion");
   askSub.textContent = T("fromTalk");
+  sheetLabel.textContent = T("questions");
+  zoomBtn.setAttribute("aria-label", T("expand"));
   soundBtn.replaceChildren(icon(voice.on ? "sound" : "mute"));
   soundBtn.setAttribute("aria-label", voice.on ? T("soundOn") : T("soundOff"));
 }
@@ -209,6 +219,7 @@ function showPoll(i) {
 
 function drawPolls() {
   pollBox.hidden = !polls.length;
+  sheetDot.hidden = !polls.some(todo);
   if (!polls.length) return;
   const i = polls.findIndex((p) => p.id === curId);
   at = Math.max(0, Math.min(i >= 0 ? i : at, polls.length - 1));
@@ -258,6 +269,19 @@ async function drawSlide() {
   const el = await deck.render(view, slideFrame.clientWidth || 360);
   if (n === drawn) slideFrame.replaceChildren(el);
 }
+
+function zoom(on) {
+  slideBox.style.minHeight = on ? `${slideBox.offsetHeight}px` : ""; // the page behind stays put
+  slideBox.classList.toggle("zoom", on);
+  drawSlide(); // re-render at the new frame width
+}
+
+addEventListener("keydown", (e) => {
+  if (!slideBox.classList.contains("zoom")) return void (e.key === "Escape" && sheet.classList.remove("open"));
+  if (e.key === "Escape") zoom(false);
+  if (e.key === "ArrowLeft") goSlide(view - 1);
+  if (e.key === "ArrowRight") goSlide(view + 1);
+});
 
 /** Never blocks the captions: the section appears once the deck is ready. `fresh` skips the cached copy after a new upload. */
 async function loadSlides(fresh = false) {
@@ -375,6 +399,7 @@ async function recap() {
     const text = `${meta.title}\n\n` + (summaryText() ? `${summaryText()}\n\n` : "") + all.map((l) => textOf(l)).join("\n");
     navigator.share ? navigator.share({ title: meta.title, text }).catch(() => {}) : navigator.clipboard.writeText(text).then(() => toast("Copied"));
   };
+  main.className = "phone"; // recap is the single column, not the live layout
   main.replaceChildren(
     h("section", { style: { padding: "40px 0 24px" } },
       h("p.eyebrow", {}, T("ended")),

@@ -21,7 +21,34 @@ export type TfResult<T> =
 // ponytail: per-isolate memory, so each Worker isolate pays one free 400 per 10 min; move it into Budget if that ever matters.
 export const TEXT_FALLBACK = "DeepSeek-V4-Flash";
 const GEMMA_RECHECK_MS = 10 * 60_000;
+// A live phrase gives Gemma GEMMA_LIVE_MS alone, then DeepSeek races it. If DeepSeek wins, Gemma is skipped for GEMMA_SLOW_MS.
+const GEMMA_LIVE_MS = 6_000;
+const GEMMA_SLOW_MS = 2 * 60_000;
 let gemmaMissingUntil = 0;
+
+type Post = (model: string, signal: AbortSignal) => Promise<Response>;
+
+/** Gemma first; past GEMMA_LIVE_MS the same request also goes to DeepSeek, the first good response wins and the other is aborted.
+ *  Only the winner reaches finish(), so a slow Gemma never counts toward the 3-failure stop. */
+async function hedged(post: Post, limit: number): Promise<{ res: Response; model: string }> {
+  const deadline = AbortSignal.timeout(limit);
+  const stopGemma = new AbortController();
+  const gemma = post(MODELS.answer, AbortSignal.any([deadline, stopGemma.signal])).then((res) => ({ res, model: MODELS.answer as string }));
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const early = await Promise.race([gemma, new Promise<null>((r) => (timer = setTimeout(() => r(null), GEMMA_LIVE_MS)))]).finally(() => clearTimeout(timer));
+  if (early) return early;
+  const stopDs = new AbortController();
+  const ds = post(TEXT_FALLBACK, AbortSignal.any([deadline, stopDs.signal])).then((res) => ({ res, model: TEXT_FALLBACK }));
+  try {
+    // An error response from one side waits for the other.
+    const win = await Promise.any([gemma.then((g) => (g.res.ok ? g : ds)), ds.then((d) => (d.res.ok ? d : gemma))]);
+    if (win.model === TEXT_FALLBACK) stopGemma.abort(), (gemmaMissingUntil = Date.now() + GEMMA_SLOW_MS);
+    else stopDs.abort();
+    return win;
+  } catch (e) {
+    throw (e as AggregateError).errors.at(-1); // both failed: report DeepSeek's (usually the timeout)
+  }
+}
 
 export const isLive =(env: Env) => env.ECO_LIVE === "1" && !!env.RADEON_API_KEY;
 
@@ -92,17 +119,23 @@ export async function tf<T>(
       opts.timing?.attempts.push(measured);
       let retryMs = 0;
       try {
-        const res = await fetch(`${BASE}/chat/completions`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
-          body: JSON.stringify({
-            model,
-            ...req,
-            temperature: 0.2,
-            ...(model.startsWith("MiMo") ? { reasoning_effort: "none" } : {}), // thinking off (token rule 6)
-          }),
-          signal: AbortSignal.timeout(kind === "extract" ? 60_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000), // a 4-language summary writes ~1,000 tokens
-        });
+        const post = (m: string, signal: AbortSignal) =>
+          fetch(`${BASE}/chat/completions`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
+            body: JSON.stringify({
+              model: m,
+              ...req,
+              temperature: 0.2,
+              ...(m.startsWith("MiMo") ? { reasoning_effort: "none" } : {}), // thinking off (token rule 6)
+            }),
+            signal,
+          });
+        const limit = kind === "extract" ? 60_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000; // a 4-language summary writes ~1,000 tokens
+        let res: Response;
+        if (translation && model === MODELS.answer) ({ res, model } = await hedged(post, limit));
+        else res = await post(model, AbortSignal.timeout(limit));
+        measured.model = model;
         status = res.status;
         measured.status = status;
         // Token rule 7: retry 429 and gateway 502/503 only, at most twice, never when the wait would kill the latency target.

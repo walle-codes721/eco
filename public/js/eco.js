@@ -52,6 +52,7 @@ const PATHS = {
   ext: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
   play: "M7 4v16l13-8z",
   flag: "M5 21V4h11l-1.5 4L16 12H5",
+  expand: "M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6",
 };
 export function icon(name, cls = "i") {
   const svg = h("svg." + cls, { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.9", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });

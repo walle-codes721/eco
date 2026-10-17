@@ -413,6 +413,52 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .qa .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
 .composer { position: sticky; bottom: 0; background: linear-gradient(to top, var(--bg) 70%, transparent); padding: 18px 0 calc(14px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .composer .ask-box { width: 100%; }
+/* listener layout. Phones: captions, slides, then a sheet peeking from the bottom with polls + questions.
+   Laptops: a static screen; slides top-left, questions under them, captions down the right; each panel scrolls itself. */
+.lst-slides { padding-top: 28px; }
+.qsheet-handle { display: none; }
+.zoom-back { display: none; }
+.lst-slides.zoom .zoom-back { display: block; position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.35); animation: fade 0.3s; }
+.lst-slides.zoom .slide-frame { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(80vw, calc(80dvh * 16 / 9)); z-index: 61; box-shadow: var(--shadow); animation: fade 0.3s; }
+@media (max-width: 899px) {
+  .listen { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
+  .qsheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; max-width: 640px; max-height: 85dvh; margin-inline: auto;
+    display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-bottom: 0;
+    border-radius: 28px 28px 0 0; box-shadow: var(--shadow);
+    transform: translateY(calc(100% - 60px - env(safe-area-inset-bottom))); transition: transform 0.45s var(--ease);
+  }
+  .qsheet.open { transform: none; }
+  .qsheet-handle {
+    display: flex; align-items: center; justify-content: center; gap: 8px; flex: none; position: relative;
+    height: 60px; width: 100%; border: 0; background: transparent; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  .qsheet-handle::before { content: ""; position: absolute; top: 8px; left: 50%; transform: translateX(-50%); width: 36px; height: 5px; border-radius: 3px; background: var(--line-2); }
+  .qsheet-body { overflow-y: auto; overscroll-behavior: contain; padding: 0 var(--gutter) calc(24px + env(safe-area-inset-bottom)); }
+  .qsheet-body > section { padding: 8px 0 16px; }
+  .qsheet-body > section + section { border-top: 1px solid var(--line); padding-top: 20px; }
+}
+@media (min-width: 900px) {
+  .phone.listen {
+    max-width: none; padding: 16px; gap: 16px; height: calc(100dvh - 53px - env(safe-area-inset-top));
+    display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "slides caps" "qs caps";
+  }
+  .listen:has(> .lst-slides[hidden]) { grid-template-areas: "qs caps" "qs caps"; }
+  .listen .lst-panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .listen .divider { display: none; }
+  .listen .lst-slides { grid-area: slides; overflow: visible; }
+  .listen .lst-slides:not(.zoom) .slide-frame { width: min(100%, calc(52dvh * 16 / 9)); margin-inline: auto; }
+  .listen .lst-caps { grid-area: caps; display: flex; flex-direction: column; }
+  .listen .lst-caps .status-row { padding-top: 0; }
+  .listen .caps-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .listen .captions { flex: 1; min-height: 0; max-height: none; }
+  .listen .qsheet { grid-area: qs; display: flex; min-height: 0; }
+  .listen .qsheet-body { display: flex; gap: 16px; flex: 1; min-width: 0; min-height: 0; }
+  .listen .qsheet-body > section { flex: 1 1 0; min-width: 0; }
+  .listen .lst-ask { order: -1; }
+}
+
 .lang-select { appearance: none; -webkit-appearance: none; border: 1px solid var(--line-2); border-radius: 999px; background: var(--card-2); height: 32px; min-height: 32px; padding: 0 12px; font-size: 13px; font-weight: 600; width: auto; }
 
 /* owner counter */

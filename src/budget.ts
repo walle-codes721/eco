@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 
-import { admit, probeDue, PROBE_MS, PRICE, type Kind, type Denied } from "./limits";
+import { admit, countsTowardStop, probeDue, PROBE_MS, PRICE, type Kind, type Denied } from "./limits";
 export type { Kind, Denied };
 
 export interface CallRecord {
@@ -92,11 +92,11 @@ export class Budget extends DurableObject<Env> {
       this.fails = 0;
       if (this.tripped) (this.tripped = false), await this.ctx.storage.put("tripped", false); // the probe worked: live again
     } else {
-      this.fails++;
+      if (countsTowardStop(rec.status)) this.fails++;
       this.lastError = { t: Date.now(), kind: rec.kind, model: rec.model, status: rec.status, why: (rec.why || String(rec.status)).slice(0, 200) };
       await this.ctx.storage.put("lastError", this.lastError);
       if (this.fails >= 3 || wasProbe) {
-        // token rule 8: stop after 3 failures in a row; a failed probe stops again for another PROBE_MS
+        // token rule 8: stop after 3 errors that won't fix themselves in a row; a failed probe stops again for another PROBE_MS
         this.tripped = true;
         this.trippedAt = Date.now();
         await this.ctx.storage.put({ tripped: true, trippedAt: this.trippedAt });
