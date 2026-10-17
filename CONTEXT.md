@@ -48,11 +48,11 @@ The stretch of speech between pauses that the Stage captures as one unit — the
 _Avoid_: utterance, sentence, chunk
 
 **Line**:
-One phrase as the room keeps it: who said it, what was said, every translation, and the slide showing at the time. Delivered to everyone in the room.
+One phrase as the room keeps it: who said it, what was said, every translation, and the slide showing at the time. Delivered to everyone in the room. Its translations may arrive one language at a time; the line is complete once every language has arrived or been given up on.
 _Avoid_: caption, message, utterance
 
 **Caption**:
-A line as one listener reads it, in that listener's language.
+A line as one listener reads it, in that listener's language. A listener has no caption for a line until their own language has arrived: they are never shown, or played, another language in its place.
 
 **Reaction**:
 A listener's single emoji on a line (👍 👎 😂 🤯 ❤️ 🤔), chosen by tapping its caption; they can change or clear it. Private to that listener: only the projector shows it, anonymously, and the speaker reads them on the Post-talk card. Not a Poll.
