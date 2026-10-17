@@ -39,7 +39,7 @@ Demo rooms that work with no key: `/stage/eco/demo/speak`, `/stage/eco/demo`, `/
 5. **Anything we can do locally, we do locally.** Retrieval is local BM25 keyword scoring, the question board and the cards are local counts, and answers are cached by normalized question. Token Factory has no embeddings, TTS or image generation today.
 6. **Thinking off, tight `max_tokens`.** Keep prompts and outputs small.
 7. **Retry only on 429/502/503, at most twice**, and never retry 400/401/403/404/422.
-8. **Stop after 3 failed live calls in a row** and report it. Don't keep trying.
+8. **Stop after 3 failed live calls in a row** that won't fix themselves (400/401/403/404/422) and report it. Timeouts, 429 and 5xx don't count. After a stop, one probe call every 30 s (Seb, 17 Oct).
 9. **Limits are enforced in `src/budget.ts` and `src/limits.ts`:** at most 12 requests a minute, 3 at once, a daily call ceiling (`ECO_MAX_CALLS`, `0` = off), and an hourly cap for the public demo. Don't weaken or bypass them. Add unit tests when you change them.
 10. **Prompts are logged by Token Factory for about 2 days.** Don't send real personal data, even in tests.
 

@@ -9,8 +9,12 @@ const RESERVED = 2; // last rpm slots are kept for translation (utterance, turn)
 export const PRICE: Record<string, [number, number]> = { "MiMo-V2.6-Flash": [0.14, 0.28], "Gemma-4-31B-IT": [0.5, 3.0], "DeepSeek-V4-Flash": [0.14, 0.28] };
 
 /** After a trip, one probe call may go out every PROBE_MS: a success reopens live calls, a failure waits again. */
-export const PROBE_MS = 5 * 60_000;
+export const PROBE_MS = 30_000;
 export const probeDue = (tripped: boolean, trippedAt: number, probing: boolean, now: number) => tripped && !probing && now - trippedAt >= PROBE_MS;
+
+/** Errors that won't fix themselves (bad key, banned account, bad request). Only these count toward the 3-failure stop;
+ *  timeouts (599), 429 and 5xx pass on their own, so they fail that one phrase and nothing else (Seb, 17 Oct). */
+export const countsTowardStop = (status: number) => status >= 400 && status < 500 && status !== 429;
 
 /** Pure admission rule, kept apart from the DO so it can be unit tested. */
 export function admit(

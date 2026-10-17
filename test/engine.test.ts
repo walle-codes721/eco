@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { chunkPages, selectContext, bm25, normalize, bestSentence, slidePages, teach, tokensOf, TAUGHT_TAG } from "../src/retrieve";
-import { admit, probeDue, PROBE_MS } from "../src/limits";
+import { admit, countsTowardStop, probeDue, PROBE_MS } from "../src/limits";
 import { parseJson } from "../src/tf";
 import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations } from "../src/prompts";
 import { DEMO_SLIDES, DEMO_SHOP } from "../src/fixtures/demo";
@@ -48,6 +48,10 @@ describe("budget admission", () => {
     expect(probeDue(true, now - PROBE_MS, false, now)).toBe(true);
     expect(probeDue(true, 0, false, now)).toBe(true); // a trip stored before probes existed
     expect(probeDue(true, 0, true, now)).toBe(false); // one probe at a time
+  });
+  it("only errors that won't fix themselves count toward the stop", () => {
+    expect([400, 401, 403, 404, 422].every(countsTowardStop)).toBe(true);
+    expect([429, 500, 502, 503, 599].some(countsTowardStop)).toBe(false);
   });
   it("enforces 12 rpm and keeps the last 2 slots for translation", () => {
     expect(admit({ ...base, window: 10 }, "ask", false)).toBe("rpm");
@@ -415,6 +419,48 @@ describe("Gemma fallback (fetch mocked, no real calls)", () => {
     await tf(env, "ask", MODELS.answer, req, { pub: false, mock: () => ({ a: 0 }) });
     expect(sent).toEqual([MODELS.answer, TEXT_FALLBACK, TEXT_FALLBACK]); // remembered: no second Gemma round trip
     vi.unstubAllGlobals();
+  });
+
+  // Gemma slow on a live phrase: DeepSeek joins at 6 s, the first answer wins, the other is aborted.
+  const race = async (gemmaMs: number, dsMs: number) => {
+    const finished: { model: string; status: number }[] = [];
+    const env = {
+      ECO_LIVE: "1",
+      RADEON_API_KEY: "test",
+      BUDGET: { idFromName: () => "g", get: () => ({ acquire: async () => ({ ok: true }), finish: async (r: { model: string; status: number }) => void finished.push(r) }) },
+    } as never;
+    const aborted: string[] = [];
+    vi.stubGlobal("fetch", (_u: string, init: { body: string; signal: AbortSignal }) => {
+      const model = JSON.parse(init.body).model;
+      return new Promise((ok, fail) => {
+        const t = setTimeout(() => ok(new Response(JSON.stringify({ choices: [{ message: { content: `{"by":"${model}"}` }, finish_reason: "stop" }] }))), model === MODELS.answer ? gemmaMs : dsMs);
+        init.signal.addEventListener("abort", () => (clearTimeout(t), aborted.push(model), fail(new DOMException("aborted", "AbortError"))));
+      });
+    });
+    const req = { messages: [], response_format: { type: "json_object" }, max_tokens: 10 };
+    const p = tf(env, "utterance", MODELS.answer, req, { pub: false, mock: () => ({ by: "mock" }) });
+    await vi.advanceTimersByTimeAsync(20_000);
+    const r = await p;
+    vi.unstubAllGlobals();
+    return { by: (r.data as { by: string } | null)?.by, finished, aborted };
+  };
+
+  it("keeps Gemma's answer when it arrives after 6 s but before DeepSeek's", async () => {
+    vi.useFakeTimers({ now: Date.UTC(2100, 0, 1), toFake: ["setTimeout", "clearTimeout", "Date"] }); // past the skip window left above
+    const r = await race(8_000, 4_000); // DeepSeek starts at 6 s, would answer at 10 s
+    expect(r.by).toBe(MODELS.answer);
+    expect(r.aborted).toEqual([TEXT_FALLBACK]);
+    expect(r.finished).toEqual([expect.objectContaining({ model: MODELS.answer, status: 200 })]);
+    vi.useRealTimers();
+  });
+
+  it("uses DeepSeek's answer when Gemma is still silent, without counting a failure", async () => {
+    vi.useFakeTimers({ now: Date.UTC(2100, 0, 1), toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const r = await race(14_000, 2_000);
+    expect(r.by).toBe(TEXT_FALLBACK);
+    expect(r.aborted).toEqual([MODELS.answer]);
+    expect(r.finished).toEqual([expect.objectContaining({ model: TEXT_FALLBACK, status: 200 })]);
+    vi.useRealTimers();
   });
 });
 
