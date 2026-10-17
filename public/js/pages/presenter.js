@@ -1,4 +1,4 @@
-import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store, me } from "/js/eco.js";
+import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store, me, STAGE_LANGS, MAX_STAGE_LANGS } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { phraseMic, levelMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
@@ -136,7 +136,8 @@ const lineUp = h("button.btn.icon-btn", { type: "button", "aria-label": "Previou
 const lineDown = h("button.btn.icon-btn", { type: "button", "aria-label": "Next line", onclick: () => stepLine(1) }, icon("down"));
 const scriptBtn = h("button.btn.icon-btn.ghost", { type: "button", "aria-label": "Edit script", title: "Edit script", onclick: () => scriptSheet() }, icon("text"));
 const prepPill = h("button.pill", { type: "button", hidden: true, title: "HACKATHON mode: your script, translated and voiced before the talk", onclick: () => prep({ retry: true }) });
-const promptNav = h("div.prompter-nav", {}, lineUp, promptCount, lineDown, prepPill, scriptBtn);
+const langAdd = h("select.pill", { hidden: true, "aria-label": "Add a language", title: "Add a language: your script is translated and voiced in it", onchange: () => addLang(langAdd.value) });
+const promptNav = h("div.prompter-nav", {}, lineUp, promptCount, lineDown, prepPill, langAdd, scriptBtn);
 const prompter = host && !meta.demo ? h("div.card.prompter-card", {}, promptText, promptNav) : null;
 function goLine(n, step = false) {
   if (!promptLines.length) {
@@ -173,11 +174,33 @@ if (prompter) goLine(line);
 const hack = host && !meta.demo && ((await me()).user?.hackathon ?? true);
 let cueFrom = line - 1; // the last line played; the first ↓ with the mic on plays the big line
 function drawPrep(p) {
+  drawLangAdd(p);
   prepPill.hidden = !hack || !p?.lines;
   if (prepPill.hidden) return;
   const working = p.translated < p.lines ? `Translating ${p.translated}/${p.lines}` : p.done < p.total ? `Voices ${p.done}/${p.total}` : "";
   prepPill.textContent = (working || `Ready · ${p.lines} lines`) + (p.failed ? ` · ${p.failed} failed, retry` : "");
   prepPill.disabled = !p.failed;
+}
+/** "+ Language": adds a language to the talk; prep then translates and voices only that one. */
+function drawLangAdd(p) {
+  const left = STAGE_LANGS.filter((l) => !meta.langs.includes(l));
+  langAdd.hidden = !hack || !p?.lines || meta.langs.length >= MAX_STAGE_LANGS || !left.length;
+  langAdd.replaceChildren(h("option", { value: "" }, "+ Language"), ...left.map((l) => h("option", { value: l }, langName(l, "en"))));
+}
+async function addLang(l) {
+  if (!l) return;
+  langAdd.disabled = true;
+  try {
+    const r = await api(`/api/rooms/${id}/langs`, { method: "POST", key, body: { add: l } });
+    meta.langs = r.langs;
+    drawPrep(r.prep);
+    toast(`${langName(l, "en")} added: translating and voicing your script`);
+  } catch (err) {
+    toast(err.message || "Couldn't add that language");
+    langAdd.value = "";
+  } finally {
+    langAdd.disabled = false;
+  }
 }
 /** Sends the teleprompter lines to prep: the room translates and voices whatever isn't made yet. */
 async function prep(extra = {}) {

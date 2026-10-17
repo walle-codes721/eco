@@ -66,6 +66,23 @@ export function encodeWav(samples, rate = 16000) {
   return new Blob([buf], { type: "audio/wav" });
 }
 
+/** A voice sample without the silence around it (0.15 s kept each side), so a clone doesn't learn long pauses.
+ *  Returns the input unchanged when nothing in it is louder than `floor` (RMS per 20 ms). */
+export function trimSilence(x, rate, floor = 0.01) {
+  const win = Math.round(rate * 0.02);
+  const loud = (i) => {
+    let s = 0;
+    for (let j = i; j < Math.min(i + win, x.length); j++) s += x[j] * x[j];
+    return Math.sqrt(s / win) > floor;
+  };
+  let a = 0, b = x.length;
+  while (a < x.length && !loud(a)) a += win;
+  if (a >= x.length) return x;
+  while (b > a && !loud(Math.max(0, b - win))) b -= win;
+  const pad = Math.round(rate * 0.15);
+  return x.subarray(Math.max(0, a - pad), Math.min(x.length, b + pad));
+}
+
 /** Linear-interpolation resample to 16 kHz. */
 export function resample(input, from, to = 16000) {
   if (from === to) return input;

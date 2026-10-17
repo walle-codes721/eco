@@ -128,10 +128,18 @@ export async function loadStoredSample(
   return null;
 }
 
+/** The stored sample's R2 etag (head, so nothing is downloaded): it changes when the speaker records again. */
+export async function sampleTag(files: Pick<R2Bucket, "head">, prefix: string): Promise<string | null> {
+  for (const ext of VOICE_SAMPLE_EXTS) {
+    const obj = await files.head(sampleObjectKey(prefix, ext));
+    if (obj) return obj.etag;
+  }
+  return null;
+}
+
 /** Existence check only: head, so no clip is downloaded. */
 export async function hasStoredSample(files: Pick<R2Bucket, "head">, prefix: string): Promise<boolean> {
-  for (const ext of VOICE_SAMPLE_EXTS) if (await files.head(sampleObjectKey(prefix, ext))) return true;
-  return false;
+  return (await sampleTag(files, prefix)) !== null;
 }
 
 export async function deleteStoredSample(files: Pick<R2Bucket, "delete">, prefix: string): Promise<void> {

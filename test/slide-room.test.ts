@@ -56,7 +56,7 @@ describe("slide translation in the room", () => {
   it("translates the first slide and the next as soon as the deck is ready, while listeners wait in the lobby", async () => {
     const spy = vi.spyOn(client, "tf").mockImplementation((async (_e: Env, kind: string, _m: string, req: { messages: { content: string }[] }) => {
       expect(kind).toBe("slide");
-      const rows = String(req.messages[1].content).split("\n").length;
+      const rows = JSON.parse(String(req.messages[1].content)).length;
       return answer(["it"], rows);
     }) as never);
     const t = await slideRoom(["it"], { deck: false });
@@ -81,7 +81,7 @@ describe("slide translation in the room", () => {
 
   it("translates the first slides when rows are stored after the PDF, and not once the talk has ended", async () => {
     const spy = vi.spyOn(client, "tf").mockImplementation((async (_e: Env, _k: string, _m: string, req: { messages: { content: string }[] }) =>
-      answer(["it"], String(req.messages[1].content).split("\n").length)) as never);
+      answer(["it"], JSON.parse(String(req.messages[1].content)).length)) as never);
     const ended = await slideRoom(["it"]);
     await ended.post("status", { status: "ended" });
     await ended.post("deckrows", { deckLang: "en", pages: deckPages });
@@ -99,7 +99,7 @@ describe("slide translation in the room", () => {
     const seen: string[] = [];
     const spy = vi.spyOn(client, "tf").mockImplementation((async (_e: Env, _k: string, _m: string, req: { messages: { content: string }[] }) => {
       seen.push(String(req.messages[1].content));
-      return answer(["it"], String(req.messages[1].content).split("\n").length);
+      return answer(["it"], JSON.parse(String(req.messages[1].content)).length);
     }) as never);
     const t = await slideRoom(["it"]);
     await t.post("deckrows", { deckLang: "en", pages: deckPages });
@@ -151,13 +151,13 @@ describe("slide translation in the room", () => {
     const seen: string[] = [];
     const spy = vi.spyOn(client, "tf").mockImplementation((async (_e: Env, _k: string, _m: string, req: { messages: { content: string }[] }) => {
       seen.push(String(req.messages[1].content));
-      return answer(["it"], String(req.messages[1].content).split("\n").length);
+      return answer(["it"], JSON.parse(String(req.messages[1].content)).length);
     }) as never);
     const t = await slideRoom(["it"]);
     await t.post("deckrows", { deckLang: "en", pages: [{ n: 1, skip: true, rows: [row("Hello")] }, { n: 2, rows: [row("Second")] }] });
     await t.post("status", { status: "live" });
     await t.settle();
-    expect(seen).toEqual(["1. Second"]); // slide 1 is the current slide but is skipped
+    expect(seen).toEqual(['["Second"]']); // slide 1 is the current slide but is skipped
     const res = (await (await t.listenerGet("slidetr?n=1&lang=it")).json()) as { rows: unknown[]; paints: unknown[] };
     expect(res.rows).toEqual([]);
     expect(res.paints).toEqual([]);
