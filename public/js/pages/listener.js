@@ -175,7 +175,6 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  const chip = voiceChipLabel();
   caps.replaceChildren(...lines.slice(-50).map((l) => h(keyOf(l) === picked ? "p.picked" : "p", { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
     voiceChipLabel(l) ? h("span.chip", {}, voiceChipLabel(l)) : null,
     !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l),
