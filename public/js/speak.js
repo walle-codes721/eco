@@ -1,8 +1,10 @@
 // Phase A voice: the phone reads each line aloud. Phase B fills line.audio[lang] and this plays it instead.
+import { encodeWav } from "./vad.js"; // relative: the playback tests import this module in Node
 const synth = window.speechSynthesis;
-const LOCALE = { it: "it-IT", es: "es-ES", hi: "hi-IN", en: "en-US", fr: "fr-FR", de: "de-DE", pt: "pt-PT", zh: "zh-CN", ja: "ja-JP" };
+const LOCALE = { it: "it-IT", es: "es-ES", hi: "hi-IN", en: "en-US", fr: "fr-FR", de: "de-DE", pt: "pt-PT", pl: "pl-PL", zh: "zh-CN", ja: "ja-JP", ar: "ar-SA" };
 let audioEl = null;
 let stopStage = null;
+let silence = null;
 const STAGE_STARTUP_MS = 10000;
 const STAGE_STALL_MS = 15000;
 
@@ -23,6 +25,9 @@ export const voice = {
     this.on = true;
     synth?.speak(new SpeechSynthesisUtterance(" "));
     audioEl ??= new Audio();
+    // iOS only plays a clip later (from a socket message, not a tap) on an element that really played a sound in a tap.
+    silence ??= URL.createObjectURL(encodeWav(new Float32Array(1600))); // 0.1 s
+    audioEl.src = silence;
     audioEl.play().catch(() => {});
   },
   off() {
@@ -96,12 +101,14 @@ export const voice = {
       };
       if (!url) return phone();
       audioEl ??= new Audio();
-      let failed = false;
-      const failure = () => {
-        if (finished || failed || phase !== "clip") return;
-        failed = true;
-        // A failed download may use phone speech; never repeat a partially played clip.
-        if (started) done(); else phone();
+      let tries = 0;
+      const failure = (why, again = true) => {
+        if (finished || phase !== "clip") return;
+        if (started) return done(); // never repeat a partially played clip
+        console.warn("clip failed", why?.name ?? why?.type ?? why ?? "", url);
+        // Once more before the phone voice: a dropped download usually works the second time. A block or a timeout won't.
+        if (again && tries < 2 && why?.name !== "NotAllowedError") return start();
+        phone();
       };
       let position = audioEl.currentTime, lastProgress = performance.now();
       const began = () => {
@@ -113,9 +120,15 @@ export const voice = {
       audioEl.onplaying = began;
       audioEl.onended = () => { if (!finished && phase === "clip") done(); };
       audioEl.onerror = failure;
-      audioEl.src = url;
-      audioEl.playbackRate = rush ? 1.15 : 1; // after src: a new source resets it
-      watchdog = setTimeout(failure, STAGE_STARTUP_MS);
+      const start = () => {
+        const attempt = ++tries;
+        clearTimeout(watchdog);
+        audioEl.src = url;
+        audioEl.playbackRate = rush ? 1.15 : 1; // after src: a new source resets it
+        watchdog = setTimeout(() => failure("timeout", false), STAGE_STARTUP_MS);
+        // A retry's new src rejects the first play(): only the latest attempt counts.
+        try { audioEl.play().catch((e) => attempt === tries && failure(e)); } catch (e) { failure(e); }
+      };
       progress = setInterval(() => {
         if (finished || phase !== "clip") return;
         if (audioEl.ended) return done();
@@ -126,7 +139,7 @@ export const voice = {
         }
         if (started && performance.now() - lastProgress >= STAGE_STALL_MS) done();
       }, 1000);
-      try { audioEl.play().catch(failure); } catch { failure(); }
+      start();
     });
   },
   /** Speaks text; drops older lines if the phone falls 2+ lines behind (latency over completeness). */
