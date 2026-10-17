@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain browser module
-import { stageAudio } from "../public/js/stage-audio.js";
+import { CLONE_WAIT_MS, stageAudio } from "../public/js/stage-audio.js";
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 const line = (seq: number, extra = {}) => ({ seq, text: `Phrase ${seq}`, lang: "en", speaker: 2, wait: true, enabled: true, ...extra });
@@ -41,12 +41,12 @@ describe("Stage audio decisions", () => {
     expect(play.mock.calls[1][0]).toBe("Phrase 4"); // only older ready entries 2 and 3 were discarded
   });
 
-  it("keeps the 4-second deadlines independent when an older phrase falls back", async () => {
+  it("keeps clone deadlines independent when an older phrase falls back", async () => {
     const { queue, play, finish } = player();
     queue.line(line(1));
     await vi.advanceTimersByTimeAsync(1000);
     queue.line(line(2));
-    await vi.advanceTimersByTimeAsync(2999);
+    await vi.advanceTimersByTimeAsync(CLONE_WAIT_MS - 1001);
     expect(play).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(play).toHaveBeenCalledWith("Phrase 1", "en", null, 2);
@@ -78,6 +78,17 @@ describe("Stage audio decisions", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
+  it("plays a preset or speaker clone that arrives a few seconds after the line", async () => {
+    const { queue, play, finish } = player();
+    queue.line(line(1, { audioKey: "en@morgan-freeman" }));
+    await vi.advanceTimersByTimeAsync(8500);
+    expect(play).not.toHaveBeenCalled();
+    queue.audio(1, { "en@morgan-freeman": "/preset.wav" });
+    await flush();
+    expect(play).toHaveBeenCalledWith("Phrase 1", "en", "/preset.wav", 2);
+    finish[0]();
+  });
+
   it("ignores duplicate captions, other languages, and clips after a delayed deadline callback", async () => {
     const { queue, play } = player();
     queue.line(line(1));
@@ -85,7 +96,7 @@ describe("Stage audio decisions", () => {
     queue.audio(1, { it: "/italian.wav" });
     await flush();
     expect(play).not.toHaveBeenCalled();
-    vi.setSystemTime(4500); // background tab: deadline elapsed before the timer got CPU
+    vi.setSystemTime(CLONE_WAIT_MS + 500); // background tab: deadline elapsed before the timer got CPU
     queue.audio(1, { en: "/too-late.wav" });
     await flush();
     expect(play).toHaveBeenCalledExactlyOnceWith("Phrase 1", "en", null, 2);
@@ -127,7 +138,7 @@ describe("Stage audio decisions", () => {
     queue.line(line(1, { url: "/first.wav" }));
     await flush();
     for (let seq = 2; seq <= 6; seq++) queue.line(line(seq));
-    await vi.advanceTimersByTimeAsync(4000);
+    await vi.advanceTimersByTimeAsync(CLONE_WAIT_MS);
     expect(play).toHaveBeenCalledTimes(1);
     finish[0]();
     await flush();

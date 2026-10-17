@@ -1,4 +1,7 @@
 // One decision per caption, in caption order. No network requests are made here.
+/** How long to wait for a cloned clip before the phone speaks. Matches tfSpeech timeout (OmniVoice can take several seconds). */
+export const CLONE_WAIT_MS = 12_000;
+
 export function stageAudio({ play, stop }) {
   const pending = new Map();
   let active = null, latest = 0;
@@ -36,9 +39,9 @@ export function stageAudio({ play, stop }) {
       if (seq <= latest) return; // duplicate frames/reconnect history must not replay
       latest = seq;
       if (!enabled) return;
-      const item = { seq, text, lang, speaker, url, audioKey, ready: false, deadline: Date.now() + 4000, timer: null };
+      const item = { seq, text, lang, speaker, url, audioKey, ready: false, deadline: Date.now() + CLONE_WAIT_MS, timer: null };
       pending.set(seq, item);
-      if (wait && audioKey && !url) item.timer = setTimeout(() => ready(item, null), 4000);
+      if (wait && audioKey && !url) item.timer = setTimeout(() => ready(item, null), CLONE_WAIT_MS);
       else ready(item, url ?? null);
       drain();
     },

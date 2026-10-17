@@ -90,7 +90,7 @@ export async function tfSpeech(
       headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
       // ref_text skips server-side transcription of the sample (~4 s per clip instead of ~17 s).
       body: JSON.stringify({ model: MODELS.voice, input, language: lang, ref_audio: `data:${refMime};base64,${refB64}`, ref_text: refText, response_format: "wav" }),
-      signal: AbortSignal.timeout(10_000), // later than this the phone voice already spoke
+      signal: AbortSignal.timeout(12_000), // keep in sync with CLONE_WAIT_MS in public/js/stage-audio.js
     });
     status = res.status;
     if (status === 200) return await res.arrayBuffer();
