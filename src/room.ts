@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt } from "./prompts";
+import { MODELS, LANG_NAMES, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
@@ -44,6 +44,11 @@ export interface Convo { id: string; lang: string; started: number; open: boolea
 export interface Summary { n: number; text: Record<string, string>; live: boolean; at: number }
 type Answer = { covered: boolean; answer: string; cite: string; q_en: string; sourceSeq?: number; sourceContext?: string };
 type CustomerTurn = { src: string; lang: string; to_owner: string; answer: { covered: boolean; text: string; text_owner: string; cite: string } };
+/** A usable Counter language code, or null: unknown, clipped or regional codes never drive a conversation. */
+function cleanCounterLang(v: unknown): string | null {
+  const c = String(v ?? "").trim().toLowerCase();
+  return /^[a-z]{2}$/.test(c) && LANG_NAMES[c] !== undefined ? c : null;
+}
 
 export const DEMOS: Record<string, "stage" | "counter"> = { "stage/eco/demo": "stage", "counter/eco/gelato": "counter" };
 const LIMITS = { ask: [3, 10], voice: [4, 40], turn: [8, 60] } as const; // per visitor per hour: [demo, normal]
@@ -812,7 +817,7 @@ export class Room extends DurableObject<Env> {
     let convo = this.convos.find((c) => c.id === cid);
     if (!convo) {
       if (side === "owner") return json({ error: "No conversation" }, 404);
-      convo = { id: cid, lang: hint, started: Date.now(), open: false, turns: [] };
+      convo = { id: cid, lang: cleanCounterLang(hint) ?? "en", started: Date.now(), open: false, turns: [] };
       this.convos.push(convo);
       if (this.convos.length > 300) this.convos.shift();
     }
@@ -837,7 +842,20 @@ export class Room extends DurableObject<Env> {
       });
       if (r.data === null) return json({ error: "busy", fallback: r.fallback }, 503);
       const d = r.data;
-      if (d.lang) convo.lang = d.lang.slice(0, 5);
+      // Language precedence: a typed turn carries the customer's explicit selector
+      // choice, so the hint is authoritative and model detection must not silently
+      // override it (German misdetected as Hindi would relabel the convo, mistranslate
+      // the next owner reply and mis-voice the customer). Detection still applies to
+      // raw audio, where the spoken language is genuinely unknown to the client, and a
+      // changed selector takes effect on the next typed turn. A missing or unusable
+      // hint keeps the existing language.
+      if (wav) {
+        const detected = cleanCounterLang(d.lang);
+        if (detected) convo.lang = detected;
+      } else {
+        const selected = cleanCounterLang(body.lang);
+        if (selected) convo.lang = selected;
+      }
       const allergy = askedAllergy || isAllergyQuestion(d.src) || isAllergyQuestion(d.to_owner); // a spoken question is only known after it is transcribed
       added.push({ id: uid(), t: Date.now(), side: "customer", lang: convo.lang, src: d.src, out: d.to_owner, live: r.live, ...(allergy ? { allergy: true } : {}) });
       const covered = !!d.answer?.covered && !!d.answer.text;
