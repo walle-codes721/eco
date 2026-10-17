@@ -132,7 +132,8 @@ export async function tf<T>(
             }),
             signal,
           });
-        const limit = kind === "extract" ? 60_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000; // a 4-language summary writes ~1,000 tokens
+        // a 4-language summary writes ~1,000 tokens; a slide is translated a slide ahead, so it can take longer than live speech
+        const limit = kind === "extract" ? 60_000 : kind === "slide" ? 45_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000;
         let res: Response;
         if (translation && model === MODELS.answer) ({ res, model } = await hedged(post, limit));
         else res = await post(model, AbortSignal.timeout(limit));
