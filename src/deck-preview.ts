@@ -14,6 +14,12 @@ export function stepDeckSlide(numbers: number[], current: number, delta: number)
   return numbers[next]!;
 }
 
+/** ←/→ step the carousel; a select or text field keeps its own arrow keys. */
+export function arrowDelta(key: string, tag: string, type = ""): number {
+  if (tag === "SELECT" || tag === "TEXTAREA" || (tag === "INPUT" && type !== "checkbox")) return 0;
+  return key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 : 0;
+}
+
 export function findDeckPage(pages: DeckPreviewPage[], n: number): DeckPreviewPage {
   return pages.find((p) => p.n === n) ?? { n, rows: [] };
 }

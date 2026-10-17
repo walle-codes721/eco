@@ -12,6 +12,11 @@ export function stepDeckSlide(numbers, current, delta) {
   return numbers[next];
 }
 
+export function arrowDelta(key, tag, type = "") {
+  if (tag === "SELECT" || tag === "TEXTAREA" || (tag === "INPUT" && type !== "checkbox")) return 0;
+  return key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 : 0;
+}
+
 export function findDeckPage(pages, n) {
   return pages.find((p) => p.n === n) ?? { n, rows: [] };
 }

@@ -487,7 +487,8 @@ export class Room extends DurableObject<Env> {
   }
 
   private deckRowsForSlide(n: number) {
-    return this.deckPages.find((p) => p.n === n)?.rows ?? [];
+    const page = this.deckPages.find((p) => p.n === n);
+    return page && !page.skip ? page.rows : []; // a skipped slide has nothing to translate or paint
   }
 
   private async ensureSlideTranslations(currentSlide: number) {

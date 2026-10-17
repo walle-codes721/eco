@@ -335,8 +335,8 @@ function replaceSlides() {
         deckLang,
         onLang: (l) => { deckLang = l; },
         onChange: () => {},
-        startSlide: 1,
         confirmLabel: "Store slides",
+        withLang: true,
       });
       if (!ok) {
         btn.disabled = false;

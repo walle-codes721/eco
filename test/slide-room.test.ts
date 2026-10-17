@@ -123,6 +123,23 @@ describe("slide translation in the room", () => {
     spy.mockRestore();
   });
 
+  it("leaves a skipped slide untranslated: no call for it, and listeners get no rows to paint", async () => {
+    const seen: string[] = [];
+    const spy = vi.spyOn(client, "tf").mockImplementation((async (_e: Env, _k: string, _m: string, req: { messages: { content: string }[] }) => {
+      seen.push(String(req.messages[1].content));
+      return answer(["it"], String(req.messages[1].content).split("\n").length);
+    }) as never);
+    const t = await slideRoom(["it"]);
+    await t.post("deckrows", { deckLang: "en", pages: [{ n: 1, skip: true, rows: [row("Hello")] }, { n: 2, rows: [row("Second")] }] });
+    await t.post("status", { status: "live" });
+    await t.settle();
+    expect(seen).toEqual(["1. Second"]); // slide 1 is the current slide but is skipped
+    const res = (await (await t.listenerGet("slidetr?n=1&lang=it")).json()) as { rows: unknown[]; paints: unknown[] };
+    expect(res.rows).toEqual([]);
+    expect(res.paints).toEqual([]);
+    spy.mockRestore();
+  });
+
   it("answers a slide number past the deck with no rows rather than an error", async () => {
     const t = await slideRoom(["it"]);
     await t.post("deckrows", { deckLang: "en", pages: deckPages });

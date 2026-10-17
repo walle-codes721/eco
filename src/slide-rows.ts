@@ -79,7 +79,8 @@ export function rowsForTranslation(rows: SlideRow[]): string[] {
   return rows.filter((r) => !r.kept).map((r) => r.text);
 }
 
-export type DeckPageRows = { n: number; rows: SlideRow[] };
+/** `skip`: the speaker chose to leave this whole slide untranslated. The rows stay stored so the choice can be undone. */
+export type DeckPageRows = { n: number; rows: SlideRow[]; skip?: boolean };
 
 export const DEFAULT_DECK_LANG = "en";
 
@@ -112,6 +113,6 @@ export function sanitizeDeckPages(input: unknown): DeckPageRows[] {
       .slice(0, 400)
       .map(sanitizeRow)
       .filter((r): r is SlideRow => !!r);
-    return { n, rows };
+    return (p as { skip?: unknown })?.skip ? { n, rows, skip: true } : { n, rows };
   });
 }

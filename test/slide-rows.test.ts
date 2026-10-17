@@ -18,6 +18,18 @@ const groupingFixtures: SlideGlyph[][] = [
   [],
 ];
 
+describe("slide skip", () => {
+  it("keeps a skipped slide through the host body and defaults every other slide to not skipped", () => {
+    const pages = sanitizeDeckPages([
+      { n: 1, skip: true, rows: [{ text: "A", box: { x: 0, y: 0, w: 1, h: 1 } }] },
+      { n: 2, rows: [] },
+      { n: 3, skip: "yes", rows: [] },
+    ]);
+    expect(pages.map((p) => !!p.skip)).toEqual([true, false, true]);
+    expect(pages[0].rows).toHaveLength(1); // the rows stay stored so the speaker can undo the skip
+  });
+});
+
 describe("slide rows", () => {
   it("keeps words on one baseline with ordinary spaces as one row", () => {
     const rows = groupRows([g("Hello", 10, 100, 40), g("world", 55, 100, 42)]);

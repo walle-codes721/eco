@@ -49,7 +49,7 @@ async function readPdf(f) {
       slot.append(await renderPage(pdf, n, 160));
     }
     deckPreview.replaceChildren(deckPreviewSetup(thumbs, state.pdf, state.deckPages, {
-      deckLang: state.deckLang,
+      getDeckLang: () => state.deckLang,
       onLang: (l) => { state.deckLang = l; },
       onChange: (pages) => { state.deckPages = pages; },
     }));

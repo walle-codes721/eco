@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { deckSlideNumbers, stepDeckSlide, findDeckPage } from "../src/deck-preview";
+import { deckSlideNumbers, stepDeckSlide, findDeckPage, arrowDelta } from "../src/deck-preview";
 // @ts-expect-error browser mirror
-import { deckSlideNumbers as numsBrowser, stepDeckSlide as stepBrowser, findDeckPage as findBrowser } from "../public/js/deck-preview-nav.js";
+import { deckSlideNumbers as numsBrowser, stepDeckSlide as stepBrowser, findDeckPage as findBrowser, arrowDelta as arrowBrowser } from "../public/js/deck-preview-nav.js";
 
 describe("deck preview carousel", () => {
   const pages = [
@@ -22,6 +22,17 @@ describe("deck preview carousel", () => {
     expect(stepDeckSlide(nums, 1, -1)).toBe(1);
     expect(stepDeckSlide(nums, 3, 1)).toBe(3);
     expect(stepBrowser(nums, 2, -1)).toBe(1);
+  });
+
+  it("turns arrow keys into a slide step, but leaves them to the language select and text fields", () => {
+    for (const f of [arrowDelta, arrowBrowser]) {
+      expect(f("ArrowLeft", "DIV")).toBe(-1);
+      expect(f("ArrowRight", "BUTTON")).toBe(1);
+      expect(f("ArrowRight", "INPUT", "checkbox")).toBe(1); // a checkbox has no use for arrows
+      expect(f("ArrowLeft", "SELECT")).toBe(0);
+      expect(f("ArrowLeft", "INPUT", "text")).toBe(0);
+      expect(f("Enter", "DIV")).toBe(0);
+    }
   });
 
   it("finds a page by slide number, or treats a missing page as empty rows", () => {
