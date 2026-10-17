@@ -210,7 +210,7 @@ let f2fDraw = null;
 function faceToFace() {
   voice.unlock();
   const cid = `f2f-${crypto.randomUUID().slice(0, 8)}`;
-  const CUST_LANGS = ["en", "es", "fr", "de", "pt", "zh", "ja", "ko", "ar", "hi", "ru"];
+  const CUST_LANGS = ["en", "it", "es", "fr", "de", "pt", "zh", "ja", "ko", "ar", "hi", "ru"];
   let custLang = "en";
   const custSel = h("select.lang-select", {}, ...CUST_LANGS.map((l) => h("option", { value: l }, langName(l, l))));
   custSel.onchange = () => (custLang = custSel.value);
