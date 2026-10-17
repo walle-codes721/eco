@@ -83,8 +83,16 @@ HACKATHON mode, before the talk: every line of the speaker's teleprompter script
 _Avoid_: pre-generation, cache
 
 **Cue**:
-HACKATHON mode, live: the speaker's laptop hears them start a script line and the room plays that line from prep, about a second behind them. A cue makes no call; speech that isn't in the script isn't sent.
+HACKATHON mode, live: the speaker presses ↓ as they start the next teleprompter line, and the room plays that line from prep in every listener's language and voice. A cue makes no call. The mic only shows a level; nothing it hears is sent.
 _Avoid_: trigger, match
+
+**Presentation**:
+A Stage saved on the speaker's account, with its deck, talk context, script and prep, ready to give on any day.
+_Avoid_: talk (in the UI), saved talk
+
+**Duplicate**:
+A new Presentation at a new link that starts from the beginning with the same deck, context, script, translations and prepared voices, and nothing that was said. It shares the original's clips, so it makes no call.
+_Avoid_: copy, restart
 
 **Now speaking**:
 The room's live signal of which speaker is talking at this moment, driven by speech detection on each speaker's device, never by an AI call.

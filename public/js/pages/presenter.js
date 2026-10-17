@@ -1,8 +1,8 @@
 import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store, me } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
+import { phraseMic, levelMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
-import { parseScript, scriptSummary, cueFollower } from "/js/script.js";
+import { parseScript, scriptSummary } from "/js/script.js";
 import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
@@ -163,15 +163,15 @@ function goLine(n, step = false) {
 function followSlide(n) {
   if (!promptLines.length || promptLines[line].slide === n) return;
   const i = promptLines.findIndex((l) => l.slide === n);
-  if (i >= 0) goLine(i), follower.reset(line);
+  if (i >= 0) goLine(i), (cueFrom = line - 1);
 }
 if (prompter) goLine(line);
 
 // ---------- HACKATHON mode (profile toggle, on by default) ----------
-// Every script line is translated and voiced once, before the talk (the room's prep). Live, the mic only works out which
-// line you just started and the room plays that line's ready clips, about a second behind you. Off-script speech isn't sent.
-const hack = host && !meta.demo && hasSpeechRecognition && ((await me()).user?.hackathon ?? true);
-let follower = cueFollower(promptLines, line - 1);
+// Every script line is translated and voiced once, before the talk (the room's prep). Live, ↓ plays the next line's
+// ready clips to the room: you read from the teleprompter, so the key is the timing. The mic only moves the level bar.
+const hack = host && !meta.demo && ((await me()).user?.hackathon ?? true);
+let cueFrom = line - 1; // the last line played; the first ↓ with the mic on plays the big line
 function drawPrep(p) {
   prepPill.hidden = !hack || !p?.lines;
   if (prepPill.hidden) return;
@@ -194,15 +194,11 @@ function fire(i) {
   live.send({ type: "cue", text: promptLines[i].text });
   goLine(i, true);
 }
-/** ↓/↑ and the teleprompter arrows. With the mic on in HACKATHON mode, ↓ plays the next line: the mic missed it. */
+/** ↓/↑ and the teleprompter arrows. With the mic on in HACKATHON mode, ↓ plays the next line to the room. */
 function stepLine(d) {
-  if (hack && stopMic && d > 0) {
-    const i = follower.from + 1;
-    follower.fired(i);
-    return fire(i);
-  }
+  if (hack && stopMic && d > 0 && cueFrom + 1 < promptLines.length) return fire(++cueFrom);
   goLine(line + d, true);
-  follower.reset(line);
+  cueFrom = line - 1;
 }
 prep();
 
@@ -232,7 +228,7 @@ function scriptSheet() {
       ({ script } = await api(`/api/rooms/${id}/script`, { method: "POST", key, body: { script: box.value } }));
       promptLines = parseScript(script).lines;
       goLine(Math.max(0, promptLines.findIndex((l) => l.slide === meta.slide)));
-      follower = cueFollower(promptLines, line - 1);
+      cueFrom = line - 1;
       prep();
       wrap.remove();
     } catch {
@@ -392,14 +388,15 @@ async function toggleMic() {
   }
   if (meta.status === "ended") return toast("The talk has ended");
   micBtn.disabled = spokenLang.disabled = true;
-  const following = hack && promptLines.length > 0;
-  if (following) follower = cueFollower(promptLines, line - 1); // the big teleprompter line is the one Eco waits for
+  const scripted = hack && promptLines.length > 0; // HACKATHON: ↓ plays the lines, the mic is only the level bar
+  if (scripted) cueFrom = line - 1;
   try {
-    const end = await phraseMic({
+    const onLevel = speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`));
+    const end = scripted ? await levelMic(onLevel) : await phraseMic({
       lang: spokenLang.value,
       maxTotalMs: demo ? 30000 : Infinity,
-      onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)),
-      ...(following ? { onHeard: (text, run) => follower.heard(text, run).forEach(fire) } : { onPhrase: send }),
+      onLevel,
+      onPhrase: send,
       onError: (err) => { stopMic?.(); toast(micErrorMessage(err)); },
     });
     stopMic = () => {
@@ -412,7 +409,7 @@ async function toggleMic() {
       level.style.width = "0";
     };
     micBtn.classList.add("on");
-    micState.textContent = following ? "Following your script…" : "Listening…";
+    micState.textContent = "Listening…";
     if (demo) setTimeout(() => stopMic?.(), 30500);
   } catch (err) {
     toast(micErrorMessage(err));
