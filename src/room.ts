@@ -651,7 +651,7 @@ export class Room extends DurableObject<Env> {
     if (this.lines.length > 600) this.lines.splice(0, this.lines.length - 600);
     await this.save("lines");
     this.send(["listener", "screen", "host", "speaker"], { type: "line", line });
-    this.ctx.waitUntil((async () => { await this.cloneSpeaker(line); await this.clonePresets(line); })());
+    this.ctx.waitUntil(Promise.allSettled([this.cloneSpeaker(line), this.clonePresets(line)]));
     return line;
   }
 

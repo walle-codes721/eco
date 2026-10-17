@@ -15,7 +15,7 @@ import * as client from "../src/tf";
 
 const id = "stage/test/preset-room";
 
-async function presetRoom(presetsEnabled = true) {
+async function presetRoom(presetsEnabled = true, speakerClone = false) {
   const r2 = new Map<string, { body: ArrayBuffer | string; contentType?: string }>();
   const files = {
     get: async (key: string) => {
@@ -40,15 +40,15 @@ async function presetRoom(presetsEnabled = true) {
   const ctx = {
     storage: { get: async () => new Map(), put: async () => {} },
     blockConcurrencyWhile: (fn: () => Promise<unknown>) => { ready = fn(); },
-    getWebSockets: (tag: string) => tag === "listener" ? [{
-      deserializeAttachment: () => ({ lang: "en", voice: "morgan-freeman" }),
-      send: (data: string) => messages.push(JSON.parse(data)),
-    }] : [],
+    getWebSockets: (tag: string) => tag === "listener" ? [
+      { deserializeAttachment: () => ({ lang: "en", voice: "morgan-freeman" }), send: (data: string) => messages.push(JSON.parse(data)) },
+      ...(speakerClone ? [{ deserializeAttachment: () => ({ lang: "en", voice: "speaker" }), send: () => {} }] : []),
+    ] : [],
     waitUntil: (p: Promise<unknown>) => { tasks.push(p); },
   };
   const room = new Room(ctx as unknown as DurableObjectState, { ECO_LIVE: "0", FILES: files } as unknown as Env);
   await ready!;
-  await room.init(id, { langs: ["en"], presetsEnabled, voiceMode: "phone" });
+  await room.init(id, { langs: ["en"], presetsEnabled, voiceMode: speakerClone ? "sample" : "phone" });
   await room.fetch(new Request("https://room/meta", { headers: { "x-room": id } }));
   return { room, messages, tasks, r2 };
 }
@@ -84,6 +84,24 @@ describe("preset voice at the room boundary", () => {
     } finally {
       voiceSpy.mockRestore();
     }
+  });
+
+  it("does not hold preset clips behind a slow speaker clone", async () => {
+    vi.spyOn(presets.PRESET_VOICES[0]!, "clip").mockReturnValue(new ArrayBuffer(30_000));
+    const { room, messages, tasks } = await presetRoom(true, true);
+    room.meta!.speakers![0].voice = true;
+    (room as any).samples.set("s0", new ArrayBuffer(25_000));
+    const spy = vi.spyOn(voices, "voiceFor").mockImplementation(async (_e, sample) =>
+      sample.byteLength === 25_000 ? new Promise<ArrayBuffer>(() => {}) : new ArrayBuffer(8));
+    await room.fetch(new Request("https://room/utterance", {
+      method: "POST",
+      headers: { "x-room": id, "x-key": room.meta!.hostKey, "content-type": "application/json" },
+      body: JSON.stringify({ text: "Hello." }),
+    }));
+    await new Promise((r) => setTimeout(r, 50)); // speaker clip never resolves; do not await tasks
+    expect(messages.some((m) => m.type === "audio" && m.audio?.[presetAudioKey("en", "morgan-freeman")])).toBe(true);
+    expect(spy.mock.calls.some((c) => c[1].byteLength === 25_000)).toBe(true); // the slow speaker clone really started
+    void tasks;
   });
 
   it("uses the reviewed bundled transcript live, with no extra MiMo call", async () => {
