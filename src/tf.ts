@@ -94,7 +94,7 @@ export async function tfSpeech(
       method: "POST",
       headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
       // ref_text skips server-side transcription of the sample (~4 s per clip instead of ~17 s).
-      body: JSON.stringify({ model: MODELS.voice, input, language: lang, ref_audio: `data:${refMime};base64,${refB64}`, ref_text: refText, response_format: "wav" }),
+      body: JSON.stringify({ model: MODELS.voice, input, language: lang, ref_audio: `data:${refMime};base64,${refB64}`, ref_text: refText, response_format: "mp3" }), // mp3 is far smaller than wav for a phone to download
       signal: AbortSignal.timeout(12_000), // keep in sync with CLONE_WAIT_MS in public/js/stage-audio.js
     });
     status = res.status;

@@ -5,7 +5,7 @@ import { tfSpeech, isLive, type SpeechStatus } from "./tf";
 
 /** The sentence every speaker reads for their sample, so the model gets the reference transcript for free. */
 export const SAMPLE_TEXT =
-  "Hello, this is my voice for Eco. I am reading this short script aloud so that people who speak other languages can hear my talk in my own voice today.";
+  "Hello, this is my voice for Eco. I am reading this so everyone hears me.";
 
 /** What listeners hear: the account's saved voice, a sample recorded for this talk, or the phone's own voice. */
 export type VoiceMode = "saved" | "sample" | "phone";
@@ -52,11 +52,28 @@ export function sampleObjectKey(prefix: string, ext: VoiceSampleExt): string {
   return `${prefix}.${ext}`;
 }
 
+/** The format OmniVoice actually returned (we ask for mp3; mock echoes the sample). Sniffed from the bytes, never trusted from a header. */
+export function clipFormat(bytes: ArrayBuffer): { ext: "mp3" | "wav"; mime: string } {
+  const b = new Uint8Array(bytes, 0, Math.min(3, bytes.byteLength));
+  const id3 = b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33;
+  const frame = b[0] === 0xff && (b[1]! & 0xe0) === 0xe0; // MPEG frame sync
+  return id3 || frame ? { ext: "mp3", mime: "audio/mpeg" } : { ext: "wav", mime: "audio/wav" };
+}
+
 export function b64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
   let s = "";
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(s);
+}
+
+// A sample's bytes are cached by the Room and the preset module, so keying on the buffer converts each one once,
+// not once per language per phrase. A WeakMap lets a deleted or replaced sample be collected with its string.
+const refCache = new WeakMap<ArrayBuffer, string>();
+export function refB64(sample: ArrayBuffer): string {
+  let s = refCache.get(sample);
+  if (s === undefined) refCache.set(sample, (s = b64(sample)));
+  return s;
 }
 
 export async function voiceFor(
@@ -70,7 +87,7 @@ export async function voiceFor(
   out: SpeechStatus = { status: 0, retryAfter: 0 },
 ): Promise<ArrayBuffer | null> {
   if (isLive(env)) {
-    const wav = await tfSpeech(env, text, lang, b64(sample), refText, mime, kind, out);
+    const wav = await tfSpeech(env, text, lang, refB64(sample), refText, mime, kind, out);
     // Not admitted (0) or told to slow down (429): wait for Token Factory. Any other failure falls back to our own Space.
     if (wav || !env.VOICE_URL || out.status === 0 || out.status === 429) return wav;
   } else if (!env.VOICE_URL) return sample; // mock: echo the recorded sample
