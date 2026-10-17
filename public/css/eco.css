@@ -460,3 +460,14 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .who { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--muted); margin-right: 6px; vertical-align: 0.15em; }
 .captions > p:last-child .who { font-size: 13px; color: var(--red); }
 .chip.speaking { color: var(--ink); border-color: var(--red); }
+
+/* ---------- listener: poll carousel ---------- */
+.poll-carousel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.poll-slot { min-width: 0; touch-action: pan-y; }
+.poll-slot > .qa { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 14px 16px; animation: none; }
+.poll-slot > .qa.todo { outline: 2px solid var(--red); outline-offset: -1px; border-color: transparent; }
+.poll-carousel .icon-btn.todo { box-shadow: 0 0 0 2px var(--red); }
+.poll-dots { display: flex; justify-content: center; gap: 6px; margin-top: 12px; }
+.poll-dot { width: 8px; height: 8px; padding: 0; border-radius: 50%; border: 0; background: var(--line-2); cursor: pointer; }
+.poll-dot.on { background: var(--ink); }
+.poll-dot.todo { box-shadow: 0 0 0 2px var(--red); }

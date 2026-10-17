@@ -67,7 +67,7 @@ Live mode needs two things: `ECO_LIVE = "1"` in `wrangler.jsonc` (set) and the `
 
 - at most 12 requests a minute, with the last 2 slots kept for translation;
 - at most 3 calls at once;
-- a daily call ceiling (`ECO_MAX_CALLS`) and an hourly cap for the public demo;
+- a daily call ceiling (`ECO_MAX_CALLS`, `0` = off, as in production) and an hourly cap for the public demo;
 - retries on 429/502/503 only, and only when the wait fits the latency budget;
 - it stops itself after 3 failures in a row.
 
