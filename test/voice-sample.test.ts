@@ -113,6 +113,19 @@ describe("voice sample intake at the room boundary", () => {
     expect(clip).toBe(body);
   });
 
+  it("uses the VOICE_URL Space when set and not live", async () => {
+    const out = new ArrayBuffer(4);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(out));
+    try {
+      const clip = await voices.voiceFor({ ECO_LIVE: "0", VOICE_URL: "https://space.test" } as Env, wav(), "Hello", "en", "audio/mpeg");
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(String(fetchSpy.mock.calls[0][0])).toBe("https://space.test/tts");
+      expect(clip!.byteLength).toBe(4);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("lets the speaker delete the sample", async () => {
     const { room, r2, voice } = await stageRoom();
     await voice(wav(), { "content-type": "audio/wav", "x-consent": "yes" });
@@ -123,3 +136,4 @@ describe("voice sample intake at the room boundary", () => {
     expect(r2.size).toBe(0);
   });
 });
+

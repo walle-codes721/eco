@@ -67,9 +67,8 @@ export async function voiceFor(
   mime: VoiceSampleMime = "audio/wav",
   refText: string = SAMPLE_TEXT,
 ): Promise<ArrayBuffer | null> {
-  if (!isLive(env)) return sample;
   if (isLive(env)) return tfSpeech(env, text, lang, b64(sample), refText, mime);
-  if (!env.VOICE_URL) return null;
+  if (!env.VOICE_URL) return sample; // mock: echo the recorded sample
   const form = new FormData();
   form.append("text", text);
   form.append("lang", lang);
