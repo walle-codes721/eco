@@ -161,7 +161,7 @@ Real model calls, every one through the single client and under the budget.
 _Avoid_: production
 
 **Replay**:
-A recorded take played back as if live — how demo rooms run, and where a room falls back when the network or budget fails. Always announced on screen.
+A recorded take played back as if live — how demo rooms run, where a room falls back when the network or budget fails, and how anyone with its link rewatches an ended Stage (slides, lines in stored cloned clips, questions and reactions at their original times, no new calls). Always announced on screen.
 _Avoid_: demo mode, playback
 
 ## Budget

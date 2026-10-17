@@ -559,7 +559,7 @@ async function recap() {
       h("p.eyebrow", {}, T("ended")),
       h("h1", { style: { fontSize: "34px", margin: "8px 0 4px" } }, T("recap")),
       h("p.muted", {}, `${meta.title}${meta.speaker ? ` · ${meta.speaker}` : ""}`),
-      h("div.row", { style: { marginTop: "18px" } }, shareBtn),
+      h("div.row", { style: { marginTop: "18px" } }, shareBtn, h("a.btn", { href: `/${id}/replay` }, icon("play"), T("replay"))),
     ),
     summaryBox,
     h("section", { hidden: !myQs.length }, h("h2", { style: { fontSize: "20px", margin: "12px 0" } }, T("yourQs")), qList),
