@@ -20,3 +20,14 @@ export function nearBottom(v, threshold = NEAR_BOTTOM_PX) {
 export function nextNewCount(current, atBottom) {
   return atBottom ? 0 : current + 1;
 }
+
+/**
+ * Which caption is bold: the latest while following live, otherwise the bottom-most one fully inside the view.
+ * `rects` are the captions' bounding rects in order; `viewBottom` is the bottom edge of the scroll view.
+ */
+export function focusIndex(rects, viewBottom, following) {
+  if (!rects.length) return -1;
+  if (following) return rects.length - 1;
+  for (let i = rects.length - 1; i >= 0; i--) if (rects[i].bottom <= viewBottom) return i;
+  return 0;
+}
