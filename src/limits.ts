@@ -7,8 +7,8 @@ const CONCURRENT = 3;
 const RESERVED = 2; // last rpm slots are kept for translation (utterance, turn)
 /** Voice lane: cloned clips in one room, separate from translation concurrency. */
 export const VOICE_CLIPS_IN_FLIGHT = 2;
-/** Voice lane rpm — higher than pre-pair cloning; still capped so translation keeps the shared 12 rpm headroom. */
-export const VOICE_RPM = 10;
+/** Voice lane rpm. 12 translation/other + 6 voice = 18, under the 20/min per-account gateway limit in the Token Factory guide. */
+export const VOICE_RPM = 6;
 
 // Points per 1M tokens, from the Token Factory guide. Only used for the on-screen estimate.
 export const PRICE: Record<string, [number, number]> = { "MiMo-V2.6-Flash": [0.14, 0.28], "Gemma-4-31B-IT": [0.5, 3.0], "DeepSeek-V4-Flash": [0.14, 0.28] };
