@@ -150,12 +150,15 @@ function onAudio(m) {
   }
 }
 
+// The speaker's typed answer in the listener's language once it is translated, otherwise exactly as the speaker typed it.
+const spoken = (q) => q.speakerAnswers?.[lang] ?? q.speakerAnswer;
+
 function drawQs() {
   qList.replaceChildren(...myQs.slice().reverse().map((q) =>
     h("div.qa", {},
       h("div.q", {}, q.text),
       q.pending ? h("div.a.muted", {}, "…") :
-        q.speakerAnswer ? h("div.a", {}, q.speakerAnswer) : // the speaker typed an answer to a question the talk didn't cover
+        q.speakerAnswer ? h("div.a", {}, spoken(q)) : // the speaker typed an answer to a question the talk didn't cover
         q.covered ? h("div.a", {}, q.answer) : h("div.a.muted", {}, T("notCovered")),
       h("div.meta", {},
         q.speakerAnswer ? h("span.chip", {}, T("fromSpeaker")) : null,
@@ -191,6 +194,7 @@ langSel.onchange = () => {
   live?.send({ type: "lang", lang });
   labels();
   drawCaps();
+  drawQs();
   drawSummary();
   drawJump();
   drawStatus();
@@ -308,7 +312,16 @@ if (meta.status === "ended") {
       if (hit) {
         store(`eco:qs:${id}`, myQs);
         drawQs();
-        toast(m.answer ? `${T("fromSpeaker")}: ${m.answer}` : `${T("answeredAt")} ${fmtTime(m.at)}`, 3500);
+        toast(m.answer ? T("fromSpeaker") : `${T("answeredAt")} ${fmtTime(m.at)}`, 3500); // the text itself is on the card, in the listener's language
+      }
+    }
+    if (m.type === "answerTranslated") {
+      // A moment after the speaker's own text: the same answer in every language of the room.
+      let hit = false;
+      for (const q of myQs) if (m.qids.includes(q.id)) (q.speakerAnswers = m.answers), (hit = true);
+      if (hit) {
+        store(`eco:qs:${id}`, myQs);
+        drawQs();
       }
     }
     drawStatus();
