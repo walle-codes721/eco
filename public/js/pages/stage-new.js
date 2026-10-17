@@ -1,10 +1,9 @@
-import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me } from "/js/eco.js";
+import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me, STAGE_LANGS, MAX_STAGE_LANGS } from "/js/eco.js";
 import { openPdf, pdfPages, pdfDeckRows, renderPage, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
 import { deckPreviewSetup } from "/js/deck-preview.js";
 import { scriptSummary, parseScript } from "/js/script.js";
 import { SAMPLE_TEXT } from "/js/sample-text.js";
 
-const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
 const state = { langs: ["it", "es", "hi"], pages: [], deckPages: [], deckLang: "en", bytes: null, pdf: null };
 
 const title = h("input", { type: "text", placeholder: "One engine, two rooms", maxlength: 120, autocomplete: "off" });
@@ -94,11 +93,11 @@ async function readPdf(f) {
   }
 }
 
-const langBtns = LANGS.map((l) => {
+const langBtns = STAGE_LANGS.map((l) => {
   const b = h("button.toggle", { type: "button", "aria-pressed": state.langs.includes(l) ? "true" : "false" }, langName(l, l));
   b.onclick = () => {
     const on = state.langs.includes(l);
-    if (!on && state.langs.length >= 3) return toast("Up to 3 languages");
+    if (!on && state.langs.length >= MAX_STAGE_LANGS) return toast(`Up to ${MAX_STAGE_LANGS} languages`);
     state.langs = on ? state.langs.filter((x) => x !== l) : [...state.langs, l];
     b.setAttribute("aria-pressed", String(!on));
   };
@@ -150,7 +149,7 @@ const form = h("form", {},
     h("label.field", {}, "Words to keep as they are", keep, h("span.small.muted", {}, "Names, brands, product terms. Separate with commas or new lines."))),
   section("Notes", "Optional. Also used to answer questions.", notes),
   section("Script", "Optional. Only you see it, as a teleprompter above your slides. Word, PDF or text.", script, h("div.row", { style: { gap: "10px" } }, scriptUpload, scriptFile, scriptInfo)),
-  section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
+  section("Languages", `Up to ${MAX_STAGE_LANGS}. Listeners pick one when they scan. You speak English.`, h("div.lang-grid", {}, langBtns)),
   section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices)), sampleScript, presetField),
   h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end", gap: "10px" } }, later, create),
 );

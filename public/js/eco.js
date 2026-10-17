@@ -128,6 +128,9 @@ export function langName(code, inLang = navigator.language) {
     return code;
   }
 }
+/** Languages a talk can be translated into (the speaker speaks English), and how many one talk takes. */
+export const STAGE_LANGS = ["it", "es", "hi", "fr", "de", "pt", "pl", "zh", "ja", "ar"];
+export const MAX_STAGE_LANGS = 5; // keep in sync with MAX_LANGS in src/room.ts
 export const phoneLang = () => (navigator.language || "en").slice(0, 2).toLowerCase();
 
 /** The honest mode pill: Live (real Token Factory calls), Mock (canned) or Replay (recorded take). */

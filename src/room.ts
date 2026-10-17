@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive, type SpeechStatus } from "./tf";
-import { MODELS, LANG_NAMES, cleanTalkContext, type TalkContext, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt, scriptPrompt } from "./prompts";
+import { MODELS, LANG_NAMES, cleanTalkContext, type TalkContext, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt, scriptPrompt, dropListNumber } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { lineKey, validReaction, tallyReactions, topLines, type LineReactions } from "./reaction";
 import { timeline, type SlideMark, type ReactMark } from "./replay";
@@ -10,7 +10,7 @@ import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, wit
 import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import {
-  voiceFor, SAMPLE_TEXT, clipFormat, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, type VoiceMode, type VoiceSampleMime,
+  voiceFor, SAMPLE_TEXT, clipFormat, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, sampleTag, type VoiceMode, type VoiceSampleMime,
 } from "./voice";
 import { PRESET_VOICES, presetAudioKey, publicPresets, type PresetVoice } from "./preset-voice";
 import { cloneDemand, parseListenerVoice, type ListenerVoice } from "./voice-choice";
@@ -48,6 +48,7 @@ export interface Meta extends TalkContext {
   joinKey?: string; // stage: in the host's "add a speaker" QR
   voiceMode?: VoiceMode; // stage: missing on older rooms = "sample"
   presetsEnabled?: boolean; // stage: listeners may hear bundled preset voices (ADR 0006)
+  voiceTag?: string; // stage, HACKATHON: R2 etag of the s0 sample its prepared clips were cloned from
 }
 /** One device = one speaker. `key` authorises that device; `voice` = a consented sample is stored. */
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
@@ -84,6 +85,7 @@ const cleanLine = (t: unknown) => oneLine(t, 300);
 const clipKey = (h: string, lang: string, voice: PresetVoice | null) => `p-${h}-${lang}${voice ? `-${voice.id}` : ""}`;
 const PREP_BATCH = 15; // script lines per translation call
 const PREP_TRIES = 3; // real failures before a clip is left to the phone voice
+const MAX_LANGS = 5; // target languages per talk; keep in sync with MAX_STAGE_LANGS in public/js/eco.js
 
 export class Room extends DurableObject<Env> {
   meta: Meta | null = null;
@@ -107,8 +109,9 @@ export class Room extends DurableObject<Env> {
   /** HACKATHON mode: the script lines sent by the speaker's laptop and what prep has made for them, saved as each piece lands. */
   prepLines: { h: string; text: string }[] = [];
   prepTr: Record<string, Record<string, string>> = {};
-  /** 1 = the clip is in this room's own audio folder; a string = its R2 key (no extension) elsewhere, shared by a duplicate. */
-  prepClips: Record<string, 1 | string> = {};
+  /** A number = the clip is in this room's own audio folder (its version, in the URL so a remade clip is never a cached old one);
+   *  a string = its R2 key (no extension) elsewhere, shared by a duplicate. */
+  prepClips: Record<string, number | string> = {};
   private prepFails: Record<string, number> = {};
   private prepTrFails = 0;
   slideTranslations: Record<number, Record<string, string[]>> = {};
@@ -171,7 +174,7 @@ export class Room extends DurableObject<Env> {
       speaker: s(body.speaker, 80),
       hostKey: crypto.randomUUID().replaceAll("-", ""),
       owner,
-      langs: (Array.isArray(body.langs) ? body.langs : ["it", "es", "hi"]).map((l: string) => s(l, 5)).slice(0, 3),
+      langs: (Array.isArray(body.langs) ? body.langs : ["it", "es", "hi"]).map((l: string) => s(l, 5)).slice(0, MAX_LANGS),
       created: Date.now(),
       status: "lobby",
       startedAt: null,
@@ -339,7 +342,10 @@ export class Room extends DurableObject<Env> {
         me!.voice = true;
         await this.save("meta");
         this.sendSpeakers();
-        if (me!.id === "s0" && this.prepLines.length) await this.ctx.storage.setAlarm(Date.now()); // HACKATHON: clone the script in this voice
+        if (me!.id === "s0" && this.prepLines.length) {
+          if (await this.voiceChanged()) await this.save("meta", "prepClips");
+          await this.ctx.storage.setAlarm(Date.now()); // HACKATHON: clone the script in this voice
+        }
         return json({ ok: true });
       }
       case "DELETE voice": {
@@ -440,7 +446,7 @@ export class Room extends DurableObject<Env> {
         return json({
           title: m.title, speaker: m.speaker, langs: m.langs, voice: m.voiceMode, presetsEnabled: !!m.presetsEnabled, about: m.about, keep: m.keep,
           pages: this.pages, script: this.script, deck: !!m.deck, deckLang: m.deckLang, deckPages: this.deckPages, slideTranslations: this.slideTranslations,
-          prepLines: this.prepLines, prepTr: this.prepTr, prepClips: this.clipRefs(), s0voice: !!m.speakers?.[0]?.voice,
+          prepLines: this.prepLines, prepTr: this.prepTr, prepClips: this.clipRefs(), s0voice: !!m.speakers?.[0]?.voice, voiceTag: m.voiceTag,
         });
       }
       case "POST import": {
@@ -454,6 +460,7 @@ export class Room extends DurableObject<Env> {
         this.prepTr = body.prepTr ?? {};
         this.prepClips = body.prepClips ?? {};
         if (body.s0voice && m.speakers?.[0]) m.speakers[0].voice = true;
+        if (typeof body.voiceTag === "string") m.voiceTag = body.voiceTag;
         await this.save("meta", "deckPages", "slideTranslations", "prepLines", "prepTr", "prepClips");
         return json({ ok: true });
       }
@@ -487,9 +494,22 @@ export class Room extends DurableObject<Env> {
           this.prepLines = await Promise.all(texts.map(async (text) => ({ h: await lineHash(text), text })));
           await this.save("prepLines");
         }
+        const unnumbered = this.unnumberPrep();
+        if ((await this.voiceChanged()) || unnumbered) await this.save("meta", "prepTr", "prepClips");
         if (body.retry) (this.prepFails = {}), (this.prepTrFails = 0);
         if (!(await this.ctx.storage.getAlarm())) await this.ctx.storage.setAlarm(Date.now());
         return json(this.prepStatus());
+      }
+      case "POST langs": {
+        // Add a language to a talk. With a script, prep translates and voices only what that language lacks.
+        if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
+        const add = String(body.add ?? "");
+        if (!LANG_NAMES[add] || add === "en" || m.langs.includes(add)) return json({ error: "Pick another language" }, 400);
+        if (m.langs.length >= MAX_LANGS) return json({ error: `Up to ${MAX_LANGS} languages` }, 409);
+        m.langs = [...m.langs, add];
+        await this.save("meta");
+        if (this.prepLines.length) await this.ctx.storage.setAlarm(Date.now());
+        return json({ langs: m.langs, prep: this.prepStatus() });
       }
       case "POST presets": {
         if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
@@ -845,6 +865,16 @@ export class Room extends DurableObject<Env> {
     return [...(m.speakers?.[0]?.voice ? [null] : []), ...(m.presetsEnabled ? PRESET_VOICES : [])];
   }
 
+  /** Languages prep voices: the room's, plus English (the speaker's own, read from the script as written). */
+  private prepLangs() {
+    return [...new Set([...this.meta!.langs, "en"])];
+  }
+
+  /** What a clip says: the line's translation, or the script line itself in English. */
+  private prepText(h: string, text: string, lang: string): string | undefined {
+    return this.prepTr[h]?.[lang] ?? (lang === "en" ? text : undefined);
+  }
+
   /** R2 key (no extension) of a prepared clip: this room's audio folder, or where a duplicated original keeps it. */
   private clipBase(k: string) {
     const ref = this.prepClips[k];
@@ -856,21 +886,70 @@ export class Room extends DurableObject<Env> {
     return Object.fromEntries(Object.keys(this.prepClips).map((k) => [k, this.clipBase(k)]));
   }
 
-  /** Every clip the script needs: line × room language × voice. */
+  /** Every clip the script needs: line × language × voice. */
   private prepJobs() {
     const voices = this.prepVoices();
-    return this.prepLines.flatMap((l) => this.meta!.langs.flatMap((lang) => voices.map((voice) => ({ ...l, lang, voice, key: clipKey(l.h, lang, voice) }))));
+    return this.prepLines.flatMap((l) => this.prepLangs().flatMap((lang) => voices.map((voice) => ({ ...l, lang, voice, key: clipKey(l.h, lang, voice) }))));
+  }
+
+  /** Room languages a line has no translation for yet. */
+  private untranslated(l: { h: string }) {
+    return this.meta!.langs.filter((g) => !this.prepTr[l.h]?.[g]);
+  }
+
+  /** The clip is made again on the next prep tick. */
+  private dropClip(k: string) {
+    delete this.prepClips[k];
+    delete this.prepFails[k];
+  }
+
+  /** Talks prepped before 18 Oct 2026 saved "10. Il proprietario…" (the model copied the prompt's numbering): strip the number
+   *  locally, no call, and remake only those clips. Returns whether anything changed. */
+  private unnumberPrep() {
+    let changed = false;
+    for (const l of this.prepLines) {
+      for (const [lang, text] of Object.entries(this.prepTr[l.h] ?? {})) {
+        const clean = dropListNumber(l.text, text) as string;
+        if (clean === text) continue;
+        this.prepTr[l.h]![lang] = clean;
+        for (const voice of [null, ...PRESET_VOICES]) this.dropClip(clipKey(l.h, lang, voice));
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /** The speaker's prepared clips follow their sample: a new recording (or none noted yet) remakes them; presets stay. */
+  private async voiceChanged() {
+    const m = this.meta!;
+    if (m.voiceMode === "phone" || !m.speakers?.[0]?.voice) return false;
+    const tag = await sampleTag(this.env.FILES, sampleKey(m, "s0"));
+    if (!tag || tag === m.voiceTag) return false;
+    m.voiceTag = tag;
+    this.samples.delete("s0"); // a saved voice re-recorded on /me: don't clone from the copy in memory
+    this.sampleMime.delete("s0");
+    for (const l of this.prepLines) for (const lang of this.prepLangs()) this.dropClip(clipKey(l.h, lang, null));
+    return true;
   }
 
   prepStatus() {
     const jobs = this.prepJobs();
+    const lineFailed = (l: { h: string }) => (this.prepFails[`t-${l.h}`] ?? 0) >= PREP_TRIES;
     return {
       lines: this.prepLines.length,
-      translated: this.prepLines.filter((l) => this.prepTr[l.h]).length,
+      translated: this.prepLines.filter((l) => !this.untranslated(l).length).length,
       total: jobs.length,
       done: jobs.filter((j) => this.prepClips[j.key]).length,
-      failed: jobs.filter((j) => !this.prepClips[j.key] && (this.prepFails[j.key] ?? 0) >= PREP_TRIES).length + (this.prepTrFails >= PREP_TRIES ? 1 : 0),
+      failed: jobs.filter((j) => !this.prepClips[j.key] && (this.prepFails[j.key] ?? 0) >= PREP_TRIES).length
+        + this.prepLines.filter((l) => this.untranslated(l).length && lineFailed(l)).length + (this.prepTrFails >= PREP_TRIES ? 1 : 0),
     };
+  }
+
+  /** Lines still to translate, and clips still to make (each until PREP_TRIES real failures). */
+  private prepTodo() {
+    const lines = this.prepLines.filter((l) => this.untranslated(l).length && (this.prepFails[`t-${l.h}`] ?? 0) < PREP_TRIES);
+    const clips = this.prepJobs().filter((j) => !this.prepClips[j.key] && this.prepText(j.h, j.text, j.lang) && (this.prepFails[j.key] ?? 0) < PREP_TRIES);
+    return { lines: this.prepTrFails < PREP_TRIES ? lines : [], clips };
   }
 
   /** One step of prep: a batch of translations, else up to PREP_IN_FLIGHT clips. Each success is saved at once and never redone.
@@ -879,36 +958,44 @@ export class Room extends DurableObject<Env> {
     const m = this.meta!;
     if (m.mode !== "stage" || !this.prepLines.length) return;
     let wait = 250;
-    const untranslated = this.prepLines.filter((l) => !this.prepTr[l.h]);
-    if (untranslated.length && this.prepTrFails < PREP_TRIES) {
-      const batch = untranslated.slice(0, PREP_BATCH);
+    const todo = this.prepTodo();
+    if (todo.lines.length) {
+      // Only the languages these lines lack: adding a language to a prepared talk translates just that one.
+      const batch = todo.lines.slice(0, PREP_BATCH);
+      const langs = m.langs.filter((g) => batch.some((l) => !this.prepTr[l.h]?.[g]));
       const texts = batch.map((l) => l.text);
-      const r = await tf<{ out?: Record<string, unknown> }>(this.env, "script", MODELS.answer, scriptPrompt(m.langs, texts, m), {
+      const r = await tf<{ out?: Record<string, unknown> }>(this.env, "script", MODELS.answer, scriptPrompt(langs, texts, m), {
         pub: false,
-        mock: () => ({ out: Object.fromEntries(m.langs.map((l) => [l, texts])) }),
+        mock: () => ({ out: Object.fromEntries(langs.map((l) => [l, texts])) }),
       });
       if (r.data) {
-        batch.forEach((l, i) => (this.prepTr[l.h] = cleanTranslations(Object.fromEntries(m.langs.map((g) => [g, (r.data!.out?.[g] as unknown[] | undefined)?.[i]])), m.langs)));
+        batch.forEach((l, i) => {
+          const got = cleanTranslations(Object.fromEntries(langs.map((g) => [g, dropListNumber(l.text, (r.data!.out?.[g] as unknown[] | undefined)?.[i])])), langs);
+          this.prepTr[l.h] = { ...got, ...this.prepTr[l.h] }; // a translation already voiced stays as it is
+          if (this.untranslated(l).length) this.prepFails[`t-${l.h}`] = (this.prepFails[`t-${l.h}`] ?? 0) + 1; // the reply left it out
+        });
         this.prepTrFails = 0;
         await this.save("prepTr");
       } else if (r.fallback === "error") (this.prepTrFails++, (wait = 5_000));
       else wait = r.fallback === "tripped" ? 30_000 : 3_000;
     } else {
       const live = isLive(this.env);
-      const jobs = this.prepJobs().filter((j) => !this.prepClips[j.key] && this.prepTr[j.h]?.[j.lang] && (this.prepFails[j.key] ?? 0) < PREP_TRIES);
+      const jobs = todo.clips;
       const ref = jobs.some((j) => !j.voice) ? await this.speakerSample("s0") : null;
       await Promise.allSettled(jobs.slice(0, PREP_IN_FLIGHT).map(async (j) => {
         try {
           const out: SpeechStatus = { status: 0, retryAfter: 0 };
-          const text = this.prepTr[j.h]![j.lang]!;
+          const text = this.prepText(j.h, j.text, j.lang)!;
           if (!j.voice && !ref) return void (this.prepFails[j.key] = PREP_TRIES); // the sample is gone: nothing to clone from
           const wav = j.voice
             ? await voiceFor(this.env, j.voice.clip(), text, j.lang, j.voice.mime, j.voice.referenceTranscript, "prep", out)
             : await voiceFor(this.env, ref!.sample, text, j.lang, ref!.mime, SAMPLE_TEXT, "prep", out);
           if (wav) {
             const fmt = clipFormat(wav);
-            await this.env.FILES.put(`${m.id}/audio/${j.key}.${fmt.ext}`, wav, { httpMetadata: { contentType: fmt.mime } });
-            this.prepClips[j.key] = 1;
+            const base = `${m.id}/audio/${j.key}`;
+            await this.env.FILES.put(`${base}.${fmt.ext}`, wav, { httpMetadata: { contentType: fmt.mime } });
+            await this.env.FILES.delete(`${base}.${fmt.ext === "mp3" ? "wav" : "mp3"}`); // a remade clip: GET audio must not find the old one
+            this.prepClips[j.key] = Date.now();
             await this.save("prepClips");
           } else if (live && (out.status === 0 || out.status === 429)) wait = Math.max(wait, out.retryAfter || 3_000);
           else (this.prepFails[j.key] = (this.prepFails[j.key] ?? 0) + 1), (wait = Math.max(wait, 2_000));
@@ -918,9 +1005,8 @@ export class Room extends DurableObject<Env> {
       }));
     }
     this.send(["host"], { type: "prep", ...this.prepStatus() });
-    const more = (this.prepTrFails < PREP_TRIES && this.prepLines.some((l) => !this.prepTr[l.h]))
-      || this.prepJobs().some((j) => !this.prepClips[j.key] && this.prepTr[j.h]?.[j.lang] && (this.prepFails[j.key] ?? 0) < PREP_TRIES);
-    if (more) await this.ctx.storage.setAlarm(Date.now() + wait);
+    const more = this.prepTodo();
+    if (more.lines.length || more.clips.length) await this.ctx.storage.setAlarm(Date.now() + wait);
   }
 
   /** The host started a script line: send it with its prepared translations and clips. No call is made. */
@@ -930,10 +1016,11 @@ export class Room extends DurableObject<Env> {
     const h = await lineHash(text);
     const out = this.prepTr[h] ?? {};
     const audio: Record<string, string> = {};
-    for (const lang of m.langs) {
+    for (const lang of this.prepLangs()) {
       for (const voice of this.prepVoices()) {
         const k = clipKey(h, lang, voice);
-        if (this.prepClips[k]) audio[voice ? presetAudioKey(lang, voice.id) : lang] = `/api/rooms/${m.id}/audio?k=${k}`;
+        const ref = this.prepClips[k];
+        if (ref) audio[voice ? presetAudioKey(lang, voice.id) : lang] = `/api/rooms/${m.id}/audio?k=${k}${typeof ref === "number" ? `&v=${ref}` : ""}`;
       }
     }
     if (m.status === "lobby") await this.setStatus("live");

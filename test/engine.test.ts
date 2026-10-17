@@ -5,7 +5,7 @@ import { parseJson } from "../src/tf";
 import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, slideRowsPrompt } from "../src/prompts";
 import { DEMO_SLIDES, DEMO_SHOP } from "../src/fixtures/demo";
 // @ts-expect-error plain browser module, tested in Node
-import { Cutter, encodeWav, resample } from "../public/js/vad.js";
+import { Cutter, encodeWav, resample, trimSilence } from "../public/js/vad.js";
 
 const deck = chunkPages(DEMO_SLIDES);
 const shop = chunkPages(DEMO_SHOP.sources);
@@ -105,7 +105,7 @@ describe("slide rows prompt", () => {
     expect(system).toContain("Italian");
     expect(system).toContain("Hindi");
     expect(system).toContain('"it": string[]');
-    expect(String((p.messages[1] as { content: string }).content)).toBe("1. Hello\n2. World");
+    expect(String((p.messages[1] as { content: string }).content)).toBe('["Hello","World"]'); // no "1. ": models copy the numbers
     expect(p.response_format).toEqual({ type: "json_object" });
     expect(p.max_tokens).toBeLessThanOrEqual(1200);
   });
@@ -328,6 +328,13 @@ describe("phrase cutter", () => {
     const wav = encodeWav(new Float32Array(16000));
     expect(wav.size).toBe(44 + 32000);
     expect(resample(new Float32Array(48000), 48000).length).toBe(16000);
+  });
+  it("trims the silence around a voice sample, keeping 0.15 s each side", () => {
+    const rate = 24000;
+    const x = new Float32Array(rate * 3); // 1 s silence, 1 s voice, 1 s silence
+    for (let i = rate; i < rate * 2; i++) x[i] = 0.3 * Math.sin(i / 5);
+    expect(trimSilence(x, rate).length / rate).toBeCloseTo(1.3, 1);
+    expect(trimSilence(new Float32Array(rate), rate).length).toBe(rate); // all quiet: left as it is
   });
 });
 

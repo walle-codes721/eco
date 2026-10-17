@@ -79,7 +79,7 @@ The written words on a slide that sit together on one baseline. A wide gap on th
 _Avoid_: line, text run, fragment, quotation
 
 **Prep**:
-HACKATHON mode, before the talk: every line of the speaker's teleprompter script translated into each room language and voiced in each offered voice, once, and saved. Editing the script redoes only the lines that changed.
+HACKATHON mode, before the talk: every line of the speaker's teleprompter script translated into each room language and voiced in each offered voice, once, and saved. English is voiced from the script as written. Editing the script redoes only the lines that changed; adding a language makes only that language; a new recording of the speaker's voice remakes only their clips.
 _Avoid_: pre-generation, cache
 
 **Cue**:
