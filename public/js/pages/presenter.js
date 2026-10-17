@@ -506,8 +506,8 @@ function presetToggle() {
   };
   return h("div.card", {},
     h("div.card-head", {}, h("span.eyebrow", {}, "Preset voice (demo)")),
-    h("p.small", {}, "Morgan Freeman (AI) is a bundled demo voice (ADR 0006). Never offered in Counter."),
-    h("label.check", {}, box, h("span.small", {}, "Enable Morgan Freeman (AI) for listeners")),
+    h("p.small", {}, "Morgan Freeman, Jack Sparrow and SpongeBob (all AI) are bundled demo voices (ADR 0006). Never offered in Counter."),
+    h("label.check", {}, box, h("span.small", {}, "Enable AI preset voices for listeners")),
     status,
   );
 }

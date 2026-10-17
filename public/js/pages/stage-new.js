@@ -122,7 +122,7 @@ const sampleScript = h("div", { hidden: state.voice !== "sample", style: { margi
   h("blockquote.small", { style: { margin: "6px 0 0", padding: "10px 14px", borderLeft: "3px solid var(--red)", background: "var(--bg-2)", borderRadius: "8px" } }, SAMPLE_TEXT));
 const presetBox = h("input", { type: "checkbox", id: "presets-enabled" });
 const presetField = h("label.check", { style: { marginTop: "12px" } }, presetBox,
-  h("span.small", {}, "Offer the Morgan Freeman (AI) preset voice (demo only — always labelled synthetic on listeners' phones)."));
+  h("span.small", {}, "Offer the Morgan Freeman, Jack Sparrow and SpongeBob (AI) preset voices (demo only — always labelled synthetic on listeners' phones)."));
 for (const [v, el] of Object.entries(voices)) {
   const pick = () => {
     if (el.getAttribute("aria-disabled") === "true") return;

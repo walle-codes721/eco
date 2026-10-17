@@ -59,7 +59,11 @@ describe("preset voice at the room boundary", () => {
   it("exposes presets only when the speaker enabled them", async () => {
     const on = await presetRoom(true);
     expect(on.room.publicMeta().presetsEnabled).toBe(true);
-    expect(on.room.publicMeta().presets).toEqual([{ id: "morgan-freeman", label: "Morgan Freeman (AI)" }]);
+    expect(on.room.publicMeta().presets).toEqual([
+      { id: "morgan-freeman", label: "Morgan Freeman (AI)" },
+      { id: "jack-sparrow", label: "Jack Sparrow (AI)" },
+      { id: "spongebob", label: "SpongeBob (AI)" },
+    ]);
     const off = await presetRoom(false);
     expect(off.room.publicMeta().presets).toEqual([]);
   });
