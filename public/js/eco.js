@@ -79,10 +79,11 @@ export function hostKey(id) {
   }
 }
 
-export async function api(path, { method = "GET", body, key, headers = {} } = {}) {
+export async function api(path, { method = "GET", body, key, headers = {}, signal } = {}) {
   const isBlob = body instanceof Blob;
   const res = await fetch(path, {
     method,
+    signal,
     headers: { ...(key ? { "x-key": key } : {}), ...(body && !isBlob ? { "content-type": "application/json" } : {}), ...headers },
     body: body == null ? undefined : isBlob ? body : JSON.stringify(body),
   });

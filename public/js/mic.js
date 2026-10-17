@@ -162,37 +162,47 @@ export async function holdMic({ onLevel = () => {}, maxMs = 15000, lang = naviga
 }
 
 /** Wires a .hold button: press to talk, release to send (text or WAV). Space bar works too when `key` is set. */
-export function bindHold(btn, { onBlob, onError = () => {}, key = false, lang = () => navigator.language }) {
-  let rec = null, pressed = false;
+export function bindHold(btn, { onBlob, onStart = () => undefined, onError = () => {}, key = false, lang = () => navigator.language }) {
+  // Object identity is the per-press token, including while startup is pending.
+  let session = null;
   const level = (l) => btn.style.setProperty("--level", l.toFixed(2));
   const down = async (e) => {
     e?.preventDefault();
-    if (pressed || btn.classList.contains("busy")) return;
-    pressed = true;
+    if (session || btn.classList.contains("busy")) return;
+    const current = { recorder: null, context: undefined };
+    session = current;
     btn.classList.add("on");
     navigator.vibrate?.(10);
     try {
-      const r = await holdMic({ onLevel: level, lang: lang() });
-      if (pressed) rec = r;
-      else r.stop(); // released before the mic opened
+      // Keep the destination with this recording, including while stop() awaits final speech.
+      current.context = onStart();
+      const r = await holdMic({ onLevel: (l) => { if (session === current) level(l); }, lang: lang() });
+      if (session === current) current.recorder = r;
+      else await r.stop(); // stale startup: release its resources and discard its result
     } catch (err) {
-      pressed = false;
+      if (session !== current) return;
+      session = null;
       btn.classList.remove("on");
+      level(0);
       onError(err);
     }
   };
-  const up = async () => {
-    if (!pressed) return;
-    pressed = false;
+  const up = async (deliver = true) => {
+    const current = session;
+    if (!current) return;
+    session = null; // invalidate before any await or later press
     btn.classList.remove("on");
-    const r = rec;
-    rec = null;
-    const blob = await r?.stop();
-    if (blob) onBlob(blob);
+    level(0);
+    try {
+      const blob = await current.recorder?.stop();
+      if (deliver && blob) onBlob(blob, current.context);
+    } catch (err) {
+      if (!session) onError(err);
+    }
   };
   btn.addEventListener("pointerdown", down);
-  addEventListener("pointerup", up);
-  addEventListener("pointercancel", up);
+  addEventListener("pointerup", () => up());
+  addEventListener("pointercancel", () => up(false));
   btn.addEventListener("contextmenu", (e) => e.preventDefault());
   if (key) {
     addEventListener("keydown", (e) => e.code === "Space" && !e.repeat && e.target === document.body && down(e));
