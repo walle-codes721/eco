@@ -7,6 +7,7 @@ import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
 import { pollQ, pollResults } from "/js/polls.js";
+import { nearBottom, setFocus } from "/js/caps.js";
 
 const id = roomId();
 const key = hostKey(id);
@@ -101,11 +102,28 @@ const micBox = h("div.card.mic-box", {},
 );
 
 // ---------- transcript ----------
+// Scrollable history: the big bold line (and its translations) follows the scroll; at the bottom it follows the talk.
 const now = h("div.said");
+const trBox = h("div.said-tr");
+let atBottom = true, focused = null; // focused: the line shown big, with its translations below
+const jumpBtn = h("button.caps-jump", { type: "button", "aria-label": "Back to latest", onclick: () => ((now.scrollTop = now.scrollHeight), followed()) }, icon("down"));
 const saidCard = h("div.card.said-card", {},
   h("div.card-head", {}, h("span.eyebrow", {}, "You said"), h("span.spacer"), h("span.chip", {}, "Original")),
-  now,
+  h("div.caps-wrap", {}, now, jumpBtn),
+  trBox,
 );
+now.onscroll = followed;
+// The translation rows below (and the slide above) resize the scroller: stay pinned while following.
+new ResizeObserver(() => atBottom && (now.scrollTop = now.scrollHeight)).observe(now);
+function followed() {
+  atBottom = nearBottom(now);
+  jumpBtn.classList.toggle("show", !atBottom);
+  const i = lines.length ? setFocus(now, atBottom) : -1;
+  const l = lines[i];
+  if (l === focused) return;
+  focused = l;
+  trBox.replaceChildren(...(l ? meta.langs.map((g) => h("div.tr", {}, h("span.chip", { title: langName(g) }, g.toUpperCase()), h("span", {}, l.out[g] ?? "", l.flags?.includes(g) ? h("span.tiny.muted", {}, "  · literal") : null))) : []));
+}
 
 // ---------- teleprompter: the speaker's own script, one line at a time (host only) ----------
 // Lines carry the slide their cue set: stepping across a cue changes the slide, changing the slide jumps here.
@@ -227,13 +245,11 @@ function drawStatus() {
 setInterval(() => (timer.textContent = meta.startedAt && meta.status === "live" ? fmtTime((Date.now() - meta.startedAt) / 1000) : ""), 1000);
 
 function drawLines() {
-  const last = lines.at(-1);
-  if (!last) return now.replaceChildren(h("p.empty", {}, demo ? "Waiting for the replay…" : "Turn the mic on and start talking. Your words and their translations appear here."));
-  now.replaceChildren(
-    ...lines.slice(-4, -1).map((l) => h("p.past", {}, who(meta, l), l.src)),
-    h("p.now", {}, who(meta, last), last.src),
-    ...meta.langs.map((l) => h("div.tr", {}, h("span.chip", { title: langName(l) }, l.toUpperCase()), h("span", {}, last.out[l] ?? "", last.flags?.includes(l) ? h("span.tiny.muted", {}, "  · literal") : null))),
-  );
+  // Keep the big line on the same phrase across redraws, so a new phrase never resizes what you're reading.
+  if (!lines.length) now.replaceChildren(h("p.empty", {}, demo ? "Waiting for the replay…" : "Turn the mic on and start talking. Your words and their translations appear here."));
+  else now.replaceChildren(...lines.map((l, i) => h(`p${i === lines.length - 1 ? ".now" : ""}${focused && l.seq === focused.seq ? ".focus" : ""}`, {}, who(meta, l), l.src)));
+  if (atBottom) now.scrollTop = now.scrollHeight;
+  followed();
 }
 
 function drawBoard() {
@@ -591,7 +607,7 @@ const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
     polls = m.polls ?? polls;
   }
   if (m.type === "polls") polls = m.polls;
-  if (m.type === "line") lines.push(m.line), (lines = lines.slice(-50));
+  if (m.type === "line") (atBottom = nearBottom(now)), lines.push(m.line), (lines = lines.slice(-50));
   if (m.type === "slide") {
     const mine = sentSlides.indexOf(m.n);
     if (mine >= 0) sentSlides.splice(0, mine + 1); // our own change coming back: we're already past it

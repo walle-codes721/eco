@@ -3,7 +3,7 @@ import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { stageAudio } from "/js/stage-audio.js";
 import { t } from "/js/i18n.js";
-import { captionFor, focusIndex, nearBottom, nextNewCount } from "/js/caps.js";
+import { captionFor, nearBottom, nextNewCount, setFocus } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
 import { voiceChip } from "/js/voice-chip.js";
@@ -175,7 +175,7 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-50).map((l) => h(keyOf(l) === picked ? "p.picked" : "p", { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
+  caps.replaceChildren(...lines.slice(-50).map((l) => h(`p${keyOf(l) === picked ? ".picked" : ""}${keyOf(l) === focusKey ? ".focus" : ""}`, { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
     voiceChipLabel(l) ? h("span.chip", {}, voiceChipLabel(l)) : null,
     !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l),
     reacts[keyOf(l)] ? h("span.emo.my-react", {}, reacts[keyOf(l)]) : null)));
@@ -183,11 +183,13 @@ function drawCaps() {
   markFocus();
 }
 
-// Bold follows the scroll: the bottom-most fully visible line, or the latest while following live.
+// The big bold line follows the scroll: the bottom-most fully visible line, or the latest while following live.
+// Redraws keep it on the same line (focusKey), so a new line arriving never resizes what you're reading.
+let focusKey = null;
 function markFocus() {
-  const ps = [...caps.children];
-  const i = focusIndex(ps.map((p) => p.getBoundingClientRect()), caps.getBoundingClientRect().bottom, atBottom);
-  ps.forEach((p, j) => p.classList.toggle("focus", j === i));
+  if (!lines.length) return; // the waiting message isn't a line
+  const i = setFocus(caps, atBottom);
+  if (i >= 0) focusKey = keyOf(lines.slice(-50)[i]);
 }
 
 // One tap opens the caption; a quick second tap likes it without opening (dblclick is unreliable on phones).

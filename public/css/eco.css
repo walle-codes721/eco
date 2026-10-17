@@ -216,10 +216,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .captions { display: flex; flex-direction: column; gap: 10px; min-height: min(40vh, 360px); max-height: min(46vh, 360px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
 .captions > :first-child { margin-top: auto; }
 .captions::-webkit-scrollbar { display: none; }
-.captions > p { color: var(--faint); font-size: 15px; transition: all 0.5s var(--ease); }
-/* the latest line keeps its size; the bold follows the scroll (.focus), so heights never shift mid-scroll */
-.captions > p:last-child { font-size: clamp(24px, 6.4vw, 34px); line-height: 1.25; letter-spacing: -0.025em; }
-.captions > p.focus { color: var(--ink); font-weight: 600; }
+.captions > p { color: var(--faint); font-size: 15px; transition: color 0.3s var(--ease); }
+/* the big bold line follows the scroll (.focus, see setFocus): the latest while following live */
+.captions > p.focus { color: var(--ink); font-size: clamp(24px, 6.4vw, 34px); line-height: 1.25; font-weight: 600; letter-spacing: -0.025em; }
 .captions > p.new { animation: rise 0.6s var(--ease); }
 .captions .flag { font-size: 12px; color: var(--muted); font-weight: 500; }
 .captions .when { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; margin-right: 7px; }
@@ -384,8 +383,10 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .slide-stage:hover .slide-nav, .slide-nav:focus-within { opacity: 1; }
 .slide-count { font-size: 13px; font-variant-numeric: tabular-nums; padding: 0 4px; }
 .said-card { flex: 0 0 30% !important; display: flex; flex-direction: column; min-height: 0; }
-.said-card .caps-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.said-card .said .now { font-size: clamp(20px, 1.9vw, 30px); }
+/* laptop: the card is a fixed share of the column, so the transcript and its translations split it */
+.said-card .caps-wrap { flex: 3 1 0; min-height: 0; display: flex; flex-direction: column; }
+.said-tr { flex: 2 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.said-card .said p.focus { font-size: clamp(20px, 1.9vw, 30px); }
 /* teleprompter: above the slides, host only; the slide stage shrinks to make room */
 .prompter-card { display: flex; align-items: center; gap: 14px; }
 .prompter-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -421,6 +422,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
   .slide-box { width: 100%; }
   .said-card { flex: none !important; }
   .said { max-height: min(40vh, 320px); }
+  .said-card .caps-wrap, .said-tr { flex: none; }
   .qr-fit { max-width: 280px; }
 }
 .mic-btn { width: 100%; display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 16px; border: 1px solid var(--line-2); background: var(--card-2); cursor: pointer; text-align: left; }
@@ -432,8 +434,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .said::-webkit-scrollbar { display: none; }
 .said > :first-child { margin-top: auto; }
 .said > p { color: var(--muted); font-size: 16px; transition: color 0.3s var(--ease); }
-.said .now { font-size: clamp(24px, 2.6vw, 36px); letter-spacing: -0.03em; line-height: 1.18; animation: rise 0.5s var(--ease); }
-.said > p.focus { color: var(--ink); font-weight: 650; }
+.said .now { animation: rise 0.5s var(--ease); }
+.said > p.focus { color: var(--ink); font-size: clamp(24px, 2.6vw, 36px); font-weight: 650; letter-spacing: -0.03em; line-height: 1.18; }
 .tr { display: grid; grid-template-columns: 34px 1fr; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); font-size: 17px; }
 .tr .chip { justify-content: center; }
 .topic { display: grid; grid-template-columns: 42px 1fr; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
