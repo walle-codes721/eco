@@ -370,6 +370,18 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .slide-count { font-size: 13px; font-variant-numeric: tabular-nums; padding: 0 4px; }
 .said-card { flex: 0 0 30% !important; }
 .said-card .said .now { font-size: clamp(20px, 1.9vw, 30px); }
+/* teleprompter: above the slides, host only; the slide stage shrinks to make room */
+.prompter-card { display: flex; align-items: center; gap: 14px; }
+.prompter-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+/* fixed two-line slot so the band never changes height between phrases */
+.prompter-text .now { font-size: clamp(22px, 2.2vw, 34px); font-weight: 650; letter-spacing: -0.03em; line-height: 1.18; height: 2.36em; display: flex; align-items: center; overflow: hidden; animation: rise 0.3s var(--ease); }
+.prompter-text .past { color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prompter-nav { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: none; }
+.console .prompter-card { min-height: 162px; }
+.prompter-card [hidden] { display: none; }
+.prompter-card > .ghost { align-self: flex-start; flex: none; }
+.prompter-text .prompter-add { align-self: center; }
+.q-item .q-act { width: 32px; height: 32px; font-size: 13px; font-weight: 650; }
 .mic-box { display: flex; flex-direction: column; gap: 10px; padding: 12px !important; }
 .mic-box .mic-btn { width: auto; padding: 4px 14px 4px 4px; gap: 10px; border-radius: 999px; }
 .mic-box .mic-btn .ico { width: 40px; height: 40px; }

@@ -2,6 +2,7 @@
 // Rooms without an uploaded PDF fall back to text slides built from the room's page text.
 import { h } from "/js/eco.js";
 import { groupRows } from "/js/slide-rows.js";
+import { docxText } from "/js/script.js";
 
 let pdfjs;
 async function lib() {
@@ -135,4 +136,12 @@ export async function deckFor(id, meta, { fresh = false } = {}) {
       return pdf ? renderPage(pdf, n, width) : textSlide(meta.slides[n - 1], n);
     },
   };
+}
+
+/** Teleprompter script text from a .docx, .pdf, .txt or .md file. Throws on anything else. */
+export async function scriptFileText(f) {
+  if (/\.docx$/i.test(f.name)) return docxText(await f.arrayBuffer());
+  if (/\.pdf$/i.test(f.name)) return (await pdfPages(await openPdf(new Uint8Array(await f.arrayBuffer())))).map((p) => p.text).join("\n");
+  if (/\.(txt|md)$/i.test(f.name)) return f.text();
+  throw new Error("Save it as .docx, PDF or .txt");
 }

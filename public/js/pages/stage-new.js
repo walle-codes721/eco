@@ -1,6 +1,7 @@
 import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me } from "/js/eco.js";
-import { openPdf, pdfPages, pdfDeckRows, renderPage, saveDeck, uploadDeck } from "/js/slides.js";
+import { openPdf, pdfPages, pdfDeckRows, renderPage, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
 import { deckPreviewSetup } from "/js/deck-preview.js";
+import { splitScript } from "/js/script.js";
 
 const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
 const state = { langs: ["it", "es", "hi"], pages: [], deckPages: [], deckLang: "en", bytes: null, pdf: null };
@@ -9,6 +10,28 @@ const title = h("input", { type: "text", placeholder: "One engine, two rooms", m
 const speaker = h("input", { type: "text", placeholder: "Your name", maxlength: 80, autocomplete: "name" });
 const notes = h("textarea", { placeholder: "Things you'll say that aren't on the slides: numbers, links, answers to likely questions." });
 const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
+
+// Teleprompter script: pasted or read from a file, split into phrases on submit. Only the speaker sees it.
+const script = h("textarea", { placeholder: "Paste what you plan to say. Eco shows it to you a few words at a time while you present." });
+const scriptInfo = h("span.small.muted");
+const scriptFile = h("input", { type: "file", accept: ".txt,.md,.pdf,.docx", hidden: true });
+const scriptCount = () => {
+  const n = splitScript(script.value).length;
+  scriptInfo.textContent = n ? `${n} lines` : "";
+};
+script.oninput = scriptCount;
+scriptFile.onchange = async () => {
+  const f = scriptFile.files[0];
+  scriptFile.value = "";
+  if (!f) return;
+  try {
+    script.value = await scriptFileText(f);
+    scriptCount();
+  } catch (err) {
+    toast(err.message.startsWith("Save") ? err.message : "Couldn't read that file");
+  }
+};
+const scriptUpload = h("button.btn.sm", { type: "button", onclick: () => scriptFile.click() }, icon("doc"), "Upload script");
 const thumbs = h("div.thumbs");
 const deckInfo = h("p.small.muted");
 const deckPreview = h("div");
@@ -107,6 +130,7 @@ const form = h("form", {},
   section("Your talk", "Shown on every listener's phone.", h("label.field", {}, "Title", title), h("label.field", {}, "Speaker", speaker), link.el),
   section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs, deckPreview),
   section("Notes", "Optional. Also used to answer questions.", notes),
+  section("Script", "Optional. Only you see it, as a teleprompter above your slides. Word, PDF or text.", script, h("div.row", { style: { gap: "10px" } }, scriptUpload, scriptFile, scriptInfo)),
   section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
   section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices))),
   h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end" } }, create),
@@ -122,7 +146,7 @@ form.onsubmit = async (e) => {
       method: "POST",
       body: {
         mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs,
-        pages: state.pages, notes: notes.value, voice: state.voice,
+        pages: state.pages, notes: notes.value, voice: state.voice, script: splitScript(script.value),
       },
     });
     if (state.bytes) {

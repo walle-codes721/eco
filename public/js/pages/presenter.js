@@ -1,7 +1,8 @@
 import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES } from "/js/mic.js";
-import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck } from "/js/slides.js";
+import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
+import { splitScript } from "/js/script.js";
 import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
@@ -53,7 +54,7 @@ spokenLang.onchange = () => (store(`eco:plang:${id}`, spokenLang.value), drawPol
 const bar = h("header.bar", {}, h("div.inner", {},
   h("a.brand", { href: "/" }, "Eco"),
   h("span.title.truncate", {}, meta.title),
-  modePill(meta), statusPill, timer,
+  meta.live && !meta.demo ? null : modePill(meta), statusPill, timer,
   h("span.spacer"),
   spokenLang, latency, calls,
   h("a.btn.sm", { href: `/${id}/screen`, target: "eco-screen" }, icon("ext"), "Projector"),
@@ -106,6 +107,76 @@ const saidCard = h("div.card.said-card", {},
   now,
 );
 
+// ---------- teleprompter: the speaker's own script, one line at a time (host only) ----------
+let script = meta.script ?? [];
+let line = Math.min(Number(store(`eco:prompt:${id}`)) || 0, Math.max(script.length - 1, 0));
+const promptText = h("div.prompter-text");
+const promptCount = h("span.slide-count");
+const lineUp = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous line", onclick: () => goLine(line - 1) }, icon("up"));
+const lineDown = h("button.btn.icon-btn", { type: "button", "aria-label": "Next line", onclick: () => goLine(line + 1) }, icon("down"));
+const scriptBtn = h("button.btn.icon-btn.ghost", { type: "button", "aria-label": "Edit script", title: "Edit script", onclick: () => scriptSheet() }, icon("text"));
+const promptNav = h("div.prompter-nav", {}, lineUp, promptCount, lineDown);
+const prompter = host && !meta.demo ? h("div.card.prompter-card", {}, promptText, promptNav, scriptBtn) : null;
+function goLine(n) {
+  if (!script.length) {
+    promptNav.hidden = scriptBtn.hidden = true;
+    return promptText.replaceChildren(h("button.btn.prompter-add", { type: "button", onclick: () => scriptSheet() }, icon("plus"), "Add your script"));
+  }
+  promptNav.hidden = scriptBtn.hidden = false;
+  line = Math.max(0, Math.min(n, script.length - 1));
+  store(`eco:prompt:${id}`, String(line));
+  promptText.replaceChildren(
+    h("div.past", {}, script[line - 1] ?? "\u00a0"),
+    h("div.now", {}, script[line]),
+    h("div.past", {}, script[line + 1] ?? "\u00a0"),
+  );
+  promptCount.textContent = `${line + 1} / ${script.length}`;
+  lineUp.disabled = line <= 0;
+  lineDown.disabled = line >= script.length - 1;
+}
+if (prompter) goLine(line);
+
+/** Paste, type or upload the script; saving re-splits it into lines and starts from the top. */
+function scriptSheet() {
+  const box = h("textarea", { rows: 12, placeholder: "Paste or type what you plan to say." }, script.join("\n"));
+  const count = h("span.small.muted");
+  const recount = () => (count.textContent = `${splitScript(box.value).length} lines`);
+  box.oninput = recount;
+  recount();
+  const file = h("input", { type: "file", accept: ".txt,.md,.pdf,.docx", hidden: true });
+  file.onchange = async () => {
+    const f = file.files[0];
+    file.value = "";
+    if (!f) return;
+    try {
+      box.value = await scriptFileText(f);
+      recount();
+    } catch (err) {
+      toast(err.message.startsWith("Save") ? err.message : "Couldn't read that file");
+    }
+  };
+  const save = h("button.btn.primary.sm", { type: "button" }, icon("check"), "Save");
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      ({ script } = await api(`/api/rooms/${id}/script`, { method: "POST", key, body: { script: splitScript(box.value) } }));
+      goLine(0);
+      wrap.remove();
+    } catch {
+      toast("Couldn't save the script");
+      save.disabled = false;
+    }
+  };
+  const wrap = h("div.sheet-wrap", { onclick: (e) => e.target === wrap && wrap.remove() }, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "560px", width: "100%" } },
+    h("div.row", {}, h("h2", {}, "Teleprompter"), h("span.spacer"), h("button.btn.icon-btn", { type: "button", "aria-label": "Close", onclick: () => wrap.remove() }, icon("x"))),
+    box,
+    h("div.row", { style: { gap: "10px" } },
+      h("button.btn.icon-btn", { type: "button", "aria-label": "Upload Word, PDF or text", title: "Upload Word, PDF or text", onclick: () => file.click() }, icon("doc")), file,
+      count, h("span.spacer"), save)));
+  document.body.append(wrap);
+  box.focus();
+}
+
 // ---------- the board ----------
 const listenersEl = h("div");
 const askedEl = h("div");
@@ -119,7 +190,7 @@ document.body.replaceChildren(...[bar, demo ? h("div.wrap", { style: { maxWidth:
       h("div.card.room-card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Who's in the room")), listenersEl),
       h("div.card.grow", {}, h("div.card-head", {}, h("span.eyebrow", {}, "What the audience asked")), askedEl),
       micBox),
-    h("div.col.col-mid", {}, slideStage, saidCard),
+    h("div.col.col-mid", {}, prompter, slideStage, saidCard),
     h("div.col.col-right", {},
       host ? askCard() : h("div.card.grow", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Ask")), h("p.empty", {}, "Open the presenter link to ask the room.")),
       qrBox),
@@ -165,12 +236,12 @@ function drawBoard() {
   // Needs you first (not in the slides, unanswered), then what the slides answered, then what you already answered.
   const qItem = (g) => h(`div.q-item${g.answeredAt != null ? ".done" : ""}`, {},
     h("span.chip" + (g.count > 1 ? ".red" : ""), {}, String(g.count)),
-    h("div", { style: { flex: 1 } }, h("div", {}, g.q), h("div.tiny.muted", {}, g.langs.map((l) => langName(l)).join(", "))),
+    h("div", { style: { flex: 1, minWidth: 0 } }, h("div", {}, g.q), h("div.tiny.muted", {}, g.langs.map((l) => langName(l)).join(", "))),
     h("div.row", { style: { gap: "6px", flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" } },
       g.taught ? h("span.tiny.muted", {}, "Eco learned this ✓")
         : g.answeredAt != null ? h("span.tiny.muted", {}, `answered ${fmtTime(g.answeredAt)}`) : null,
-      host && !g.taught ? h("button.btn.sm", { type: "button", onclick: () => teachSheet(g) }, icon("plus"), "Answer it") : null,
-      g.answeredAt == null ? h("button.btn.sm", { type: "button", onclick: () => answered(g.qids) }, icon("check"), "Answered") : null));
+      host && !g.taught ? h("button.btn.icon-btn.q-act", { type: "button", "aria-label": "Answer it", title: "Answer it: teach Eco the answer", onclick: () => teachSheet(g) }, "Aa") : null,
+      g.answeredAt == null ? h("button.btn.icon-btn.q-act", { type: "button", "aria-label": "Answered", title: "Mark answered", onclick: () => answered(g.qids) }, icon("check")) : null));
   const open = board.queue.filter((g) => g.answeredAt == null);
   const done = board.queue.filter((g) => g.answeredAt != null);
   askedEl.replaceChildren(...(board.queue.length || board.topics.length ? [

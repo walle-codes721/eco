@@ -63,6 +63,10 @@ const MOCK_LINE = "(Mock mode: Eco heard you. Real transcripts and translations 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const uid = () => crypto.randomUUID().slice(0, 8);
 
+/** Teleprompter phrases from the client: at most 2,000 lines of 200 characters. */
+const cleanScript = (v: unknown): string[] =>
+  (Array.isArray(v) ? v : []).slice(0, 2000).map((p) => String(p ?? "").slice(0, 200).trim()).filter(Boolean);
+
 export class Room extends DurableObject<Env> {
   meta: Meta | null = null;
   pages: { tag: string; text: string }[] = [];
@@ -75,6 +79,8 @@ export class Room extends DurableObject<Env> {
   summary: Summary | null = null;
   polls: Poll[] = [];
   deckPages: DeckPageRows[] = [];
+  /** Teleprompter phrases. Host only: never in publicMeta, pages or chunks. */
+  script: string[] = [];
   slideTranslations: Record<number, Record<string, string[]>> = {};
   private slideTransPending = new Set<number>();
   private summarizing = false;
@@ -88,7 +94,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -101,10 +107,11 @@ export class Room extends DurableObject<Env> {
       this.polls = (s.get("polls") as Poll[]) ?? [];
       this.deckPages = (s.get("deckPages") as DeckPageRows[]) ?? [];
       this.slideTranslations = (s.get("slideTranslations") as typeof this.slideTranslations) ?? {};
+      this.script = (s.get("script") as string[]) ?? [];
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations" | "script")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -146,7 +153,8 @@ export class Room extends DurableObject<Env> {
     if (body.notes) pages.push({ tag: "notes", text: s(body.notes, 20000) });
     this.pages = pages;
     this.chunks = chunkPages(pages);
-    await this.save("meta", "pages", "chunks");
+    this.script = cleanScript(body.script);
+    await this.save("meta", "pages", "chunks", "script");
     return { id, hostKey: this.meta.hostKey };
   }
 
@@ -222,7 +230,7 @@ export class Room extends DurableObject<Env> {
 
     switch (`${req.method} ${action}`) {
       case "GET meta":
-        return json({ ...this.publicMeta(), host: isHost, me: me?.id ?? null, ...(me ? { sampleText: SAMPLE_TEXT } : {}), ...(isHost ? { joinKey: m.joinKey } : {}) });
+        return json({ ...this.publicMeta(), host: isHost, me: me?.id ?? null, ...(me ? { sampleText: SAMPLE_TEXT } : {}), ...(isHost ? { joinKey: m.joinKey, script: this.script } : {}) });
       case "GET ws":
         return this.openSocket(url, isHost, me);
       case "GET transcript":
@@ -324,6 +332,11 @@ export class Room extends DurableObject<Env> {
       return json({ ok: true, pages: this.deckPages.length });
     }
     const body: any = await req.json().catch(() => ({}));
+    if (`${req.method} ${action}` === "POST script") {
+      this.script = cleanScript(body.script);
+      await this.save("script");
+      return json({ script: this.script });
+    }
     switch (`${req.method} ${action}`) {
       case "POST slide": {
         m.slide = Math.max(1, Math.min(Number(body.n) || 1, Math.max(1, slidePages(this.pages).length)));
