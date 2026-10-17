@@ -16,13 +16,44 @@ if (!user) {
   const date = (t) => new Date(t).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   const row = (r) => {
     const id = `${r.kind}/${user.handle}/${r.slug}`;
+    const status = h("div.tiny.muted");
     const links = r.kind === "stage"
-      ? [h("a.btn.primary.sm", { href: `/${id}/speak` }, icon("stage"), "Present"), h("a.btn.sm", { href: `/${id}/card` }, "Card"), h("a.btn.sm", { href: `/${id}` }, "Audience view")]
+      ? [h("a.btn.primary.sm", { href: `/${id}/speak` }, icon("stage"), "Present"), h("button.btn.sm", { type: "button", onclick: (e) => duplicate(id, e.currentTarget) }, icon("copy"), "Duplicate"),
+        h("a.btn.sm", { href: `/${id}/card` }, "Card"), h("a.btn.sm", { href: `/${id}` }, "Audience view"), h("button.btn.sm.ghost", { type: "button", onclick: () => remove(id, r.title, card) }, "Delete")]
       : [h("a.btn.primary.sm", { href: `/${id}/owner` }, icon("store"), "Open counter"), h("a.btn.sm", { href: `/${id}/card` }, "Weekly card"), h("a.btn.sm", { href: `/${id}/sticker` }, icon("print"), "Sticker")];
-    return h("div.card", { style: { padding: "18px 20px" } },
+    const card = h("div.card", { style: { padding: "18px 20px" } },
       h("div.row", { style: { flexWrap: "wrap", gap: "12px" } },
-        h("div", { style: { flex: "1 1 240px", minWidth: 0 } }, h("div", { style: { fontWeight: 600 } }, r.title), h("div.tiny.muted.mono.truncate", {}, `/${id} · ${date(r.created)}`)),
+        h("div", { style: { flex: "1 1 240px", minWidth: 0 } }, h("div", { style: { fontWeight: 600 } }, r.title), h("div.tiny.muted.mono.truncate", {}, `/${id} · ${date(r.created)}`), status),
         h("div.row", { style: { flexWrap: "wrap", gap: "8px" } }, ...links)));
+    if (r.kind === "stage") api(`/api/rooms/${id}/meta`).then((m) => (status.textContent = presentationStatus(m))).catch(() => {});
+    return card;
+  };
+  /** "Not started · Voices 312/744": where the talk is, and how far its HACKATHON prep has got. */
+  const presentationStatus = (m) => {
+    const p = m.prep;
+    const prep = !p?.lines ? "" : p.translated < p.lines ? `Translating ${p.translated}/${p.lines}` : p.done < p.total ? `Voices ${p.done}/${p.total}` : `Ready · ${p.lines} lines`;
+    return [{ lobby: "Not started", live: "Live", ended: "Ended" }[m.status], prep, p?.failed ? `${p.failed} failed` : ""].filter(Boolean).join(" · ");
+  };
+  /** Same slides, context, script, translations and voices, from the start, at a new link. No new prep. */
+  const duplicate = async (id, btn) => {
+    btn.disabled = true;
+    try {
+      const { id: to } = await api(`/api/rooms/${id}/duplicate`, { method: "POST" });
+      location.href = `/${to}/speak`;
+    } catch (err) {
+      toast(err.message || "Couldn't duplicate");
+      btn.disabled = false;
+    }
+  };
+  const remove = async (id, title, card) => {
+    if (!confirm(`Delete "${title}"? Its slides, transcript and recordings are deleted. Duplicates keep their voices.`)) return;
+    try {
+      await api(`/api/rooms/${id}/delete`, { method: "POST" });
+      card.remove();
+      toast("Deleted");
+    } catch (err) {
+      toast(err.message || "Couldn't delete");
+    }
   };
   const list = (kind, head, empty, newHref, newLabel) => {
     const rooms = user.rooms.filter((r) => r.kind === kind);
@@ -66,7 +97,7 @@ if (!user) {
       : h("section.form-section", {}, h("header", {}, h("h2", {}, "Your name"), h("p", {}, "It goes in every link you share. You can change it until you create your first talk or shop.")), nameForm),
     h("section.form-section", {}, h("header", {}, h("h2", {}, "Your saved voice"), h("p", {}, "Record it once. Any talk can use it: pick \"Your saved voice\" when you create the talk.")),
       sampleCard({ url: "/api/me/voice", playUrl: "/api/me/voice", sampleText: user.sampleText, has: user.voice, title: "Saved voice", intro: "Read this aloud in a quiet room:" })),
-    list("stage", "Talks", "No talks yet.", "/stage/new", "New talk"),
+    list("stage", "Presentations", "No presentations yet.", "/stage/new", "New presentation"),
     list("counter", "Shops", "No shops yet.", "/counter/new", "New counter"),
   );
 }
