@@ -3,7 +3,7 @@ import { tf } from "./tf";
 import { MODELS, extractPrompt } from "./prompts";
 import { authRoute, sessionSub } from "./auth";
 import { NAME, slugify } from "./names";
-import { SAMPLE_TEXT, savedKey, sampleObjectKey, parseVoiceUpload, deleteStoredSample, loadStoredSample } from "./voice";
+import { SAMPLE_TEXT, savedKey, sampleObjectKey, parseVoiceUpload, deleteStoredSample, loadStoredSample, hasStoredSample } from "./voice";
 
 export { Room } from "./room";
 export { Budget } from "./budget";
@@ -87,7 +87,7 @@ async function api(req: Request, env: Env, url: URL, path: string, ip: string): 
       return json(r, r.ok ? 200 : 400);
     }
     const user = await account(`u:${sub}`).me();
-    const hasVoice = !!(await loadStoredSample(env.FILES, savedKey(sub)));
+    const hasVoice = await hasStoredSample(env.FILES, savedKey(sub));
     return json({ user: user && { ...user, voice: hasVoice, sampleText: SAMPLE_TEXT } });
   }
 

@@ -106,6 +106,12 @@ export async function loadStoredSample(
   return null;
 }
 
+/** Existence check only: head, so no clip is downloaded. */
+export async function hasStoredSample(files: Pick<R2Bucket, "head">, prefix: string): Promise<boolean> {
+  for (const ext of VOICE_SAMPLE_EXTS) if (await files.head(sampleObjectKey(prefix, ext))) return true;
+  return false;
+}
+
 export async function deleteStoredSample(files: Pick<R2Bucket, "delete">, prefix: string): Promise<void> {
   await Promise.all(VOICE_SAMPLE_EXTS.map((ext) => files.delete(sampleObjectKey(prefix, ext))));
 }

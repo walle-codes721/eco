@@ -137,3 +137,14 @@ describe("voice sample intake at the room boundary", () => {
   });
 });
 
+
+describe("hasStoredSample", () => {
+  it("checks existence with head, never downloading the clip", async () => {
+    const files = {
+      head: async (key: string) => (key === "users/u/voice.mp3" ? {} : null),
+      get: async () => { throw new Error("must not download"); },
+    };
+    expect(await voices.hasStoredSample(files as never, "users/u/voice")).toBe(true);
+    expect(await voices.hasStoredSample(files as never, "users/none/voice")).toBe(false);
+  });
+});
