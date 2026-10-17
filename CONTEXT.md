@@ -54,6 +54,22 @@ _Avoid_: caption, message, utterance
 **Caption**:
 A line as one listener reads it, in that listener's language.
 
+**Deck**:
+The speaker's slides for a Stage. Its written words are in one language, English unless the speaker chooses another.
+_Avoid_: presentation, slideshow
+
+**Slide**:
+One page of the deck. On a PDF, the projector shows it as designed, and a listener's phone shows that same page with the written words in their language, except rows the speaker kept. The listener can switch to the designed page and back; the choice stays for the talk. Without a PDF, the page stays in the deck's language.
+_Avoid_: presentation, page, caption, user
+
+**Skipped slide**:
+A slide the speaker marks, while reviewing the deck, so that none of its rows are translated. Every phone shows it as designed, whatever the listener's language, and no translation call is made for it. Its rows stay stored, so the speaker can undo this, and it wins over any row marked kept on that slide.
+_Avoid_: ignored slide, hidden slide
+
+**Row**:
+The written words on a slide that sit together on one baseline. A wide gap on that baseline starts another row. Translated as one string, then painted across that row. A row the speaker marks when uploading the deck stays in the deck's language on every phone.
+_Avoid_: line, text run, fragment, quotation
+
 **Now speaking**:
 The room's live signal of which speaker is talking at this moment, driven by speech detection on each speaker's device, never by an AI call.
 _Avoid_: active speaker

@@ -1,7 +1,8 @@
 import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES } from "/js/mic.js";
-import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
+import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck } from "/js/slides.js";
+import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
 import { pollQ, pollResults } from "/js/polls.js";
@@ -324,10 +325,25 @@ function replaceSlides() {
     const f = file.files[0];
     if (!f) return;
     btn.disabled = true;
-    btn.lastChild.textContent = "Uploading…";
     try {
       const bytes = new Uint8Array(await f.arrayBuffer());
-      const pages = await pdfPages(await openPdf(bytes));
+      const pdf = await openPdf(bytes);
+      const pages = await pdfPages(pdf);
+      const deckPages = await pdfDeckRows(pdf);
+      let deckLang = meta.deckLang || "en";
+      const ok = await openDeckRowCarousel(pdf, deckPages, {
+        deckLang,
+        onLang: (l) => { deckLang = l; },
+        onChange: () => {},
+        confirmLabel: "Store slides",
+        withLang: true,
+      });
+      if (!ok) {
+        btn.disabled = false;
+        return;
+      }
+      btn.lastChild.textContent = "Uploading…";
+      await api(`/api/rooms/${id}/deckrows`, { method: "POST", key, body: { deckLang, pages: deckPages } });
       const { pages: old } = await api(`/api/rooms/${id}/sources`, { key });
       await api(`/api/rooms/${id}/sources`, { method: "POST", key, body: { pages: [...pages, ...old.filter((p) => p.tag === "notes")] } });
       await saveDeck(id, bytes);
@@ -335,7 +351,7 @@ function replaceSlides() {
     } catch {
       toast("Couldn't replace the slides");
       btn.disabled = false;
-      btn.lastChild.textContent = "Replace slides";
+      btn.lastChild.textContent = deck.pdf ? "Replace slides" : "Upload slides (PDF)";
     }
   };
   return h("div", { style: { marginTop: "10px" } }, btn, file);
