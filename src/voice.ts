@@ -5,7 +5,7 @@ import { tfSpeech, isLive, type SpeechStatus } from "./tf";
 
 /** The sentence every speaker reads for their sample, so the model gets the reference transcript for free. */
 export const SAMPLE_TEXT =
-  "Hello, this is my voice for Eco. I am reading this so everyone hears me.";
+  "Hello, this is a test of my cloned voice.";
 
 /** What listeners hear: the account's saved voice, a sample recorded for this talk, or the phone's own voice. */
 export type VoiceMode = "saved" | "sample" | "phone";

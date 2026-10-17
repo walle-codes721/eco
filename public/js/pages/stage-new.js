@@ -115,11 +115,11 @@ state.voice = user?.voice ? "saved" : "sample";
 const voices = {
   saved: option("Your saved voice", user?.voice ? "The voice you recorded on your account page. Nothing to record for this talk."
     : h("span", {}, user ? "Record it once on " : "Sign in and record it once on ", h("a", { href: user ? "/me" : "/auth/google?next=/me" }, "your account page"), ", then every talk can use it."), state.voice === "saved", !user?.voice),
-  sample: option("Record for this talk", "Record a 10-second sample from the presenter page (and each co-speaker from theirs). Listeners hear each speaker's cloned voice in their language.", state.voice === "sample"),
+  sample: option("Record for this talk", "Record a short sample from the presenter page (and each co-speaker from theirs). Listeners hear each speaker's cloned voice in their language.", state.voice === "sample"),
   phone: option("Phone voice", "No cloning: each phone reads the translation aloud, a different voice per speaker.", false),
 };
 const sampleScript = h("div", { hidden: state.voice !== "sample", style: { marginTop: "12px" } },
-  h("p.small", {}, "You will read this aloud for about 10 seconds on the presenter page:"),
+  h("p.small", {}, "You will read this aloud (just this one sentence) on the presenter page:"),
   h("blockquote.small", { style: { margin: "6px 0 0", padding: "10px 14px", borderLeft: "3px solid var(--red)", background: "var(--bg-2)", borderRadius: "8px" } }, SAMPLE_TEXT));
 const presetBox = h("input", { type: "checkbox", id: "presets-enabled" });
 const presetField = h("label.check", { style: { marginTop: "12px" } }, presetBox,
