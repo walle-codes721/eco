@@ -53,6 +53,11 @@ async function hedged(post: Post, limit: number): Promise<{ res: Response; model
 
 export const isLive =(env: Env) => env.ECO_LIVE === "1" && !!env.RADEON_API_KEY;
 
+/** Slide prefetch: one retry on the text fallback when Gemma fails (timeout, gateway, etc.). */
+function retrySlideOnTextFallback(kind: Kind, model: string, already: boolean) {
+  return kind === "slide" && model === MODELS.answer && !already;
+}
+
 /** Parses model output that should be JSON, tolerating ```json fences. */
 export function parseJson<T>(content: string): T {
   const s = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "");
@@ -113,12 +118,14 @@ export async function tf<T>(
   let content = "";
   let finishReason: string | undefined;
   let why = "";
+  let slideFallbackTried = model === TEXT_FALLBACK;
   try {
     for (let attempt = 0; ; attempt++) {
       const attemptAt = Date.now();
       const measured = { model, status: 0, ms: 0 };
       opts.timing?.attempts.push(measured);
       let retryMs = 0;
+      let stop = false;
       try {
         const post = (m: string, signal: AbortSignal) =>
           fetch(`${BASE}/chat/completions`, {
@@ -157,6 +164,7 @@ export async function tf<T>(
           content = typeof value === "string" ? value : "";
           finishReason = j.choices[0]?.finish_reason;
           usage = j.usage ?? usage;
+          stop = true;
         } else {
           // Gateway errors are {"error":{...}}, platform errors {"detail":{"error":{...}}}. Never includes the key.
           const body = await res.text().catch(() => "");
@@ -170,19 +178,36 @@ export async function tf<T>(
           if (status === 400 && model === MODELS.answer && /not supported/i.test(msg)) {
             gemmaMissingUntil = Date.now() + GEMMA_RECHECK_MS;
             model = TEXT_FALLBACK;
+            slideFallbackTried = true;
             why = "";
             continue;
           }
+          if (retrySlideOnTextFallback(kind, model, slideFallbackTried)) {
+            slideFallbackTried = true;
+            model = TEXT_FALLBACK;
+            why = "";
+            status = 0;
+            continue;
+          }
+          stop = true;
         }
-        break;
+      } catch (e) {
+        status = status || 599; // timeout or network
+        why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
+        if (retrySlideOnTextFallback(kind, model, slideFallbackTried)) {
+          slideFallbackTried = true;
+          model = TEXT_FALLBACK;
+          why = "";
+          status = 0;
+          continue;
+        }
+        stop = true;
       } finally {
         // Provider round trip and body decoding; excludes explicit retry sleeps.
         measured.ms = Date.now() - attemptAt - retryMs;
       }
+      if (stop) break;
     }
-  } catch (e) {
-    status = status || 599; // timeout or network
-    why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
   } finally {
     const accountingAt = Date.now();
     await budget.finish({

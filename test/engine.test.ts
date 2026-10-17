@@ -420,6 +420,29 @@ import { vi } from "vitest";
 import { tf, TEXT_FALLBACK } from "../src/tf";
 
 describe("Gemma fallback (fetch mocked, no real calls)", () => {
+  it("retries a slide translation on DeepSeek when Gemma times out", async () => {
+    const finished: { model: string; status: number }[] = [];
+    const env = {
+      ECO_LIVE: "1",
+      RADEON_API_KEY: "test",
+      BUDGET: { idFromName: () => "g", get: () => ({ acquire: async () => ({ ok: true }), finish: async (r: { model: string; status: number }) => void finished.push(r) }) },
+    } as never;
+    const sent: string[] = [];
+    const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"out":{"it":["Ciao"]}}' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }));
+    vi.stubGlobal("fetch", async (_u: string, init: { body: string }) => {
+      const model = JSON.parse(init.body).model;
+      sent.push(model);
+      if (model === MODELS.answer) throw new DOMException("The operation timed out.", "TimeoutError");
+      return ok();
+    });
+    const req = slideRowsPrompt("en", ["it"], ["Hello"]);
+    const r = await tf(env, "slide", MODELS.answer, req, { pub: false, mock: () => ({ out: {} }) });
+    expect(r.data).toEqual({ out: { it: ["Ciao"] } });
+    expect(sent).toEqual([MODELS.answer, TEXT_FALLBACK]);
+    expect(finished).toEqual([expect.objectContaining({ model: TEXT_FALLBACK, status: 200 })]);
+    vi.unstubAllGlobals();
+  });
+
   it("answers on DeepSeek when Gemma is 'not supported', without counting a failure, then skips Gemma", async () => {
     const finished: { model: string; status: number }[] = [];
     const env = {
