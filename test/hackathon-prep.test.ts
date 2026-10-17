@@ -22,7 +22,8 @@ type Files = Map<string, ArrayBuffer>;
 
 async function prepRoom(clip: (text: string, lang: string) => ArrayBuffer | null = () => new ArrayBuffer(8), roomId = id, files: Files = new Map()) {
   let ready: Promise<unknown>;
-  const voiceTag = { etag: "first-recording" }; // R2 etag of the speaker's sample: a new recording changes it
+  // The speaker's sample as R2 describes it: a new recording changes the etag; `uploaded`/`customMetadata` say what it says.
+  const voiceTag: { etag: string; uploaded?: Date; customMetadata?: Record<string, string> } = { etag: "first-recording" };
   let alarm: number | null = null;
   const store = new Map<string, unknown>();
   const ctx = {
@@ -40,7 +41,7 @@ async function prepRoom(clip: (text: string, lang: string) => ArrayBuffer | null
   };
   const file = (b: ArrayBuffer) => ({ body: new Uint8Array(b), arrayBuffer: async () => b });
   const room = new Room(ctx as unknown as DurableObjectState, { ECO_LIVE: "0", VOICE_URL: "https://space.test", FILES: {
-    get: async (k: string) => (files.has(k) ? file(files.get(k)!) : k.includes("/voice/") ? file(new ArrayBuffer(100)) : null),
+    get: async (k: string) => (files.has(k) ? file(files.get(k)!) : k.includes("/voice/") ? { ...file(new ArrayBuffer(100)), ...voiceTag } : null),
     put: async (k: string, v: ArrayBuffer) => { files.set(k, v); },
     delete: async (k: string | string[]) => { for (const x of [k].flat()) files.delete(x); },
     list: async ({ prefix }: { prefix: string }) => ({ objects: [...files.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })), truncated: false }),
@@ -209,7 +210,18 @@ describe("fixing a prepared talk without redoing it", () => {
     expect(await drain()).toMatchObject({ done: 18 });
     expect(voice).toHaveBeenCalledTimes(3 * 3); // 3 lines × es,it,en in the speaker's voice; Morgan's stay
     expect(voice.mock.calls.every(([, sample]) => (sample as ArrayBuffer).byteLength === 100)).toBe(true); // the speaker's sample
-    expect(room.meta!.voiceTag).toBe("second-recording");
+    expect(room.meta!.voiceTag).toBe("second-recording|Hello, this is a test of my cloned voice.");
+  });
+
+  it("clones the speaker with the words their own recording says, like Morgan's", async () => {
+    const { prep, drain, voice, voiceTag } = await prepRoom();
+    // Recorded at 23:20 on 17 Oct, when the page showed the sentence before "…a test of my cloned voice."
+    Object.assign(voiceTag, { uploaded: new Date("2026-10-17T21:20:00Z") });
+    await prep({ lines: LINES });
+    await drain();
+    const said = (n: number) => new Set(voice.mock.calls.filter(([, s]) => (s as ArrayBuffer).byteLength === n).map(([, , , , , t]) => t));
+    expect(said(100)).toEqual(new Set(["Hello, this is my voice for Eco. I am reading this so everyone hears me."]));
+    expect(said(30_000)).toEqual(new Set([presets.PRESET_VOICES[0]!.referenceTranscript])); // Morgan, unchanged
   });
 });
 

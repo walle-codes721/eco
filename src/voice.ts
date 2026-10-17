@@ -7,6 +7,36 @@ import { tfSpeech, isLive, type SpeechStatus } from "./tf";
 export const SAMPLE_TEXT =
   "Hello, this is a test of my cloned voice.";
 
+/** Sentences speakers read before SAMPLE_TEXT, newest first, each with when its successor went live (merge + ~1 min to
+ *  deploy). Samples stored before 18 Oct 2026 don't record their sentence: they say the one shown when they were uploaded. */
+const OLDER_SAMPLE_TEXTS = [
+  { until: Date.parse("2026-10-17T21:33:00Z"), text: "Hello, this is my voice for Eco. I am reading this so everyone hears me." },
+  { until: Date.parse("2026-10-17T18:48:00Z"), text: "Hello, this is my voice for Eco. I am reading this short script aloud so that people who speak other languages can hear my talk in my own voice today." },
+  { until: Date.parse("2026-10-17T15:17:00Z"), text: "Hello, this is my voice for Eco. I'm reading this short passage so that people who speak other languages can hear my talk in my own voice." },
+];
+const KNOWN_SENTENCES = new Set([SAMPLE_TEXT, ...OLDER_SAMPLE_TEXTS.map((o) => o.text)]);
+
+/** The sentence the page showed while recording (header `x-sample-text`); a page loaded before SAMPLE_TEXT changed shows the old one. */
+export function shownSentence(header: string | null): string {
+  try {
+    const text = decodeURIComponent(header ?? "");
+    return KNOWN_SENTENCES.has(text) ? text : SAMPLE_TEXT;
+  } catch {
+    return SAMPLE_TEXT;
+  }
+}
+
+/** What a stored sample says, word for word: its ref_text, like a preset's transcript. Told other words, the model
+ *  reads the difference aloud at the start of clips (17 Oct 2026: "…so everyone hears me. Gracias, …"). */
+export function sampleSentence(obj: { customMetadata?: Record<string, string>; uploaded?: Date }): string {
+  const saved = obj.customMetadata?.sentence;
+  if (saved && KNOWN_SENTENCES.has(saved)) return saved;
+  const at = obj.uploaded?.getTime() ?? Date.now();
+  let text = SAMPLE_TEXT;
+  for (const o of OLDER_SAMPLE_TEXTS) if (at < o.until) text = o.text;
+  return text;
+}
+
 /** What listeners hear: the account's saved voice, a sample recorded for this talk, or the phone's own voice. */
 export type VoiceMode = "saved" | "sample" | "phone";
 
@@ -117,22 +147,22 @@ export type ParsedVoiceUpload =
 export async function loadStoredSample(
   files: Pick<R2Bucket, "get">,
   prefix: string,
-): Promise<{ bytes: ArrayBuffer; mime: VoiceSampleMime } | null> {
+): Promise<{ bytes: ArrayBuffer; mime: VoiceSampleMime; sentence: string } | null> {
   for (const ext of VOICE_SAMPLE_EXTS) {
     const obj = await files.get(sampleObjectKey(prefix, ext));
     if (!obj) continue;
     const ct = obj.httpMetadata?.contentType ?? voiceMime(ext);
     const parsed = voiceExt(ct);
-    return { bytes: await obj.arrayBuffer(), mime: parsed ? voiceMime(parsed) : voiceMime(ext) };
+    return { bytes: await obj.arrayBuffer(), mime: parsed ? voiceMime(parsed) : voiceMime(ext), sentence: sampleSentence(obj) };
   }
   return null;
 }
 
-/** The stored sample's R2 etag (head, so nothing is downloaded): it changes when the speaker records again. */
+/** The stored sample and the sentence it says (head, so nothing is downloaded): it changes when the speaker records again. */
 export async function sampleTag(files: Pick<R2Bucket, "head">, prefix: string): Promise<string | null> {
   for (const ext of VOICE_SAMPLE_EXTS) {
     const obj = await files.head(sampleObjectKey(prefix, ext));
-    if (obj) return obj.etag;
+    if (obj) return `${obj.etag}|${sampleSentence(obj)}`;
   }
   return null;
 }

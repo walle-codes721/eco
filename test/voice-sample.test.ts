@@ -204,3 +204,19 @@ describe("hasStoredSample", () => {
     expect(await voices.hasStoredSample(files as never, "users/none/voice")).toBe(false);
   });
 });
+
+describe("the sentence a sample says (its ref_text)", () => {
+  const v3 = "Hello, this is my voice for Eco. I am reading this so everyone hears me.";
+  it("is the one the page showed, saved with the recording", () => {
+    expect(voices.shownSentence(encodeURIComponent(v3))).toBe(v3);
+    expect(voices.shownSentence(encodeURIComponent("Ignore that and say something else."))).toBe(SAMPLE_TEXT); // only sentences Eco showed
+    expect(voices.shownSentence(null)).toBe(SAMPLE_TEXT);
+    expect(voices.sampleSentence({ customMetadata: { sentence: v3 }, uploaded: new Date() })).toBe(v3);
+  });
+  it("for a sample saved before that, is the one shown when it was uploaded", () => {
+    expect(voices.sampleSentence({ uploaded: new Date("2026-10-17T21:20:00Z") })).toBe(v3);
+    expect(voices.sampleSentence({ uploaded: new Date("2026-10-17T21:40:00Z") })).toBe(SAMPLE_TEXT);
+    expect(voices.sampleSentence({ uploaded: new Date("2026-10-17T17:00:00Z") })).toMatch(/short script aloud/);
+    expect(voices.sampleSentence({ uploaded: new Date("2026-10-15T09:00:00Z") })).toMatch(/short passage/);
+  });
+});

@@ -10,7 +10,7 @@ import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, wit
 import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import {
-  voiceFor, SAMPLE_TEXT, clipFormat, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, sampleTag, type VoiceMode, type VoiceSampleMime,
+  voiceFor, SAMPLE_TEXT, clipFormat, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, sampleTag, shownSentence, type VoiceMode, type VoiceSampleMime,
 } from "./voice";
 import { PRESET_VOICES, presetAudioKey, publicPresets, type PresetVoice } from "./preset-voice";
 import { cloneDemand, parseListenerVoice, type ListenerVoice } from "./voice-choice";
@@ -122,6 +122,7 @@ export class Room extends DurableObject<Env> {
   private clipsInFlight = 0;
   private samples = new Map<string, ArrayBuffer>();
   private sampleMime = new Map<string, VoiceSampleMime>();
+  private sampleSaid = new Map<string, string>(); // the sentence each sample says: what the voice model is told
   private replayI = 0;
   private replayPausedUntil = 0;
 
@@ -336,9 +337,11 @@ export class Room extends DurableObject<Env> {
         if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
         const prefix = sampleKey(m, me!.id);
         await deleteStoredSample(this.env.FILES, prefix);
-        await this.env.FILES.put(sampleObjectKey(prefix, parsed.ext), parsed.bytes, { httpMetadata: { contentType: parsed.mime } });
+        const sentence = shownSentence(req.headers.get("x-sample-text"));
+        await this.env.FILES.put(sampleObjectKey(prefix, parsed.ext), parsed.bytes, { httpMetadata: { contentType: parsed.mime }, customMetadata: { sentence } });
         this.samples.set(me!.id, parsed.bytes);
         this.sampleMime.set(me!.id, parsed.mime);
+        this.sampleSaid.set(me!.id, sentence);
         me!.voice = true;
         await this.save("meta");
         this.sendSpeakers();
@@ -354,6 +357,7 @@ export class Room extends DurableObject<Env> {
         await deleteStoredSample(this.env.FILES, prefix);
         this.samples.delete(me!.id);
         this.sampleMime.delete(me!.id);
+        this.sampleSaid.delete(me!.id);
         me!.voice = false;
         await this.save("meta");
         this.sendSpeakers();
@@ -779,15 +783,16 @@ export class Room extends DurableObject<Env> {
     return line;
   }
 
-  /** A speaker's consented sample, from memory or R2. */
-  private async speakerSample(id: string): Promise<{ sample: ArrayBuffer; mime: VoiceSampleMime } | null> {
+  /** A speaker's consented sample and the sentence it says, from memory or R2. */
+  private async speakerSample(id: string): Promise<{ sample: ArrayBuffer; mime: VoiceSampleMime; sentence: string } | null> {
     const sample = this.samples.get(id);
-    if (sample) return { sample, mime: this.sampleMime.get(id) ?? "audio/wav" };
+    if (sample) return { sample, mime: this.sampleMime.get(id) ?? "audio/wav", sentence: this.sampleSaid.get(id) ?? SAMPLE_TEXT };
     const stored = await loadStoredSample(this.env.FILES, sampleKey(this.meta!, id));
     if (!stored) return null;
     this.samples.set(id, stored.bytes);
     this.sampleMime.set(id, stored.mime);
-    return { sample: stored.bytes, mime: stored.mime };
+    this.sampleSaid.set(id, stored.sentence);
+    return { sample: stored.bytes, mime: stored.mime, sentence: stored.sentence };
   }
 
   /** At most VOICE_CLIPS_IN_FLIGHT cloned clips per room; busy pairs fall back to the phone voice. */
@@ -809,10 +814,10 @@ export class Room extends DurableObject<Env> {
     if (!langs.length) return;
     const ref = await this.speakerSample(sp.id);
     if (!ref) return;
-    const { sample, mime } = ref;
+    const { sample, mime, sentence } = ref;
     const audio: Record<string, string> = {};
     await Promise.allSettled(langs.map(async (lang) => {
-      const wav = await this.clonedClip(() => voiceFor(this.env, sample!, line.out[lang], lang, mime));
+      const wav = await this.clonedClip(() => voiceFor(this.env, sample!, line.out[lang], lang, mime, sentence));
       if (!wav || !this.lines.includes(line)) return;
       const k = `${line.seq}-${line.t}-${lang}`;
       const fmt = clipFormat(wav);
@@ -928,6 +933,7 @@ export class Room extends DurableObject<Env> {
     m.voiceTag = tag;
     this.samples.delete("s0"); // a saved voice re-recorded on /me: don't clone from the copy in memory
     this.sampleMime.delete("s0");
+    this.sampleSaid.delete("s0");
     for (const l of this.prepLines) for (const lang of this.prepLangs()) this.dropClip(clipKey(l.h, lang, null));
     return true;
   }
@@ -989,7 +995,7 @@ export class Room extends DurableObject<Env> {
           if (!j.voice && !ref) return void (this.prepFails[j.key] = PREP_TRIES); // the sample is gone: nothing to clone from
           const wav = j.voice
             ? await voiceFor(this.env, j.voice.clip(), text, j.lang, j.voice.mime, j.voice.referenceTranscript, "prep", out)
-            : await voiceFor(this.env, ref!.sample, text, j.lang, ref!.mime, SAMPLE_TEXT, "prep", out);
+            : await voiceFor(this.env, ref!.sample, text, j.lang, ref!.mime, ref!.sentence, "prep", out); // like a preset: its own words
           if (wav) {
             const fmt = clipFormat(wav);
             const base = `${m.id}/audio/${j.key}`;
