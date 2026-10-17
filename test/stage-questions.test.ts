@@ -362,8 +362,9 @@ describe("Teach Eco with multilingual retrieval", () => {
       expect(room.cache).toEqual(cache);
       expect((await ask()).cached).toBe(true);
       expect(await update("addanswer", { qids: [missing.id], q: "How many countries?", a: answer })).toMatchObject({ added: false });
-      expect(room.cache).toEqual(cache); // no changed source and no model operation
-      expect(spy).not.toHaveBeenCalled();
+      expect(room.cache).toEqual(cache); // no changed source
+      // The only model call allowed is translating the speaker's typed text. Nothing answers or re-reads the sources.
+      expect(spy.mock.calls.every((c) => JSON.stringify(c[3].messages[0]).includes("You translate a speaker's short answer"))).toBe(true);
       expect(listenerMessages).toContainEqual({ type: "answered", qids: [missing.id], at: 0, answer });
       expect(await ask("How many countries?", "en")).toMatchObject({ covered: true, answer, cite: "answers" });
     } finally {
@@ -383,7 +384,10 @@ describe("Teach Eco with multilingual retrieval", () => {
     const spy = vi.spyOn(client, "tf");
     try {
       await update("addanswer", { qids: [first.id, second.id], q: "How many countries?", asked: question, a: answer });
-      expect(spy).not.toHaveBeenCalled();
+      expect(spy).toHaveBeenCalledTimes(1); // one call translates the typed answer for every language of the room
+      expect(spy.mock.calls[0][1]).toBe("ask");
+      expect(JSON.stringify(spy.mock.calls[0][3].messages[0])).toContain("You translate a speaker's short answer");
+      spy.mockClear();
       expect(room.cache).toEqual({});
       expect(room.questions.slice(0, 2).every((q) => q.taught === answer && q.answeredAt !== null)).toBe(true);
       expect(listenerMessages).toContainEqual({ type: "answered", qids: [first.id, second.id], at: 0, answer });
@@ -429,6 +433,69 @@ describe("Teach Eco with multilingual retrieval", () => {
       expect((await ask()).cached).toBe(true);
       expect(spy).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(spy.mock.calls[0][3].messages)).toContain("Write the answer in Hindi");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("Teach Eco: the speaker's typed answer in every language", () => {
+  const typed = "Yes, refunds within 30 days.";
+  const hindi = "हाँ, 30 दिनों के भीतर रिफंड।";
+  const teachOne = async (reply: unknown) => {
+    const t = await testRoom([{ tag: "slide 1", text: "Welcome." }]);
+    const asked = await t.ask("Do you offer refunds?", "en");
+    const spy = vi.spyOn(client, "tf");
+    if (reply === "throw") spy.mockRejectedValueOnce(new Error("network"));
+    else spy.mockResolvedValueOnce(reply as Awaited<ReturnType<typeof client.tf>>);
+    await t.update("addanswer", { qids: [asked.id], q: "Do you offer refunds?", a: typed });
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20)); // let the background step finish
+    spy.mockRestore();
+    return { ...t, id: asked.id, translated: () => t.listenerMessages.filter((m) => m.type === "answerTranslated") };
+  };
+
+  it("sends each language to the listeners who asked, after the speaker's own text, and stores them", async () => {
+    const t = await teachOne({ data: { en: typed, hi: hindi }, live: true, ms: 5 });
+    expect(t.listenerMessages.map((m) => m.type)).toEqual(expect.arrayContaining(["answered", "answerTranslated"]));
+    expect(t.listenerMessages.findIndex((m) => m.type === "answered")).toBeLessThan(t.listenerMessages.findIndex((m) => m.type === "answerTranslated"));
+    expect(t.translated()).toEqual([{ type: "answerTranslated", qids: [t.id], answers: { en: typed, hi: hindi } }]);
+    expect(t.room.questions[0].taughtOut).toEqual({ en: typed, hi: hindi });
+    expect(t.room.questions[0].taught).toBe(typed); // the speaker's own words stay as the original
+  });
+  it("keeps only the usable languages when the reply is half broken", async () => {
+    const t = await teachOne({ data: { en: typed, hi: "   ", fr: "Oui." }, live: true, ms: 5 });
+    expect(t.translated()).toEqual([{ type: "answerTranslated", qids: [t.id], answers: { en: typed } }]);
+  });
+  it("sends nothing when no language is usable, and the speaker's text stays", async () => {
+    const t = await teachOne({ data: { en: "", hi: 3 }, live: true, ms: 5 });
+    expect(t.translated()).toEqual([]);
+    expect(t.room.questions[0].taughtOut).toBeUndefined();
+    expect(t.room.questions[0].taught).toBe(typed);
+  });
+  it("sends nothing when the limiter refuses, and teaching still worked", async () => {
+    const t = await teachOne({ data: null, live: true, ms: 0, fallback: "rpm" });
+    expect(t.translated()).toEqual([]);
+    expect(t.room.questions[0]).toMatchObject({ taught: typed });
+    expect(t.room.questions[0].answeredAt).not.toBeNull();
+  });
+  it("swallows a network error: nothing is sent, nothing breaks", async () => {
+    const t = await teachOne("throw");
+    expect(t.translated()).toEqual([]);
+    expect(t.room.questions[0].taught).toBe(typed);
+  });
+  it("answers the speaker at once and does not wait for the translation", async () => {
+    const t = await testRoom([{ tag: "slide 1", text: "Welcome." }]);
+    const asked = await t.ask("Do you offer refunds?", "en");
+    let release!: (v: unknown) => void;
+    const slow = new Promise((r) => (release = r));
+    const spy = vi.spyOn(client, "tf").mockImplementationOnce(() => slow as ReturnType<typeof client.tf>);
+    try {
+      const done = await t.update("addanswer", { qids: [asked.id], q: "Do you offer refunds?", a: typed }); // resolves while the translation is still pending
+      expect(done).toMatchObject({ ok: true, answered: 1 });
+      expect(t.listenerMessages.some((m) => m.type === "answerTranslated")).toBe(false);
+      release({ data: { en: typed, hi: hindi }, live: true, ms: 1 });
+      await vi.waitFor(() => expect(t.listenerMessages.some((m) => m.type === "answerTranslated")).toBe(true));
     } finally {
       spy.mockRestore();
     }

@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary } from "./prompts";
+import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations } from "./prompts";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
 import { phraseEvidence } from "./utterance";
@@ -34,7 +34,7 @@ export interface Meta {
 /** One device = one speaker. `key` authorises that device; `voice` = a consented sample is stored. */
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
 export interface Line { speaker?: string; seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string> }
-export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null; taught?: string /* the speaker's typed answer (Teach Eco) */ }
+export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null; taught?: string /* the speaker's typed answer (Teach Eco) */; taughtOut?: Record<string, string> /* that answer in each language of the room, once translated */ }
 export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean; taught?: boolean /* owner turn already added to the list (Teach Eco) */ }
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
 /** The talk's summary. `n` is the seq of the last line it covers: a newer line makes it stale. */
@@ -772,7 +772,31 @@ export class Room extends DurableObject<Env> {
     await this.save("pages", "chunks", "cache", "questions");
     this.send(["listener"], { type: "answered", qids: asked.map((q) => q.id), at, answer });
     this.pushBoard();
+    this.ctx.waitUntil(this.translateTaught(asked.map((q) => q.id), answer)); // after the reply: saving never waits for a translation
     return json({ ok: true, added: r.added, answered: asked.length, chunks: this.chunks.length });
+  }
+
+  /**
+   * The speaker's typed answer in every language of the room, so a waiting listener reads it in their own language.
+   * One call, best effort: if it is refused, fails or comes back unusable, listeners keep the speaker's own text.
+   */
+  private async translateTaught(ids: string[], answer: string): Promise<void> {
+    const m = this.meta!;
+    const langs = [...new Set(["en", ...m.langs])];
+    try {
+      const r = await tf<Record<string, string>>(this.env, "ask", MODELS.answer, translateAnswerPrompt(answer, langs), {
+        pub: m.demo,
+        mock: () => mockTranslations(answer, langs),
+      });
+      if (r.data === null) return;
+      const out = cleanTranslations(r.data, langs);
+      if (!Object.keys(out).length) return;
+      for (const q of this.questions) if (ids.includes(q.id)) q.taughtOut = out;
+      await this.save("questions");
+      this.send(["listener"], { type: "answerTranslated", qids: ids, answers: out });
+    } catch {
+      // the original text is already on their screens
+    }
   }
 
   /**
