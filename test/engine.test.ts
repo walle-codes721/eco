@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { chunkPages, selectContext, bm25, normalize, bestSentence, slidePages, teach, tokensOf, TAUGHT_TAG } from "../src/retrieve";
-import { admit, countsTowardStop, probeDue, PROBE_MS } from "../src/limits";
+import { admit, countsTowardStop, isTranslationKind, probeDue, PROBE_MS } from "../src/limits";
 import { parseJson } from "../src/tf";
-import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations } from "../src/prompts";
+import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, slideRowsPrompt } from "../src/prompts";
 import { DEMO_SLIDES, DEMO_SHOP } from "../src/fixtures/demo";
 // @ts-expect-error plain browser module, tested in Node
 import { Cutter, encodeWav, resample } from "../public/js/vad.js";
@@ -73,6 +73,29 @@ describe("budget admission", () => {
     expect(admit({ ...base, today: 50 }, "summary", false)).toBe("ceiling");
     expect(admit({ ...base, tripped: true }, "summary", false)).toBe("tripped");
     expect(admit({ ...base, inflight: 3 }, "summary", false)).toBe("busy");
+  });
+  it("treats a slide translation as translation: it gets the reserved last slots, and obeys every other limit", () => {
+    expect(admit({ ...base, window: 10 }, "slide", false)).toBeNull();
+    expect(admit({ ...base, window: 12 }, "slide", false)).toBe("rpm");
+    expect(admit({ ...base, today: 50 }, "slide", false)).toBe("ceiling");
+    expect(admit({ ...base, tripped: true }, "slide", false)).toBe("tripped");
+    expect(admit({ ...base, inflight: 3 }, "slide", false)).toBe("busy");
+    expect(isTranslationKind("slide")).toBe(true);
+    expect(isTranslationKind("ask")).toBe(false);
+  });
+});
+
+describe("slide rows prompt", () => {
+  it("asks for one string per row in every target language, in one call, with a bounded output", () => {
+    const p = slideRowsPrompt("en", ["it", "hi"], ["Hello", "World"]);
+    const system = String((p.messages[0] as { content: string }).content);
+    expect(system).toContain("exactly 2 rows");
+    expect(system).toContain("Italian");
+    expect(system).toContain("Hindi");
+    expect(system).toContain('"it": string[]');
+    expect(String((p.messages[1] as { content: string }).content)).toBe("1. Hello\n2. World");
+    expect(p.response_format).toEqual({ type: "json_object" });
+    expect(p.max_tokens).toBeLessThanOrEqual(1200);
   });
 });
 

@@ -1,6 +1,7 @@
 // The ONE Token Factory client (CONTRIBUTING.md, token rule 3). Mock unless ECO_LIVE=1 and a key is set.
 import type { Env } from "./env";
 import type { Kind, Denied } from "./budget";
+import { isTranslationKind } from "./limits";
 import { MODELS } from "./prompts";
 import type { TranslationTiming } from "./timing";
 
@@ -100,7 +101,7 @@ export async function tf<T>(
   if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = TEXT_FALLBACK;
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
-  const translation = kind === "utterance" || kind === "turn" || kind === "slide";
+  const translation = isTranslationKind(kind);
   const admissionAt = Date.now();
   const gate = await budget.acquire(kind, opts.pub, translation ? 1500 : 0);
   if (opts.timing) opts.timing.budgetMs = Date.now() - admissionAt;

@@ -288,6 +288,16 @@ export class Room extends DurableObject<Env> {
       }
       case "GET convos":
         return isHost || m.demo ? json({ convos: this.convos }) : json({ error: "Not allowed" }, 403);
+      case "GET slidetr": {
+        // Listeners read this: a slide's stored rows and, for their language, the words to paint. No call is made here.
+        if (m.mode !== "stage" || !m.deck) return json({ error: "Not here" }, 404);
+        const n = Math.floor(Number(url.searchParams.get("n")));
+        const asked = url.searchParams.get("lang") ?? "";
+        const lang = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(asked) ? asked : "en";
+        const deckL = m.deckLang ?? DEFAULT_DECK_LANG;
+        const rows = n >= 1 && n <= 200 ? this.deckRowsForSlide(n) : [];
+        return json({ deckLang: deckL, rows, paints: rowTranslationTexts(rows, this.slideTranslations[n], lang, deckL) });
+      }
     }
     if (!isHost) return json({ error: "Not allowed" }, 403);
     if (`${req.method} ${action}` === "PUT deck") {
@@ -309,23 +319,8 @@ export class Room extends DurableObject<Env> {
       this.deckPages = sanitizeDeckPages(body.pages);
       this.slideTranslations = {};
       await this.save("meta", "deckPages", "slideTranslations");
+      if (m.status === "live") this.ctx.waitUntil(this.ensureSlideTranslations(m.slide)); // a deck swapped mid-talk
       return json({ ok: true, pages: this.deckPages.length });
-    }
-    if (`${req.method} ${action}` === "GET slidetr") {
-      if (m.mode !== "stage" || !m.deck) return json({ error: "Not here" }, 404);
-      const n = Math.max(1, Number(url.searchParams.get("n")) || 1);
-      const lang = String(url.searchParams.get("lang") ?? "en").slice(0, 10);
-      const deckL = m.deckLang ?? DEFAULT_DECK_LANG;
-      const page = this.deckPages.find((p) => p.n === n);
-      const rows = page?.rows ?? [];
-      const out = this.slideTranslations[n];
-      return json({
-        deckLang: deckL,
-        rows,
-        ready: !!out,
-        pending: this.slideTransPending.has(n),
-        paints: rowTranslationTexts(rows, out, lang, deckL),
-      });
     }
     const body: any = await req.json().catch(() => ({}));
     switch (`${req.method} ${action}`) {
@@ -393,6 +388,8 @@ export class Room extends DurableObject<Env> {
     // The talk is over: write the summary now, in the background, so listeners find it on their recap without anyone asking.
     // A second End with nothing new said is a cache hit (no call), and a failure just leaves the speaker's button.
     if (status === "ended" && m.mode === "stage") this.ctx.waitUntil(this.summarize(true, "").catch(() => {}));
+    // The speaker has reached the current slide: translate it and the next (already stored slides make no call).
+    if (status === "live" && m.mode === "stage") this.ctx.waitUntil(this.ensureSlideTranslations(m.slide));
     return { status };
   }
 
@@ -507,14 +504,14 @@ export class Room extends DurableObject<Env> {
     const rows = this.deckRowsForSlide(n);
     const phrases = rowsForTranslation(rows);
     if (!phrases.length) return;
-    const langs = slideTargetLangs(m.langs, m.deckLang ?? DEFAULT_DECK_LANG);
+    const langs = slideTargetLangs(m.langs, m.deckLang ?? DEFAULT_DECK_LANG); // includes English
     if (!langs.length) return;
     if (!isLive(this.env)) return; // mock: original words, no API call
     this.slideTransPending.add(n);
     try {
       const r = await tf(this.env, "slide", MODELS.answer, slideRowsPrompt(m.deckLang ?? DEFAULT_DECK_LANG, langs, phrases), {
         pub: m.demo,
-        mock: () => ({ out: Object.fromEntries(langs.map((l) => [l, phrases])) }),
+        mock: () => ({ out: {} }), // not reached: mock rooms return above and keep the original words
       });
       if (r.data === null) return;
       const parsed = parseSlideTranslation(r.data, langs, phrases.length);

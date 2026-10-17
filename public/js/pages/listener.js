@@ -6,7 +6,7 @@ import { t } from "/js/i18n.js";
 import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
-import { paintSlideRows, shouldPaintSlide, slideViewToggleVisible } from "/js/slide-repaint.js";
+import { paintSlideRows, showDesignedPage, slideViewToggleVisible } from "/js/slide-repaint.js";
 
 const id = roomId();
 let meta;
@@ -290,8 +290,8 @@ async function drawSlide() {
     }
     const deckL = tr?.deckLang ?? meta.deckLang ?? "en";
     syncSlideViewBtn(deckL);
-    if (shouldPaintSlide(lang, deckL, viewDesigned) && tr?.rows?.length && tr.paints?.some((p) => p.paint)) {
-      paintSlideRows(el, tr.rows, tr.paints, el._pdfBaseH);
+    if (!showDesignedPage(lang, deckL, viewDesigned) && tr?.rows?.length && tr.paints?.some((p) => p.paint)) {
+      paintSlideRows(el, tr.rows, tr.paints);
     }
   }
   slideFrame.replaceChildren(el);
@@ -310,13 +310,13 @@ addEventListener("keydown", (e) => {
   if (e.key === "ArrowRight") goSlide(view + 1);
 });
 
-/** Never blocks the captions: the section appears once the deck is ready. `fresh` skips the cached copy after a new upload. */
 function syncSlideViewBtn(deckLang = meta.deckLang ?? "en") {
   slideViewBtn.hidden = !meta.deck || !slideViewToggleVisible(lang, deckLang);
   slideViewBtn.textContent = viewDesigned ? T("slideShowTranslated") : T("slideShowDesigned");
   slideViewBtn.setAttribute("aria-pressed", String(viewDesigned));
 }
 
+/** Never blocks the captions: the section appears once the deck is ready. `fresh` skips the cached copy after a new upload. */
 async function loadSlides(fresh = false) {
   if (!meta.deck && !meta.slides?.length) return void (slideBox.hidden = true);
   deck = await deckFor(id, meta, { fresh }).catch(() => null);

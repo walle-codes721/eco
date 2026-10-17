@@ -1,4 +1,4 @@
-import { rowsForTranslation, type SlideRow } from "./slide-rows";
+import type { SlideRow } from "./slide-rows";
 
 const langBase = (code: string) => code.toLowerCase().split("-")[0];
 
@@ -7,12 +7,7 @@ export function showDesignedPage(listenerLang: string, deckLang: string, viewDes
   return langBase(listenerLang) === langBase(deckLang) || viewDesigned;
 }
 
-/** Whether translated row text should be painted on the canvas. */
-export function shouldPaintSlide(listenerLang: string, deckLang: string, viewDesigned: boolean): boolean {
-  return !showDesignedPage(listenerLang, deckLang, viewDesigned);
-}
-
-/** Hide the designed ↔ translated switch when the listener already sees the designed page. */
+/** Hide the designed <-> translated switch when the listener already sees the designed page. */
 export function slideViewToggleVisible(listenerLang: string, deckLang: string): boolean {
   return langBase(listenerLang) !== langBase(deckLang);
 }
@@ -28,13 +23,13 @@ export function slidesToTranslate(
     .filter((n) => n >= 1 && n <= deckCount && !stored.has(n) && includedRowCount(n) > 0);
 }
 
-/** Room languages to translate into, excluding the deck's language. */
+/** Languages to translate into: every room language and English (always offered to listeners), minus the deck's own. */
 export function slideTargetLangs(roomLangs: string[], deckLang: string): string[] {
-  const deck = deckLang.toLowerCase().split("-")[0];
-  return [...new Set(roomLangs)].filter((l) => l.toLowerCase().split("-")[0] !== deck);
+  const deck = langBase(deckLang);
+  return [...new Set(["en", ...roomLangs])].filter((l) => langBase(l) !== deck);
 }
 
-/** Validates slide translation JSON: one non-empty string per included row, per language. */
+/** Keeps each language whose result has one non-empty string per included row; a bad language falls back alone. */
 export function parseSlideTranslation(raw: unknown, langs: string[], rowCount: number): Record<string, string[]> | null {
   if (!raw || typeof raw !== "object" || rowCount < 1) return null;
   const out = (raw as { out?: unknown }).out;
@@ -42,12 +37,12 @@ export function parseSlideTranslation(raw: unknown, langs: string[], rowCount: n
   const parsed: Record<string, string[]> = {};
   for (const lang of langs) {
     const v = (out as Record<string, unknown>)[lang];
-    if (!Array.isArray(v) || v.length !== rowCount) return null;
-    const rows = v.map((s) => String(s ?? "").trim()).filter(Boolean);
-    if (rows.length !== rowCount) return null;
+    if (!Array.isArray(v) || v.length !== rowCount) continue;
+    const rows = v.map((s) => String(s ?? "").trim());
+    if (rows.some((s) => !s)) continue;
     parsed[lang] = rows;
   }
-  return parsed;
+  return Object.keys(parsed).length ? parsed : null;
 }
 
 export type RowPaint = { paint: string | null };
@@ -62,7 +57,6 @@ export function rowTranslationTexts(
   if (langBase(listenerLang) === langBase(deckLang)) {
     return rows.map(() => ({ paint: null }));
   }
-  const included = rowsForTranslation(rows);
   const tr = byLang?.[listenerLang];
   let i = 0;
   return rows.map((row) => {
@@ -71,6 +65,22 @@ export function rowTranslationTexts(
     i++;
     return { paint: text ?? null };
   });
+}
+
+/** Where a row sits on the canvas. pdf.js box: `y` is the baseline from the page bottom, `h` the glyph height. */
+export function rowRectOnCanvas(
+  box: { x: number; y: number; w: number; h: number },
+  page: { pageW: number; pageH: number; canvasW: number; canvasH: number },
+): { x: number; y: number; w: number; h: number } {
+  const sx = page.canvasW / page.pageW;
+  const sy = page.canvasH / page.pageH;
+  const descent = box.h * 0.25;
+  return {
+    x: box.x * sx,
+    y: (page.pageH - (box.y + box.h)) * sy,
+    w: box.w * sx,
+    h: (box.h + descent) * sy,
+  };
 }
 
 const normHex = (s: string) => {

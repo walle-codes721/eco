@@ -1,4 +1,4 @@
-/** Keep in sync with src/slide-repaint.ts — parity checked in test/slide-repaint.test.ts */
+/** Keep in sync with src/slide-repaint.ts: test/slide-repaint.test.ts checks every exported helper against it. */
 
 const langBase = (code) => code.toLowerCase().split("-")[0];
 
@@ -6,12 +6,20 @@ export function showDesignedPage(listenerLang, deckLang, viewDesigned) {
   return langBase(listenerLang) === langBase(deckLang) || viewDesigned;
 }
 
-export function shouldPaintSlide(listenerLang, deckLang, viewDesigned) {
-  return !showDesignedPage(listenerLang, deckLang, viewDesigned);
-}
-
 export function slideViewToggleVisible(listenerLang, deckLang) {
   return langBase(listenerLang) !== langBase(deckLang);
+}
+
+export function rowRectOnCanvas(box, page) {
+  const sx = page.canvasW / page.pageW;
+  const sy = page.canvasH / page.pageH;
+  const descent = box.h * 0.25;
+  return {
+    x: box.x * sx,
+    y: (page.pageH - (box.y + box.h)) * sy,
+    w: box.w * sx,
+    h: (box.h + descent) * sy,
+  };
 }
 
 const normHex = (s) => {
@@ -36,21 +44,19 @@ export function inkOnCover(hex) {
   return lum > 0.62 ? "black" : "white";
 }
 
-/** Paint translated row text onto a rendered PDF canvas. */
-export function paintSlideRows(canvas, pageRows, paints, pageHeight, fontFamily) {
+/** Paint translated row text onto a rendered PDF canvas. `canvas._pdfBaseW/_pdfBaseH` are the page size in PDF units. */
+export function paintSlideRows(canvas, pageRows, paints) {
   const ctx = canvas.getContext("2d");
-  if (!ctx || !pageHeight) return;
-  const sx = canvas.width / (canvas._pdfW ?? canvas.width);
-  const sy = canvas.height / pageHeight;
-  const pad = 2 * Math.min(sx, sy);
+  const pageW = canvas._pdfBaseW;
+  const pageH = canvas._pdfBaseH;
+  if (!ctx || !pageW || !pageH) return;
+  const page = { pageW, pageH, canvasW: canvas.width, canvasH: canvas.height };
+  const pad = 2 * Math.min(canvas.width / pageW, canvas.height / pageH);
+  const font = (size) => `${size}px system-ui, sans-serif`; // the type the phone already uses, so Hindi renders
   for (let i = 0; i < pageRows.length; i++) {
     const text = paints[i]?.paint;
     if (!text) continue;
-    const { box } = pageRows[i];
-    const x = box.x * sx;
-    const y = (pageHeight - box.y - box.h) * sy;
-    const w = box.w * sx;
-    const h = box.h * sy;
+    const { x, y, w, h } = rowRectOnCanvas(pageRows[i].box, page);
     const samples = [
       sample(ctx, x - pad, y + h / 2),
       sample(ctx, x + w + pad, y + h / 2),
@@ -64,11 +70,11 @@ export function paintSlideRows(canvas, pageRows, paints, pageHeight, fontFamily)
     ctx.fillStyle = inkOnCover(fill);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    let size = h * 0.85;
-    ctx.font = `${size}px ${fontFamily || "system-ui,sans-serif"}`;
+    let size = h * 0.8;
+    ctx.font = font(size);
     while (size > 6 && ctx.measureText(text).width > w * 0.95) {
       size -= 1;
-      ctx.font = `${size}px ${fontFamily || "system-ui,sans-serif"}`;
+      ctx.font = font(size);
     }
     ctx.fillText(text, x + w / 2, y + h / 2, w * 0.95);
   }

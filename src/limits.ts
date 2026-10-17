@@ -16,6 +16,9 @@ export const probeDue = (tripped: boolean, trippedAt: number, probing: boolean, 
  *  timeouts (599), 429 and 5xx pass on their own, so they fail that one phrase and nothing else (Seb, 17 Oct). */
 export const countsTowardStop = (status: number) => status >= 400 && status < 500 && status !== 429;
 
+/** Translation jobs keep the reserved last rpm slots and the tighter latency budget. One definition for tf.ts and admit(). */
+export const isTranslationKind = (kind: Kind) => kind === "utterance" || kind === "turn" || kind === "slide";
+
 /** Pure admission rule, kept apart from the DO so it can be unit tested. */
 export function admit(
   s: { today: number; max: number; window: number; inflight: number; tripped: boolean; pubHour: number; pubMax: number },
@@ -25,8 +28,7 @@ export function admit(
   if (s.tripped) return "tripped";
   if (s.max > 0 && s.today >= s.max) return "ceiling"; // max 0 = no daily ceiling
   if (pub && s.pubHour >= s.pubMax) return "public-hourly";
-  const translation = kind === "utterance" || kind === "turn" || kind === "slide";
-  if (s.window >= (translation ? RPM : RPM - RESERVED)) return "rpm";
+  if (s.window >= (isTranslationKind(kind) ? RPM : RPM - RESERVED)) return "rpm";
   if (s.inflight >= CONCURRENT) return "busy";
   return null;
 }
