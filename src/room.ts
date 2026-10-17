@@ -4,6 +4,7 @@ import type { Env } from "./env";
 import { tf, isLive } from "./tf";
 import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
+import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
 import { phraseEvidence } from "./utterance";
@@ -37,7 +38,7 @@ export interface Meta {
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
 export interface Line { speaker?: string; seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string> }
 export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null; taught?: string /* the speaker's typed answer (Teach Eco) */; taughtOut?: Record<string, string> /* that answer in each language of the room, once translated */ }
-export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean; taught?: boolean /* owner turn already added to the list (Teach Eco) */ }
+export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean; taught?: boolean /* owner turn already added to the list (Teach Eco) */; allergy?: boolean /* customer turn that asked about allergies, ingredients or diet */ }
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
 /** The talk's summary. `n` is the seq of the last line it covers: a newer line makes it stale. */
 export interface Summary { n: number; text: Record<string, string>; live: boolean; at: number }
@@ -819,7 +820,11 @@ export class Room extends DurableObject<Env> {
     const added: Turn[] = [];
 
     if (side === "customer") {
-      const { picked } = selectContext(this.chunks, text);
+      // Allergy and diet questions never rest on the AI alone: it always reads the owner's allergen text,
+      // the program adds the confirm line, and the owner is told. See safety.ts.
+      const askedAllergy = isAllergyQuestion(text);
+      const usual = selectContext(this.chunks, text).picked;
+      const picked = askedAllergy ? allergyContext(this.chunks, usual) : usual;
       const r = await tf<CustomerTurn>(this.env, "turn", turnModel(input), customerTurnPrompt({ name: m.title, type: m.bizType, ownerLang: m.ownerLang }, picked, input), {
         pub: m.demo,
         mock: () => {
@@ -833,10 +838,22 @@ export class Room extends DurableObject<Env> {
       if (r.data === null) return json({ error: "busy", fallback: r.fallback }, 503);
       const d = r.data;
       if (d.lang) convo.lang = d.lang.slice(0, 5);
-      added.push({ id: uid(), t: Date.now(), side: "customer", lang: convo.lang, src: d.src, out: d.to_owner, live: r.live });
+      const allergy = askedAllergy || isAllergyQuestion(d.src) || isAllergyQuestion(d.to_owner); // a spoken question is only known after it is transcribed
+      added.push({ id: uid(), t: Date.now(), side: "customer", lang: convo.lang, src: d.src, out: d.to_owner, live: r.live, ...(allergy ? { allergy: true } : {}) });
       const covered = !!d.answer?.covered && !!d.answer.text;
-      if (covered) added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: d.answer.text, out: d.answer.text_owner || d.answer.text, cite: d.answer.cite, live: r.live });
-      convo.open = !covered;
+      if (allergy) {
+        if (covered && hasAllergenInfo(this.chunks)) {
+          // The owner's own words, plus a line the program adds, never one the AI has to remember.
+          added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: withStaffLine(d.answer.text, convo.lang), out: withStaffLine(d.answer.text_owner || d.answer.text, m.ownerLang), cite: d.answer.cite, live: r.live });
+        } else {
+          // Nothing the owner wrote answers it (or the AI claimed an answer from a list that never mentions allergens): never guess.
+          added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: noAllergenInfo(convo.lang), out: noAllergenInfo(m.ownerLang), cite: "", live: r.live });
+        }
+        convo.open = true; // the owner is told, even when Eco answered
+      } else {
+        if (covered) added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: d.answer.text, out: d.answer.text_owner || d.answer.text, cite: d.answer.cite, live: r.live });
+        convo.open = !covered;
+      }
     } else {
       const r = await tf<{ src: string; out: string }>(this.env, "turn", turnModel(input), ownerTurnPrompt(m.ownerLang, convo.lang, input), {
         pub: m.demo,
