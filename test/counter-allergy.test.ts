@@ -171,6 +171,29 @@ describe("Counter: allergy and diet questions", () => {
     expect(r.open).toBe(true);
   });
 
+  it("a later ordinary question does not cancel the owner's alert until the owner has replied", async () => {
+    const { say, room } = await shop(withAllergens);
+    const spy = vi.spyOn(client, "tf")
+      .mockResolvedValueOnce(answer({ src: "Is it vegan?", answer: { covered: true, text: "Some flavours are.", text_owner: "Alcuni lo sono.", cite: "menu" } }))
+      .mockResolvedValueOnce(answer({ src: "What time do you open?", answer: { covered: true, text: "Open every day 12:00 to 23:00.", text_owner: "Aperto ogni giorno.", cite: "hours" } }))
+      .mockResolvedValueOnce({ data: { src: "Sì, due gusti sono vegani.", out: "Yes, two flavours are vegan." }, live: true, ms: 1 } as Reply) // the owner's reply is translated by the AI too
+      .mockResolvedValueOnce(answer({ src: "And do you take cards?", answer: { covered: true, text: "Yes.", text_owner: "Sì.", cite: "payment" } }));
+    try {
+      expect((await say("Is it vegan?")).open).toBe(true);
+      expect((await say("What time do you open?")).open).toBe(true); // still waiting for the owner
+      expect(room.convos[0].open).toBe(true);
+      const reply = await room.fetch(new Request("https://room/turn", {
+        method: "POST", headers: { "x-room": "counter/test/gelato", "x-key": room.meta!.hostKey, "content-type": "application/json" },
+        body: JSON.stringify({ side: "owner", cid: "c1", text: "Sì, due gusti sono vegani." }),
+      }));
+      expect(reply.status).toBe(200);
+      expect(room.convos[0].open).toBe(false); // the owner has answered
+      expect((await say("And do you take cards?")).open).toBe(false); // an ordinary question no longer raises it
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("the owner closing the conversation by replying still works after an allergy question", async () => {
     const { say, room } = await shop(withAllergens);
     await say("Is it vegan?");

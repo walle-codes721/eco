@@ -852,7 +852,10 @@ export class Room extends DurableObject<Env> {
         convo.open = true; // the owner is told, even when Eco answered
       } else {
         if (covered) added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: d.answer.text, out: d.answer.text_owner || d.answer.text, cite: d.answer.cite, live: r.live });
-        convo.open = !covered;
+        // An allergy question the owner has not yet answered keeps the conversation open, whatever the customer asks next.
+        let pending = false;
+        for (let i = convo.turns.length - 1; i >= 0 && convo.turns[i].side !== "owner"; i--) if (convo.turns[i].allergy) pending = true;
+        convo.open = !covered || pending;
       }
     } else {
       const r = await tf<{ src: string; out: string }>(this.env, "turn", turnModel(input), ownerTurnPrompt(m.ownerLang, convo.lang, input), {
