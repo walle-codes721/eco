@@ -246,6 +246,15 @@ describe("pharmacy, clinic and hospital: everything else is as before", () => {
   });
 });
 
+describe("pharmacy, clinic and hospital: what the customer's page is told", () => {
+  it("shares the shop's emergency number, for the three kinds only", async () => {
+    expect((await health("pharmacy", { emergency: "118" })).room.publicMeta().emergency).toBe("118");
+    expect((await health("clinic")).room.publicMeta().emergency).toBe("112");
+    expect((await health("hospital", { emergency: "  +39 06 1234 " })).room.publicMeta().emergency).toBe("+39 06 1234");
+    for (const other of ["restaurant", "shop", "service", "other"]) expect((await health(other, { emergency: "118" })).room.publicMeta().emergency).toBeUndefined();
+  });
+});
+
 describe("pharmacy, clinic and hospital: the owner's alert", () => {
   it("a later ordinary question does not cancel it until the owner has replied", async () => {
     const { say, room, ownerReplies } = await health("clinic");

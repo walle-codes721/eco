@@ -159,6 +159,7 @@ export class Room extends DurableObject<Env> {
     return {
       id: m.id, mode: m.mode, title: m.title, speaker: m.speaker, langs: m.langs, status: m.status,
       startedAt: m.startedAt, endedAt: m.endedAt, slide: m.slide, demo: m.demo, bizType: m.bizType, ownerLang: m.ownerLang,
+      emergency: m.emergency, // pharmacy, clinic, hospital: shown to customers; absent for every other kind of shop
       live: isLive(this.env),
       slides: m.mode === "stage" ? slidePages(this.pages) : [],
       deck: !!m.deck,

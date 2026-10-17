@@ -51,6 +51,8 @@ const L = {
   teachA: it ? "Risposta" : "Answer",
   taught: it ? "Eco risponderà da solo la prossima volta ✓" : "Eco will answer this next time ✓",
   allergy: it ? "Allergie o dieta" : "Allergy or diet",
+  urgent: it ? "Urgente" : "Urgent",
+  medical: it ? "Domanda medica" : "Medical question",
 };
 
 let convos = [];
@@ -83,6 +85,8 @@ document.body.replaceChildren(
 function bubble(t, c) {
   if (t.side === "customer")
     return h("div.bubble.them", {}, h("div.who", {}, langName(c.lang, OL)),
+      // Pharmacy, clinic, hospital: Eco gave only a fixed line. A person must take over.
+      t.health ? h("div", { style: { margin: "2px 0 6px" } }, h("span.chip.red", {}, `⚠ ${t.health === "emergency" ? L.urgent : L.medical}`)) : null,
       t.allergy ? h("div", { style: { margin: "2px 0 6px" } }, h("span.chip.red", {}, `⚠ ${L.allergy}`)) : null, // Eco answered from the owner's own text; a person should know
       t.out, t.out !== t.src ? h("div.orig", {}, t.src) : null);
   if (t.side === "eco")
@@ -136,12 +140,15 @@ function teachEco(c, t, asked) {
 }
 
 function drawList() {
-  const sorted = convos.slice().sort((a, b) => Number(b.open) - Number(a.open) || (b.turns.at(-1)?.t ?? 0) - (a.turns.at(-1)?.t ?? 0));
+  // Waiting conversations first, and among them an emergency before a medical or allergy question before the rest.
+  const urgency = (c) => (!c.open ? 0 : c.turns.some((t) => t.health === "emergency") ? 2 : c.turns.some((t) => t.health || t.allergy) ? 1 : 0);
+  const sorted = convos.slice().sort((a, b) => Number(b.open) - Number(a.open) || urgency(b) - urgency(a) || (b.turns.at(-1)?.t ?? 0) - (a.turns.at(-1)?.t ?? 0));
   const item = (c) => {
     const last = c.turns.at(-1);
     return h("button.convo-item", { type: "button", "aria-current": String(c.id === active), onclick: () => { active = c.id; drawList(); drawThread(); } },
       h("div.top", {}, c.open ? h("span.needs") : null, h("b", {}, langName(c.lang, OL)),
-        c.turns.some((t) => t.allergy) ? h("span.chip.red", { title: L.allergy }, "⚠") : null,
+        c.open && c.turns.some((t) => t.health === "emergency") ? h("span.chip.red", {}, `⚠ ${L.urgent}`)
+          : c.turns.some((t) => t.allergy || t.health) ? h("span.chip.red", { title: L.allergy }, "⚠") : null,
         h("span.spacer"), last ? ago(last.t) : ""),
       h("div.last", {}, last ? (last.side === "owner" ? last.src : last.out) : ""));
   };
