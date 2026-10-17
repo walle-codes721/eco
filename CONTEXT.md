@@ -48,15 +48,19 @@ The stretch of speech between pauses that the Stage captures as one unit — the
 _Avoid_: utterance, sentence, chunk
 
 **Line**:
-One phrase as the room keeps it: who said it, what was said, every translation, and the slide showing at the time. Delivered to everyone in the room.
+One phrase as the room keeps it: who said it, what was said, every translation, and the slide showing at the time. Delivered to everyone in the room. Its translations may arrive one language at a time; the line is complete once every language has arrived or been given up on.
 _Avoid_: caption, message, utterance
 
 **Caption**:
-A line as one listener reads it, in that listener's language.
+A line as one listener reads it, in that listener's language. A listener has no caption for a line until their own language has arrived: they are never shown, or played, another language in its place.
 
 **Reaction**:
 A listener's single emoji on a line (👍 👎 😂 🤯 ❤️ 🤔), chosen by tapping its caption; they can change or clear it. Private to that listener: only the projector shows it, anonymously, and the speaker reads them on the Post-talk card. Not a Poll.
 _Avoid_: like, vote, feedback
+
+**Talk context**:
+What a Stage is about (up to 500 characters, in any language) and the terms every translation keeps verbatim, set by the speaker before the talk. It rides along on each translation call; it never adds one.
+_Avoid_: glossary, brief
 
 **Deck**:
 The speaker's slides for a Stage. Its written words are in one language, English unless the speaker chooses another.
@@ -73,6 +77,14 @@ _Avoid_: ignored slide, hidden slide
 **Row**:
 The written words on a slide that sit together on one baseline. A wide gap on that baseline starts another row. Translated as one string, then painted across that row. A row the speaker marks when uploading the deck stays in the deck's language on every phone.
 _Avoid_: line, text run, fragment, quotation
+
+**Prep**:
+HACKATHON mode, before the talk: every line of the speaker's teleprompter script translated into each room language and voiced in each offered voice, once, and saved. Editing the script redoes only the lines that changed.
+_Avoid_: pre-generation, cache
+
+**Cue**:
+HACKATHON mode, live: the speaker's laptop hears them start a script line and the room plays that line from prep, about a second behind them. A cue makes no call; speech that isn't in the script isn't sent.
+_Avoid_: trigger, match
 
 **Now speaking**:
 The room's live signal of which speaker is talking at this moment, driven by speech detection on each speaker's device, never by an AI call.
@@ -149,7 +161,7 @@ Real model calls, every one through the single client and under the budget.
 _Avoid_: production
 
 **Replay**:
-A recorded take played back as if live — how demo rooms run, and where a room falls back when the network or budget fails. Always announced on screen.
+A recorded take played back as if live — how demo rooms run, where a room falls back when the network or budget fails, and how anyone with its link rewatches an ended Stage (slides, lines in stored cloned clips, questions and reactions at their original times, no new calls). Always announced on screen.
 _Avoid_: demo mode, playback
 
 ## Budget

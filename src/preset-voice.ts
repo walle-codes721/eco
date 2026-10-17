@@ -15,9 +15,7 @@ export const PRESET_VOICES: readonly PresetVoice[] = [{
   id: "morgan-freeman",
   label: "Morgan Freeman (AI)",
   mime: "audio/mpeg",
-  referenceTranscript:
-    "Do you listen to your inner voice? That quiet voice that tells you what you already know, " +
-    "what you truly need, and who you really are when you stop pretending otherwise.",
+  referenceTranscript: "Hello, this is a test of my cloned voice.",
   clip: morganFreemanClip,
 }] as const;
 

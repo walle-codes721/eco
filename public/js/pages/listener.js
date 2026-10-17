@@ -3,7 +3,7 @@ import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { stageAudio } from "/js/stage-audio.js";
 import { t } from "/js/i18n.js";
-import { captionFor, focusIndex, nearBottom, nextNewCount } from "/js/caps.js";
+import { captionFor, nearBottom, nextNewCount, setFocus } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
 import { voiceChip } from "/js/voice-chip.js";
@@ -59,6 +59,7 @@ function lineAudioUrl(l) {
   return key ? l.audio?.[key] : null;
 }
 function waitForClip(l) {
+  if (l.cue) return false; // HACKATHON: a script line arrives with every clip prep made; none for this voice means the phone speaks now
   if (voiceChoice === "phone" || !meta.voice) return false;
   if (voiceChoice === "speaker") {
     const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
@@ -175,7 +176,7 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-50).map((l) => h(keyOf(l) === picked ? "p.picked" : "p", { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
+  caps.replaceChildren(...lines.slice(-50).map((l) => h(`p${keyOf(l) === picked ? ".picked" : ""}${keyOf(l) === focusKey ? ".focus" : ""}`, { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
     voiceChipLabel(l) ? h("span.chip", {}, voiceChipLabel(l)) : null,
     !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l),
     reacts[keyOf(l)] ? h("span.emo.my-react", {}, reacts[keyOf(l)]) : null)));
@@ -183,11 +184,13 @@ function drawCaps() {
   markFocus();
 }
 
-// Bold follows the scroll: the bottom-most fully visible line, or the latest while following live.
+// The big bold line follows the scroll: the bottom-most fully visible line, or the latest while following live.
+// Redraws keep it on the same line (focusKey), so a new line arriving never resizes what you're reading.
+let focusKey = null;
 function markFocus() {
-  const ps = [...caps.children];
-  const i = focusIndex(ps.map((p) => p.getBoundingClientRect()), caps.getBoundingClientRect().bottom, atBottom);
-  ps.forEach((p, j) => p.classList.toggle("focus", j === i));
+  if (!lines.length) return; // the waiting message isn't a line
+  const i = setFocus(caps, atBottom);
+  if (i >= 0) focusKey = keyOf(lines.slice(-50)[i]);
 }
 
 // One tap opens the caption; a quick second tap likes it without opening (dblclick is unreliable on phones).
@@ -299,6 +302,7 @@ function addLine(l) {
     audioKey: audioKeyForChoice(),
     wait: waitForClip(l),
     enabled: voice.on,
+    cue: !!l.cue,
   });
 }
 function onAudio(m) {
@@ -555,7 +559,7 @@ async function recap() {
       h("p.eyebrow", {}, T("ended")),
       h("h1", { style: { fontSize: "34px", margin: "8px 0 4px" } }, T("recap")),
       h("p.muted", {}, `${meta.title}${meta.speaker ? ` · ${meta.speaker}` : ""}`),
-      h("div.row", { style: { marginTop: "18px" } }, shareBtn),
+      h("div.row", { style: { marginTop: "18px" } }, shareBtn, h("a.btn", { href: `/${id}/replay` }, icon("play"), T("replay"))),
     ),
     summaryBox,
     h("section", { hidden: !myQs.length }, h("h2", { style: { fontSize: "20px", margin: "12px 0" } }, T("yourQs")), qList),

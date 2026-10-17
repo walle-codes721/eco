@@ -1,4 +1,7 @@
 // One decision per caption, in caption order. No network requests are made here.
+/** How long to wait for a cloned clip before the phone speaks. Matches tfSpeech timeout (OmniVoice can take several seconds). */
+export const CLONE_WAIT_MS = 12_000;
+
 export function stageAudio({ play, stop }) {
   const pending = new Map();
   let active = null, latest = 0;
@@ -9,7 +12,10 @@ export function stageAudio({ play, stop }) {
     if (!item?.ready) return;
     remove(item);
     active = item;
-    Promise.resolve().then(() => active === item && play(item.text, item.lang, item.url, item.speaker)).catch(() => {}).finally(() => {
+    const args = [item.text, item.lang, item.url, item.speaker];
+    // HACKATHON script line with another already waiting: play it a little faster so the room keeps up with the speaker.
+    if (item.cue) args.push([...pending.values()].some((entry) => entry.ready));
+    Promise.resolve().then(() => active === item && play(...args)).catch(() => {}).finally(() => {
       if (active !== item) return;
       active = null;
       drain();
@@ -32,13 +38,13 @@ export function stageAudio({ play, stop }) {
     return audio[item.audioKey] ?? null;
   };
   return {
-    line({ seq, text, lang, speaker, url, audioKey = lang, wait, enabled }) {
+    line({ seq, text, lang, speaker, url, audioKey = lang, wait, enabled, cue = false }) {
       if (seq <= latest) return; // duplicate frames/reconnect history must not replay
       latest = seq;
       if (!enabled) return;
-      const item = { seq, text, lang, speaker, url, audioKey, ready: false, deadline: Date.now() + 4000, timer: null };
+      const item = { seq, text, lang, speaker, url, audioKey, cue, ready: false, deadline: Date.now() + CLONE_WAIT_MS, timer: null };
       pending.set(seq, item);
-      if (wait && audioKey && !url) item.timer = setTimeout(() => ready(item, null), 4000);
+      if (wait && audioKey && !url) item.timer = setTimeout(() => ready(item, null), CLONE_WAIT_MS);
       else ready(item, url ?? null);
       drain();
     },

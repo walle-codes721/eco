@@ -40,9 +40,17 @@ export class Account extends DurableObject<Env> {
   }
 
   async me() {
-    const s = await this.ctx.storage.get(["handle", "profile", "rooms"]);
+    const s = await this.ctx.storage.get(["handle", "profile", "rooms", "hackathon"]);
     if (!s.get("handle")) return null;
-    return { handle: s.get("handle") as string, ...(s.get("profile") as Profile), rooms: ((s.get("rooms") as RoomRef[]) ?? []).slice().reverse() };
+    return {
+      handle: s.get("handle") as string, ...(s.get("profile") as Profile), rooms: ((s.get("rooms") as RoomRef[]) ?? []).slice().reverse(),
+      hackathon: (s.get("hackathon") as boolean | undefined) ?? true, // HACKATHON mode: on unless the speaker turned it off
+    };
+  }
+
+  async setHackathon(on: boolean) {
+    await this.ctx.storage.put("hackathon", on);
+    return { ok: true, hackathon: on };
   }
 
   /** Change your name. Only before your first talk or shop, so no printed QR code ever breaks. */

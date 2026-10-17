@@ -284,10 +284,12 @@ describe("Stage playback completion", () => {
     vi.useFakeTimers();
     const { voice, clip, synth } = await browser();
     // @ts-expect-error browser module
-    const { stageAudio } = await import("../public/js/stage-audio.js");
+    const { CLONE_WAIT_MS, stageAudio } = await import("../public/js/stage-audio.js");
     const queue = stageAudio({ play: (...args: unknown[]) => voice.playStage(...args), stop: () => voice.stopStage() });
     queue.line({ seq: 1, text: "Hola", lang: "es", audioKey: "es@morgan-freeman", enabled: true, wait: true });
-    await vi.advanceTimersByTimeAsync(4000);
+    await vi.advanceTimersByTimeAsync(CLONE_WAIT_MS - 1);
+    expect(synth.speak).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(clip.src).toBeFalsy();
     expect(synth.speak).toHaveBeenCalledTimes(1);
     vi.useRealTimers();

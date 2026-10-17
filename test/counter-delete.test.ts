@@ -33,6 +33,24 @@ async function counter(id = "counter/test/shop", saved = new Map<string, unknown
 }
 
 describe("owner-only persistent Counter deletion", () => {
+  it("restores deletion markers alongside upstream prepared voice and replay state", async () => {
+    const c = await counter(); await c.add(); await c.remove();
+    const upstream = {
+      prepLines: [{ h: "line-hash", text: "Prepared speech" }],
+      prepTr: { "line-hash": { it: "Discorso preparato" } },
+      prepClips: { "p-line-hash-it": 1 },
+      slideLog: [{ n: 2, t: 1000 }],
+      reactLog: [{ t: 1001, r: "👍" }],
+    };
+    for (const [key, value] of Object.entries(upstream)) c.saved.set(key, structuredClone(value));
+    const restored = await counter("counter/test/shop", c.saved);
+    for (const key of Object.keys(upstream) as (keyof typeof upstream)[]) {
+      expect(restored.room[key]).toEqual(upstream[key]);
+    }
+    expect((await restored.add()).status).toBe(410);
+    expect(restored.room.convos).toEqual([]);
+  });
+
   it("deletes one conversation, persists its marker, and notifies only its customer and owners", async () => {
     const c = await counter();
     await c.add(); await c.add("c2");

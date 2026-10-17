@@ -50,6 +50,7 @@ document.body.replaceChildren(
   h("header.bar.no-print", {}, h("div.inner", {},
     h("a.brand", { href: "/" }, "Eco"), h("span.spacer"),
     h("a.btn.sm", { href: `/${id}/speak` }, "Back to console"),
+    c.ended ? h("a.btn.sm", { href: `/${id}/replay` }, icon("play"), "Replay") : null,
     h("button.btn.sm.primary", { type: "button", onclick: () => print() }, icon("print"), "Print"))),
   h("main.report", {},
     h("p.eyebrow", {}, "After the talk"),

@@ -1,5 +1,5 @@
 // Admission rules for live calls, kept free of Workers imports so they can be unit tested.
-export type Kind = "utterance" | "turn" | "ask" | "extract" | "summary" | "voice" | "poll" | "slide";
+export type Kind = "utterance" | "turn" | "ask" | "extract" | "summary" | "voice" | "poll" | "slide" | "script" | "prep";
 export type Denied = "ceiling" | "rpm" | "busy" | "tripped" | "public-hourly";
 
 const RPM = 12;
@@ -9,6 +9,10 @@ const RESERVED = 2; // last rpm slots are kept for translation (utterance, turn)
 export const VOICE_CLIPS_IN_FLIGHT = 2;
 /** Voice lane rpm. 12 translation/other + 6 voice = 18, under the 20/min per-account gateway limit in the Token Factory guide. */
 export const VOICE_RPM = 6;
+/** Script prep (HACKATHON mode, Seb 17 Oct): no voice cap of our own. Only Token Factory's hard limits pace it:
+ *  20 calls a minute per account (text and voice together) and 8 in flight per key, of which prep takes 6. */
+export const ACCOUNT_RPM = 20;
+export const PREP_IN_FLIGHT = 6;
 
 // Points per 1M tokens, from the Token Factory guide. Only used for the on-screen estimate.
 export const PRICE: Record<string, [number, number]> = { "MiMo-V2.6-Flash": [0.14, 0.28], "Gemma-4-31B-IT": [0.5, 3.0], "DeepSeek-V4-Flash": [0.14, 0.28] };
@@ -23,7 +27,7 @@ export const countsTowardStop = (status: number) => status >= 400 && status < 50
 
 /** Translation jobs keep the reserved last rpm slots and the tighter latency budget. One definition for tf.ts and admit(). */
 export const isTranslationKind = (kind: Kind) => kind === "utterance" || kind === "turn" || kind === "slide";
-export const isVoiceKind = (kind: Kind) => kind === "voice";
+export const isVoiceKind = (kind: Kind) => kind === "voice" || kind === "prep";
 
 export type AdmitState = {
   today: number;
@@ -44,6 +48,11 @@ export function admit(s: AdmitState, kind: Kind, pub: boolean): Denied | null {
   if (pub && s.pubHour >= s.pubMax) return "public-hourly";
   const voiceInflight = s.voiceInflight ?? 0;
   const voiceWindow = s.voiceWindow ?? 0;
+  if (kind === "prep") {
+    if (s.window + voiceWindow >= ACCOUNT_RPM) return "rpm";
+    if (voiceInflight >= PREP_IN_FLIGHT) return "busy";
+    return null;
+  }
   if (isVoiceKind(kind)) {
     if (voiceWindow >= VOICE_RPM) return "rpm";
     if (voiceInflight >= VOICE_CLIPS_IN_FLIGHT) return "busy";

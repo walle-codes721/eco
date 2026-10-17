@@ -33,7 +33,7 @@ export const voice = {
   },
   stopStage() { stopStage?.(); },
   /** Stage's scheduler awaits completion so clips and phone speech cannot overlap. */
-  playStage(text, lang, url, speaker = 0) {
+  playStage(text, lang, url, speaker = 0, rush = false) {
     if (!this.on || !text) return Promise.resolve();
     this.stopStage();
     return new Promise((resolve) => {
@@ -72,7 +72,7 @@ export const voice = {
         const v = voiceFor(lang, speaker);
         if (v) utterance.voice = v;
         if (speaker && v === voiceFor(lang)) utterance.pitch = [1, 0.85, 1.15][speaker % 3];
-        utterance.rate = 1.04;
+        utterance.rate = rush ? 1.2 : 1.04;
         // Some voices never emit boundaries. Allow slow speech (3 Unicode code
         // points/sec) plus 30 s slack, and extend only on actual forward progress.
         // Unlike a fixed playback cap this lets long, progressing speech finish.
@@ -114,6 +114,7 @@ export const voice = {
       audioEl.onended = () => { if (!finished && phase === "clip") done(); };
       audioEl.onerror = failure;
       audioEl.src = url;
+      audioEl.playbackRate = rush ? 1.15 : 1; // after src: a new source resets it
       watchdog = setTimeout(failure, STAGE_STARTUP_MS);
       progress = setInterval(() => {
         if (finished || phase !== "clip") return;

@@ -1,7 +1,7 @@
 import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me } from "/js/eco.js";
 import { openPdf, pdfPages, pdfDeckRows, renderPage, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
 import { deckPreviewSetup } from "/js/deck-preview.js";
-import { scriptSummary } from "/js/script.js";
+import { scriptSummary, parseScript } from "/js/script.js";
 import { SAMPLE_TEXT } from "/js/sample-text.js";
 
 const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
@@ -11,6 +11,12 @@ const title = h("input", { type: "text", placeholder: "One engine, two rooms", m
 const speaker = h("input", { type: "text", placeholder: "Your name", maxlength: 80, autocomplete: "name" });
 const notes = h("textarea", { placeholder: "Things you'll say that aren't on the slides: numbers, links, answers to likely questions." });
 const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
+
+// Talk context: sent with every translation so terms like "Apple" stay Apple, not Apfel.
+const about = h("textarea", { maxlength: 500, rows: 3, placeholder: "A keynote about Apple's new products. Any language." });
+const aboutCount = h("span.small.muted", {}, "0 / 500");
+about.oninput = () => { aboutCount.textContent = `${about.value.length} / 500`; };
+const keep = h("textarea", { rows: 2, placeholder: "Apple, Vision Pro, Tim Cook" });
 
 // Teleprompter script: pasted or read from a file, split into phrases on submit. Only the speaker sees it.
 const script = h("textarea", { placeholder: "Paste what you plan to say. Eco shows it to you a few words at a time. Mark slide changes with \"Slide 2:\" lines or [next slide] and Eco turns the slide for you; other [notes] show as reminders." });
@@ -137,6 +143,9 @@ const create = h("button.btn.primary.big", { type: "submit" }, "Create the room"
 const form = h("form", {},
   section("Your talk", "Shown on every listener's phone.", h("label.field", {}, "Title", title), h("label.field", {}, "Speaker", speaker), link.el),
   section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs, deckPreview),
+  section("Talk context", "Optional. Helps the translator pick the right meaning.",
+    h("label.field", {}, "About the talk", about, aboutCount),
+    h("label.field", {}, "Words to keep as they are", keep, h("span.small.muted", {}, "Names, brands, product terms. Separate with commas or new lines."))),
   section("Notes", "Optional. Also used to answer questions.", notes),
   section("Script", "Optional. Only you see it, as a teleprompter above your slides. Word, PDF or text.", script, h("div.row", { style: { gap: "10px" } }, scriptUpload, scriptFile, scriptInfo)),
   section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
@@ -155,6 +164,7 @@ form.onsubmit = async (e) => {
       body: {
         mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs,
         pages: state.pages, notes: notes.value, voice: state.voice, script: script.value, presetsEnabled: presetBox.checked,
+        about: about.value, keep: keep.value,
       },
     });
     if (state.bytes) {
@@ -165,7 +175,11 @@ form.onsubmit = async (e) => {
       if (!(await uploadDeck(id, state.bytes, hostKey))) toast("Slides didn't upload: this laptop will still show them", 4000);
     }
     try { localStorage.setItem(`eco:host:${id}`, hostKey); } catch {}
-    ready(id, hostKey);
+    // HACKATHON mode (on unless turned off on /me): start translating and voicing the script now, once, before the talk.
+    const lines = parseScript(script.value).lines.map((l) => l.text);
+    const prepping = (user?.hackathon ?? true) && lines.length > 0
+      && (await api(`/api/rooms/${id}/prep`, { method: "POST", key: hostKey, body: { lines } }).then(() => true, () => false));
+    ready(id, hostKey, prepping);
   } catch (err) {
     toast(err.message || "Couldn't create the room");
     create.disabled = false;
@@ -173,7 +187,7 @@ form.onsubmit = async (e) => {
   }
 };
 
-function ready(id, key) {
+function ready(id, key, prepping = false) {
   const listen = `/${id}`;
   const presenter = `/${id}/speak#k=${key}`;
   const copy = (text, label) => h("button.btn", { type: "button", onclick: () => navigator.clipboard.writeText(text).then(() => toast(`${label} copied`)) }, icon("copy"), label);
@@ -182,6 +196,7 @@ function ready(id, key) {
       h("span.pill.ok", {}, h("span.dot"), "Room ready"),
       h("h1", { style: { fontSize: "clamp(32px,5vw,48px)", margin: "18px 0 8px", letterSpacing: "-0.04em" } }, title.value || "Your talk"),
       h("p.muted", {}, "Show this to the room. Listeners scan it and pick their language."),
+      prepping ? h("p.small", {}, h("b", {}, "HACKATHON mode: "), "Eco is translating and voicing your script now. Watch it finish on the presenter page.") : null,
       h("div", { style: { margin: "28px 0 12px" } }, qrSvg(fullUrl(listen))),
       h("p.url", { style: { fontSize: "20px" } }, shortUrl(listen)),
       h("div.row", { style: { justifyContent: "center", flexWrap: "wrap", margin: "32px 0 12px" } },

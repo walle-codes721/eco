@@ -67,8 +67,11 @@ export function parseJson<T>(content: string): T {
   return JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1)) as T;
 }
 
+/** Why a clip came back null: status 0 = not admitted (no call made), 429 = Token Factory said slow down. */
+export type SpeechStatus = { status: number; retryAfter: number };
+
 /** OmniVoice on /audio/speech: one clip in the voice of `refB64`. Same gate and log as chat; null = phones speak.
- *  Mock is handled in voiceFor; this runs only live. No retries: a late clip is useless live. */
+ *  Mock is handled in voiceFor; this runs only live. No retries: a late clip is useless live, and prep retries on its next tick. */
 export async function tfSpeech(
   env: Env,
   input: string,
@@ -76,10 +79,12 @@ export async function tfSpeech(
   refB64: string,
   refText: string,
   refMime = "audio/wav",
+  kind: "voice" | "prep" = "voice",
+  out?: SpeechStatus,
 ): Promise<ArrayBuffer | null> {
   if (!isLive(env)) return null;
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
-  const gate = await budget.acquire("voice", false);
+  const gate = await budget.acquire(kind, false);
   if (!gate.ok) return null;
   const t0 = Date.now();
   let status = 0;
@@ -89,19 +94,21 @@ export async function tfSpeech(
       method: "POST",
       headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
       // ref_text skips server-side transcription of the sample (~4 s per clip instead of ~17 s).
-      body: JSON.stringify({ model: MODELS.voice, input, language: lang, ref_audio: `data:${refMime};base64,${refB64}`, ref_text: refText, response_format: "wav" }),
-      signal: AbortSignal.timeout(10_000), // later than this the phone voice already spoke
+      body: JSON.stringify({ model: MODELS.voice, input, language: lang, ref_audio: `data:${refMime};base64,${refB64}`, ref_text: refText, response_format: "mp3" }), // mp3 is far smaller than wav for a phone to download
+      signal: AbortSignal.timeout(12_000), // keep in sync with CLONE_WAIT_MS in public/js/stage-audio.js
     });
     status = res.status;
+    if (out) (out.status = status), (out.retryAfter = Number(res.headers.get("retry-after") ?? 0) * 1000);
     if (status === 200) return await res.arrayBuffer();
     why = `${status}: ${(await res.text().catch(() => "")).slice(0, 160)}`;
     console.warn("tf voice failed", why);
     return null;
   } catch {
     status = status || 599;
+    if (out) out.status = status;
     return null;
   } finally {
-    await budget.finish({ kind: "voice", model: MODELS.voice, ms: Date.now() - t0, status, tin: 0, tout: 0, pub: false, why });
+    await budget.finish({ kind, model: MODELS.voice, ms: Date.now() - t0, status, tin: 0, tout: 0, pub: false, why });
   }
 }
 
@@ -150,7 +157,7 @@ export async function tf<T>(
             signal,
           });
         // a 4-language summary writes ~1,000 tokens; a slide is translated a slide ahead, so it can take longer than live speech
-        const limit = kind === "extract" ? 60_000 : kind === "slide" ? 45_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000;
+        const limit = kind === "extract" ? 60_000 : kind === "slide" ? 45_000 : kind === "summary" || kind === "poll" || kind === "script" ? 30_000 : 15_000;
         let res: Response;
         if (translation && model === MODELS.answer) ({ res, model } = await hedged(post, limit));
         else res = await post(model, AbortSignal.timeout(limit));

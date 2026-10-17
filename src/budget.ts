@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 
-import { admit, countsTowardStop, probeDue, PROBE_MS, PRICE, type Kind, type Denied } from "./limits";
+import { admit, countsTowardStop, isVoiceKind, probeDue, PROBE_MS, PRICE, type Kind, type Denied } from "./limits";
 export type { Kind, Denied };
 
 export interface CallRecord {
@@ -75,7 +75,7 @@ export class Budget extends DurableObject<Env> {
         pub,
       );
       if (!reason) {
-        if (kind === "voice") {
+        if (isVoiceKind(kind)) {
           this.voiceWindow.push(now);
           this.voiceInflight++;
         } else {
@@ -91,7 +91,7 @@ export class Budget extends DurableObject<Env> {
   }
 
   async finish(rec: CallRecord): Promise<void> {
-    if (rec.kind === "voice") this.voiceInflight = Math.max(0, this.voiceInflight - 1);
+    if (isVoiceKind(rec.kind)) this.voiceInflight = Math.max(0, this.voiceInflight - 1);
     else this.inflight = Math.max(0, this.inflight - 1);
     this.ctx.storage.sql.exec(
       "INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

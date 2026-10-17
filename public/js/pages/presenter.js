@@ -1,12 +1,13 @@
-import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store } from "/js/eco.js";
+import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store, me } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES } from "/js/mic.js";
+import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
-import { parseScript, scriptSummary } from "/js/script.js";
+import { parseScript, scriptSummary, cueFollower } from "/js/script.js";
 import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
 import { pollQ, pollResults } from "/js/polls.js";
+import { nearBottom, setFocus } from "/js/caps.js";
 
 const id = roomId();
 const key = hostKey(id);
@@ -101,11 +102,28 @@ const micBox = h("div.card.mic-box", {},
 );
 
 // ---------- transcript ----------
+// Scrollable history: the big bold line (and its translations) follows the scroll; at the bottom it follows the talk.
 const now = h("div.said");
+const trBox = h("div.said-tr");
+let atBottom = true, focused = null; // focused: the line shown big, with its translations below
+const jumpBtn = h("button.caps-jump", { type: "button", "aria-label": "Back to latest", onclick: () => ((now.scrollTop = now.scrollHeight), followed()) }, icon("down"));
 const saidCard = h("div.card.said-card", {},
   h("div.card-head", {}, h("span.eyebrow", {}, "You said"), h("span.spacer"), h("span.chip", {}, "Original")),
-  now,
+  h("div.caps-wrap", {}, now, jumpBtn),
+  trBox,
 );
+now.onscroll = followed;
+// The translation rows below (and the slide above) resize the scroller: stay pinned while following.
+new ResizeObserver(() => atBottom && (now.scrollTop = now.scrollHeight)).observe(now);
+function followed() {
+  atBottom = nearBottom(now);
+  jumpBtn.classList.toggle("show", !atBottom);
+  const i = lines.length ? setFocus(now, atBottom) : -1;
+  const l = lines[i];
+  if (l === focused) return;
+  focused = l;
+  trBox.replaceChildren(...(l ? meta.langs.map((g) => h("div.tr", {}, h("span.chip", { title: langName(g) }, g.toUpperCase()), h("span", {}, l.out[g] ?? "", l.flags?.includes(g) ? h("span.tiny.muted", {}, "  · literal") : null))) : []));
+}
 
 // ---------- teleprompter: the speaker's own script, one line at a time (host only) ----------
 // Lines carry the slide their cue set: stepping across a cue changes the slide, changing the slide jumps here.
@@ -114,10 +132,11 @@ let promptLines = parseScript(script).lines;
 let line = Math.min(Number(store(`eco:prompt:${id}`)) || 0, Math.max(promptLines.length - 1, 0));
 const promptText = h("div.prompter-text");
 const promptCount = h("span.slide-count");
-const lineUp = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous line", onclick: () => goLine(line - 1, true) }, icon("up"));
-const lineDown = h("button.btn.icon-btn", { type: "button", "aria-label": "Next line", onclick: () => goLine(line + 1, true) }, icon("down"));
+const lineUp = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous line", onclick: () => stepLine(-1) }, icon("up"));
+const lineDown = h("button.btn.icon-btn", { type: "button", "aria-label": "Next line", onclick: () => stepLine(1) }, icon("down"));
 const scriptBtn = h("button.btn.icon-btn.ghost", { type: "button", "aria-label": "Edit script", title: "Edit script", onclick: () => scriptSheet() }, icon("text"));
-const promptNav = h("div.prompter-nav", {}, lineUp, promptCount, lineDown, scriptBtn);
+const prepPill = h("button.pill", { type: "button", hidden: true, title: "HACKATHON mode: your script, translated and voiced before the talk", onclick: () => prep({ retry: true }) });
+const promptNav = h("div.prompter-nav", {}, lineUp, promptCount, lineDown, prepPill, scriptBtn);
 const prompter = host && !meta.demo ? h("div.card.prompter-card", {}, promptText, promptNav) : null;
 function goLine(n, step = false) {
   if (!promptLines.length) {
@@ -144,9 +163,48 @@ function goLine(n, step = false) {
 function followSlide(n) {
   if (!promptLines.length || promptLines[line].slide === n) return;
   const i = promptLines.findIndex((l) => l.slide === n);
-  if (i >= 0) goLine(i);
+  if (i >= 0) goLine(i), follower.reset(line);
 }
 if (prompter) goLine(line);
+
+// ---------- HACKATHON mode (profile toggle, on by default) ----------
+// Every script line is translated and voiced once, before the talk (the room's prep). Live, the mic only works out which
+// line you just started and the room plays that line's ready clips, about a second behind you. Off-script speech isn't sent.
+const hack = host && !meta.demo && hasSpeechRecognition && ((await me()).user?.hackathon ?? true);
+let follower = cueFollower(promptLines, line - 1);
+function drawPrep(p) {
+  prepPill.hidden = !hack || !p?.lines;
+  if (prepPill.hidden) return;
+  const working = p.translated < p.lines ? `Translating ${p.translated}/${p.lines}` : p.done < p.total ? `Voices ${p.done}/${p.total}` : "";
+  prepPill.textContent = (working || `Ready · ${p.lines} lines`) + (p.failed ? ` · ${p.failed} failed, retry` : "");
+  prepPill.disabled = !p.failed;
+}
+/** Sends the teleprompter lines to prep: the room translates and voices whatever isn't made yet. */
+async function prep(extra = {}) {
+  if (!hack || !promptLines.length) return;
+  try {
+    drawPrep(await api(`/api/rooms/${id}/prep`, { method: "POST", key, body: { lines: promptLines.map((l) => l.text), ...extra } }));
+  } catch {
+    toast("Couldn't prepare your script");
+  }
+}
+/** Plays line i to the room from prep, and moves the teleprompter (and the slide, at a cue) with you. */
+function fire(i) {
+  if (i < 0 || i >= promptLines.length) return;
+  live.send({ type: "cue", text: promptLines[i].text });
+  goLine(i, true);
+}
+/** ↓/↑ and the teleprompter arrows. With the mic on in HACKATHON mode, ↓ plays the next line: the mic missed it. */
+function stepLine(d) {
+  if (hack && stopMic && d > 0) {
+    const i = follower.from + 1;
+    follower.fired(i);
+    return fire(i);
+  }
+  goLine(line + d, true);
+  follower.reset(line);
+}
+prep();
 
 /** Paste, type or upload the script; saving re-parses it and keeps the current slide. */
 function scriptSheet() {
@@ -174,6 +232,8 @@ function scriptSheet() {
       ({ script } = await api(`/api/rooms/${id}/script`, { method: "POST", key, body: { script: box.value } }));
       promptLines = parseScript(script).lines;
       goLine(Math.max(0, promptLines.findIndex((l) => l.slide === meta.slide)));
+      follower = cueFollower(promptLines, line - 1);
+      prep();
       wrap.remove();
     } catch {
       toast("Couldn't save the script");
@@ -227,13 +287,11 @@ function drawStatus() {
 setInterval(() => (timer.textContent = meta.startedAt && meta.status === "live" ? fmtTime((Date.now() - meta.startedAt) / 1000) : ""), 1000);
 
 function drawLines() {
-  const last = lines.at(-1);
-  if (!last) return now.replaceChildren(h("p.empty", {}, demo ? "Waiting for the replay…" : "Turn the mic on and start talking. Your words and their translations appear here."));
-  now.replaceChildren(
-    ...lines.slice(-4, -1).map((l) => h("p.past", {}, who(meta, l), l.src)),
-    h("p.now", {}, who(meta, last), last.src),
-    ...meta.langs.map((l) => h("div.tr", {}, h("span.chip", { title: langName(l) }, l.toUpperCase()), h("span", {}, last.out[l] ?? "", last.flags?.includes(l) ? h("span.tiny.muted", {}, "  · literal") : null))),
-  );
+  // Keep the big line on the same phrase across redraws, so a new phrase never resizes what you're reading.
+  if (!lines.length) now.replaceChildren(h("p.empty", {}, demo ? "Waiting for the replay…" : "Turn the mic on and start talking. Your words and their translations appear here."));
+  else now.replaceChildren(...lines.map((l, i) => h(`p${i === lines.length - 1 ? ".now" : ""}${focused && l.seq === focused.seq ? ".focus" : ""}`, {}, who(meta, l), l.src)));
+  if (atBottom) now.scrollTop = now.scrollHeight;
+  followed();
 }
 
 function drawBoard() {
@@ -334,12 +392,14 @@ async function toggleMic() {
   }
   if (meta.status === "ended") return toast("The talk has ended");
   micBtn.disabled = spokenLang.disabled = true;
+  const following = hack && promptLines.length > 0;
+  if (following) follower = cueFollower(promptLines, line - 1); // the big teleprompter line is the one Eco waits for
   try {
     const end = await phraseMic({
       lang: spokenLang.value,
       maxTotalMs: demo ? 30000 : Infinity,
       onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)),
-      onPhrase: send,
+      ...(following ? { onHeard: (text, run) => follower.heard(text, run).forEach(fire) } : { onPhrase: send }),
       onError: (err) => { stopMic?.(); toast(micErrorMessage(err)); },
     });
     stopMic = () => {
@@ -352,7 +412,7 @@ async function toggleMic() {
       level.style.width = "0";
     };
     micBtn.classList.add("on");
-    micState.textContent = "Listening…";
+    micState.textContent = following ? "Following your script…" : "Listening…";
     if (demo) setTimeout(() => stopMic?.(), 30500);
   } catch (err) {
     toast(micErrorMessage(err));
@@ -388,7 +448,7 @@ async function send(blob, cutAt) {
 
 addEventListener("keydown", (e) => {
   if (e.target.closest("input, textarea, select")) return;
-  if (promptLines.length && ["ArrowDown", "ArrowUp"].includes(e.key)) return (e.preventDefault(), goLine(line + (e.key === "ArrowDown" ? 1 : -1), true));
+  if (promptLines.length && ["ArrowDown", "ArrowUp"].includes(e.key)) return (e.preventDefault(), stepLine(e.key === "ArrowDown" ? 1 : -1));
   if (["ArrowRight", "PageDown", "ArrowDown"].includes(e.key)) goSlide(meta.slide + 1);
   if (["ArrowLeft", "PageUp", "ArrowUp"].includes(e.key)) goSlide(meta.slide - 1);
   if (e.code === "Space" && !e.repeat) (e.preventDefault(), toggleMic());
@@ -591,7 +651,7 @@ const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
     polls = m.polls ?? polls;
   }
   if (m.type === "polls") polls = m.polls;
-  if (m.type === "line") lines.push(m.line), (lines = lines.slice(-50));
+  if (m.type === "line") (atBottom = nearBottom(now)), lines.push(m.line), (lines = lines.slice(-50));
   if (m.type === "slide") {
     const mine = sentSlides.indexOf(m.n);
     if (mine >= 0) sentSlides.splice(0, mine + 1); // our own change coming back: we're already past it
@@ -600,6 +660,7 @@ const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
   if (m.type === "status") Object.assign(meta, { status: m.status, startedAt: m.startedAt, endedAt: m.endedAt });
   if (m.type === "board") board = m.board;
   if (m.type === "notice") toast(m.text, 4000);
+  if (m.type === "prep") drawPrep(m);
   if (m.type === "reset") (Object.assign(meta, m.meta), (lines = []));
   if (m.type === "speakers") meta.speakers = m.speakers;
   if (m.type === "speaking") m.on ? speaking.add(m.speaker) : speaking.delete(m.speaker);
