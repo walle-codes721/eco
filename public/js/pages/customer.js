@@ -28,11 +28,14 @@ const form = h("form.ask-box", {}, input, h("button.send", { type: "submit", "ar
 const hold = h("button.hold", { type: "button" }, icon("mic"));
 const holdLabel = h("p.hold-label");
 const intro = h("div.empty");
+// Pharmacy, clinic, hospital: a permanent note, in the customer's language, with the shop's own emergency number.
+const isHealth = ["pharmacy", "clinic", "hospital"].includes(meta.bizType);
+const healthEl = h("div.banner", { role: "note", style: { marginBottom: "14px" } });
 
 document.body.replaceChildren(
   h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), h("span.title.truncate", {}, meta.title), h("span.spacer"), langSel)),
   h("main.phone", { style: { minHeight: "calc(100dvh - 53px)", display: "flex", flexDirection: "column" } },
-    h("div", { style: { flex: 1, padding: "20px 0" } }, intro, thread, status),
+    h("div", { style: { flex: 1, padding: "20px 0" } }, isHealth ? healthEl : null, intro, thread, status),
     h("div.composer", {}, hold, holdLabel, form),
   ),
 );
@@ -44,6 +47,7 @@ function labels() {
   hold.setAttribute("aria-label", T("holdToTalk"));
   intro.replaceChildren(h("h1", { style: { fontSize: "26px", color: "var(--ink)", marginBottom: "8px" } }, T("hello")), h("p.small", {}, T("customerIntro")));
   intro.hidden = turns.length > 0;
+  if (isHealth) healthEl.replaceChildren(icon("flag"), h("div", {}, T("healthNotice").replace("{n}", meta.emergency || "112")));
 }
 
 function draw() {

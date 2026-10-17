@@ -69,3 +69,31 @@ export const DEMO_CONVOS = [
     answer: { covered: false, text: "", text_owner: "", cite: "" },
   },
 ];
+
+// A pharmacy front desk for the healthcare demo. Eco shares only what is written here and never gives medical advice (see src/health.ts).
+export const DEMO_PHARMACY = {
+  name: "Farmacia Centrale",
+  type: "pharmacy",
+  ownerLang: "it",
+  sources: [
+    { tag: "hours", text: "Hours\nOpen every day 8:00–20:00. Night service: the pharmacy on duty is listed on the door." },
+    { tag: "services", text: "Services\nBlood pressure check €5. Flu vaccination €20, no appointment needed. Free delivery in the old town." },
+    { tag: "products", text: "Products\nBandages from €2. Sun cream from €9. Painkillers and cold remedies are sold at the counter." },
+    { tag: "prescriptions", text: "Prescriptions\nBring your prescription and an ID. Prescriptions from other EU countries are accepted." },
+    { tag: "allergens", text: "Allergens\nOur almond-oil cream contains tree nuts. Ask the pharmacist for the ingredient list of any product." },
+    { tag: "languages", text: "Languages spoken\nItalian, English and Hindi at the counter." },
+    { tag: "where", text: "Where to find us\nVia Roma 12, ground floor. Bus 14 stops outside. Step-free entrance." },
+  ],
+};
+
+// Already in the owner's list when the demo pharmacy opens: one ordinary question, one medical question, one emergency.
+// The fixed replies for the last two come from health.ts, so the demo can never drift from the real rules.
+export const DEMO_PHARMACY_CONVOS: {
+  lang: string; customer: string; to_owner: string;
+  answer?: { covered: boolean; text: string; text_owner: string; cite: string };
+  health?: "advice" | "emergency";
+}[] = [
+  { lang: "en", customer: "What time do you close tonight?", to_owner: "A che ora chiudete stasera?", answer: { covered: true, text: "Open every day 8:00–20:00.", text_owner: "Aperto ogni giorno dalle 8:00 alle 20:00.", cite: "hours" } },
+  { lang: "en", customer: "Can I take ibuprofen with my blood pressure pills?", to_owner: "Posso prendere l'ibuprofene con le mie pillole per la pressione?", health: "advice" },
+  { lang: "es", customer: "Mi madre tiene dolor de pecho", to_owner: "Mia madre ha dolore al petto", health: "emergency" },
+];

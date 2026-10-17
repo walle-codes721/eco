@@ -19,7 +19,7 @@ npm test
 npm run check
 ```
 
-Demo rooms that work with no key: `/stage/eco/demo/speak`, `/stage/eco/demo`, `/counter/eco/gelato/owner`, `/counter/eco/gelato`.
+Demo rooms that work with no key: `/stage/eco/demo/speak`, `/stage/eco/demo`, `/counter/eco/gelato/owner`, `/counter/eco/gelato`, `/counter/eco/farmacia` (a pharmacy front desk).
 
 ## Workflow
 
