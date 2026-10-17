@@ -1,5 +1,19 @@
 /** Keep in sync with src/slide-repaint.ts — parity checked in test/slide-repaint.test.ts */
 
+const langBase = (code) => code.toLowerCase().split("-")[0];
+
+export function showDesignedPage(listenerLang, deckLang, viewDesigned) {
+  return langBase(listenerLang) === langBase(deckLang) || viewDesigned;
+}
+
+export function shouldPaintSlide(listenerLang, deckLang, viewDesigned) {
+  return !showDesignedPage(listenerLang, deckLang, viewDesigned);
+}
+
+export function slideViewToggleVisible(listenerLang, deckLang) {
+  return langBase(listenerLang) !== langBase(deckLang);
+}
+
 const normHex = (s) => {
   const m = s.trim().match(/^#?([0-9a-f]{6})$/i);
   return m ? `#${m[1].toLowerCase()}` : null;

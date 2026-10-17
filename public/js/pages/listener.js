@@ -6,7 +6,7 @@ import { t } from "/js/i18n.js";
 import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
-import { paintSlideRows } from "/js/slide-repaint.js";
+import { paintSlideRows, shouldPaintSlide, slideViewToggleVisible } from "/js/slide-repaint.js";
 
 const id = roomId();
 let meta;
@@ -65,10 +65,21 @@ const slideLabel = h("span.small.muted.mono");
 const slidePrev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous slide", onclick: () => goSlide(view - 1) }, icon("prev"));
 const slideNext = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(view + 1) }, icon("next"));
 const currentBtn = h("button.btn.sm", { type: "button", hidden: true, onclick: () => goSlide(Infinity) });
+let viewDesigned = !!store(`eco:slideDesigned:${id}`);
+const slideViewBtn = h("button.btn.sm", {
+  type: "button",
+  hidden: true,
+  onclick: () => {
+    viewDesigned = !viewDesigned;
+    store(`eco:slideDesigned:${id}`, viewDesigned);
+    syncSlideViewBtn();
+    drawSlide();
+  },
+});
 // Expand: the slide at ~80% of the screen over the dimmed page; Esc or a tap outside closes it.
 const zoomBtn = h("button.btn.icon-btn", { type: "button", onclick: () => zoom(true) }, icon("expand"));
 const slideBox = h("section.lst-panel.lst-slides", { hidden: true }, h("div.divider"),
-  h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, slideHead, h("span.spacer"), currentBtn, zoomBtn),
+  h("div.row", { style: { alignItems: "center", marginBottom: "10px", flexWrap: "wrap", gap: "8px" } }, slideHead, h("span.spacer"), slideViewBtn, currentBtn, zoomBtn),
   slideFrame,
   h("div.row", { style: { justifyContent: "center", gap: "12px", marginTop: "10px" } }, slidePrev, slideLabel, slideNext),
   h("div.zoom-back", { onclick: () => zoom(false) }));
@@ -96,6 +107,7 @@ function labels() {
   askHead.textContent = T("ask");
   pollHead.textContent = T("poll");
   slideHead.textContent = T("slides");
+  syncSlideViewBtn();
   currentBtn.textContent = T("current");
   newQBtn.textContent = T("newQuestion");
   askSub.textContent = T("fromTalk");
@@ -276,7 +288,9 @@ async function drawSlide() {
       tr = await api(`/api/rooms/${id}/slidetr?n=${view}&lang=${encodeURIComponent(lang)}`).catch(() => null);
       if (tr) slideTr.set(view, { ...tr, lang });
     }
-    if (tr?.rows?.length && tr.paints?.some((p) => p.paint)) {
+    const deckL = tr?.deckLang ?? meta.deckLang ?? "en";
+    syncSlideViewBtn(deckL);
+    if (shouldPaintSlide(lang, deckL, viewDesigned) && tr?.rows?.length && tr.paints?.some((p) => p.paint)) {
       paintSlideRows(el, tr.rows, tr.paints, el._pdfBaseH);
     }
   }
@@ -297,6 +311,12 @@ addEventListener("keydown", (e) => {
 });
 
 /** Never blocks the captions: the section appears once the deck is ready. `fresh` skips the cached copy after a new upload. */
+function syncSlideViewBtn(deckLang = meta.deckLang ?? "en") {
+  slideViewBtn.hidden = !meta.deck || !slideViewToggleVisible(lang, deckLang);
+  slideViewBtn.textContent = viewDesigned ? T("slideShowTranslated") : T("slideShowDesigned");
+  slideViewBtn.setAttribute("aria-pressed", String(viewDesigned));
+}
+
 async function loadSlides(fresh = false) {
   if (!meta.deck && !meta.slides?.length) return void (slideBox.hidden = true);
   deck = await deckFor(id, meta, { fresh }).catch(() => null);

@@ -6,6 +6,9 @@ import {
   rowTranslationTexts,
   agreeCoverColor,
   inkOnCover,
+  showDesignedPage,
+  shouldPaintSlide,
+  slideViewToggleVisible,
 } from "../src/slide-repaint";
 import type { SlideRow } from "../src/slide-rows";
 // @ts-expect-error browser parity
@@ -57,5 +60,20 @@ describe("slide repaint", () => {
   it("matches cover helpers in the browser module", () => {
     expect(agreeCoverBrowser(["#ff0000", "#ff0000", "#ff0000", "#ff0000"])).toBe("#ff0000");
     expect(inkOnCoverBrowser("#ff0000")).toBe(inkOnCover("#ff0000"));
+  });
+
+  it("shows the designed page when the listener language is the deck language or the switch is on", () => {
+    expect(showDesignedPage("en", "en", false)).toBe(true);
+    expect(showDesignedPage("it", "en", true)).toBe(true);
+    expect(showDesignedPage("it", "en", false)).toBe(false);
+    expect(shouldPaintSlide("it", "en", false)).toBe(true);
+    expect(shouldPaintSlide("it", "en", true)).toBe(false);
+    expect(shouldPaintSlide("en", "en", false)).toBe(false);
+  });
+
+  it("offers the slide view switch only when the listener language is not the deck language", () => {
+    expect(slideViewToggleVisible("en", "en")).toBe(false);
+    expect(slideViewToggleVisible("it", "en")).toBe(true);
+    expect(slideViewToggleVisible("hi", "en")).toBe(true);
   });
 });

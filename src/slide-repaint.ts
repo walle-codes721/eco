@@ -1,5 +1,22 @@
 import { rowsForTranslation, type SlideRow } from "./slide-rows";
 
+const langBase = (code: string) => code.toLowerCase().split("-")[0];
+
+/** Listener chose the PDF as designed (switch on), or already reads in the deck language. */
+export function showDesignedPage(listenerLang: string, deckLang: string, viewDesigned: boolean): boolean {
+  return langBase(listenerLang) === langBase(deckLang) || viewDesigned;
+}
+
+/** Whether translated row text should be painted on the canvas. */
+export function shouldPaintSlide(listenerLang: string, deckLang: string, viewDesigned: boolean): boolean {
+  return !showDesignedPage(listenerLang, deckLang, viewDesigned);
+}
+
+/** Hide the designed ↔ translated switch when the listener already sees the designed page. */
+export function slideViewToggleVisible(listenerLang: string, deckLang: string): boolean {
+  return langBase(listenerLang) !== langBase(deckLang);
+}
+
 /** Slides that still need a translation call: current, next, with included rows, not already stored. */
 export function slidesToTranslate(
   currentSlide: number,
@@ -42,7 +59,7 @@ export function rowTranslationTexts(
   listenerLang: string,
   deckLang: string,
 ): RowPaint[] {
-  if (listenerLang.toLowerCase().split("-")[0] === deckLang.toLowerCase().split("-")[0]) {
+  if (langBase(listenerLang) === langBase(deckLang)) {
     return rows.map(() => ({ paint: null }));
   }
   const included = rowsForTranslation(rows);
