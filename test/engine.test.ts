@@ -396,7 +396,7 @@ describe("multiple speakers", () => {
 });
 
 // @ts-expect-error plain browser module, tested in Node
-import { nearBottom, nextNewCount } from "../public/js/caps.js";
+import { focusIndex, nearBottom, nextNewCount } from "../public/js/caps.js";
 
 describe("caption scroll position", () => {
   const view = (scrollTop: number, scrollHeight: number, clientHeight: number) => ({ scrollTop, scrollHeight, clientHeight });
@@ -560,5 +560,31 @@ describe("voice samples", () => {
     expect(sampleKey({ ...room, voiceMode: "saved" }, "s1")).toBe("stage/seb/talk/voice/s1");
     expect(sampleKey({ ...room, voiceMode: "sample" }, "s0")).toBe("stage/seb/talk/voice/s0");
     expect(sampleKey({ ...room, owner: "", voiceMode: "saved" }, "s0")).toBe("stage/seb/talk/voice/s0");
+  });
+});
+
+describe("bolded caption while scrolling", () => {
+  const rects = [{ top: 0, bottom: 40 }, { top: 50, bottom: 90 }, { top: 100, bottom: 140 }];
+  it("bolds the latest line when following live", () => {
+    expect(focusIndex(rects, 60, true)).toBe(2);
+  });
+  it("bolds the bottom-most fully visible line when scrolled back", () => {
+    expect(focusIndex(rects, 95, false)).toBe(1);
+    expect(focusIndex(rects, 141, false)).toBe(2);
+  });
+  it("keeps the current line while it's on screen and nothing below it fits", () => {
+    expect(focusIndex(rects, 120, false, 2)).toBe(2);
+  });
+  it("moves on once the current line scrolls out of view", () => {
+    expect(focusIndex(rects, 95, false, 2)).toBe(1);
+  });
+  it("moves down to a line below that comes fully into view", () => {
+    expect(focusIndex(rects, 141, false, 1)).toBe(2);
+  });
+  it("falls back to a partly visible line when none fits", () => {
+    expect(focusIndex([{ top: 0, bottom: 500 }], 200, false)).toBe(0);
+  });
+  it("has nothing to bold with no lines", () => {
+    expect(focusIndex([], 100, false)).toBe(-1);
   });
 });
