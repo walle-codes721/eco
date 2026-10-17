@@ -5,6 +5,7 @@ import { tf, isLive } from "./tf";
 import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
+import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
 import { phraseEvidence } from "./utterance";
@@ -29,6 +30,7 @@ export interface Meta {
   demo: boolean;
   bizType: string; // counter
   ownerLang: string; // counter
+  emergency?: string; // counter, pharmacy/clinic/hospital: the local emergency number shown to customers
   deck?: boolean; // stage: the speaker's PDF is in R2, so every screen can show it
   speakers?: Speaker[]; // stage: s0 is the host; co-speakers join from their own device
   joinKey?: string; // stage: in the host's "add a speaker" QR
@@ -38,7 +40,7 @@ export interface Meta {
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
 export interface Line { speaker?: string; seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string> }
 export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null; taught?: string /* the speaker's typed answer (Teach Eco) */; taughtOut?: Record<string, string> /* that answer in each language of the room, once translated */ }
-export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean; taught?: boolean /* owner turn already added to the list (Teach Eco) */; allergy?: boolean /* customer turn that asked about allergies, ingredients or diet */ }
+export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean; taught?: boolean /* owner turn already added to the list (Teach Eco) */; allergy?: boolean /* customer turn that asked about allergies, ingredients or diet */; health?: "emergency" | "advice" /* pharmacy, clinic or hospital: the customer asked for urgent help or for medical advice */ }
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
 /** The talk's summary. `n` is the seq of the last line it covers: a newer line makes it stale. */
 export interface Summary { n: number; text: Record<string, string>; live: boolean; at: number }
@@ -117,6 +119,7 @@ export class Room extends DurableObject<Env> {
       demo: !!body.demo,
       bizType: s(body.bizType, 30) || "shop",
       ownerLang: s(body.ownerLang, 5) || "it",
+      ...(isHealthKind(s(body.bizType, 30)) ? { emergency: cleanEmergencyNumber(body.emergency) } : {}),
     };
     if (mode === "stage") {
       // "saved" needs a signed-in owner who has recorded one; otherwise they record a sample for this talk.
@@ -823,8 +826,12 @@ export class Room extends DurableObject<Env> {
       // Allergy and diet questions never rest on the AI alone: it always reads the owner's allergen text,
       // the program adds the confirm line, and the owner is told. See safety.ts.
       const askedAllergy = isAllergyQuestion(text);
-      const usual = selectContext(this.chunks, text).picked;
-      const picked = askedAllergy ? allergyContext(this.chunks, usual) : usual;
+      // Pharmacy, clinic, hospital: emergencies and medical advice get a fixed line and never an answer from the model (see health.ts).
+      // Such a message is sent to the AI only to be translated for the owner, with none of the shop's list, since its answer is thrown away.
+      const kind = isHealthKind(m.bizType) ? m.bizType : null;
+      const sensitive = kind ? sensitiveKind(text) : null;
+      const usual = sensitive ? [] : selectContext(this.chunks, text).picked;
+      const picked = askedAllergy && !sensitive ? allergyContext(this.chunks, usual) : usual;
       const r = await tf<CustomerTurn>(this.env, "turn", turnModel(input), customerTurnPrompt({ name: m.title, type: m.bizType, ownerLang: m.ownerLang }, picked, input), {
         pub: m.demo,
         mock: () => {
@@ -839,9 +846,17 @@ export class Room extends DurableObject<Env> {
       const d = r.data;
       if (d.lang) convo.lang = d.lang.slice(0, 5);
       const allergy = askedAllergy || isAllergyQuestion(d.src) || isAllergyQuestion(d.to_owner); // a spoken question is only known after it is transcribed
-      added.push({ id: uid(), t: Date.now(), side: "customer", lang: convo.lang, src: d.src, out: d.to_owner, live: r.live, ...(allergy ? { allergy: true } : {}) });
+      // A spoken question is only known after it is transcribed, so look at what the AI heard as well. An emergency beats advice.
+      const heard: Sensitive[] = kind ? [sensitive, sensitiveKind(d.src), sensitiveKind(d.to_owner)] : [];
+      const health: Sensitive = heard.includes("emergency") ? "emergency" : heard.includes("advice") ? "advice" : null;
+      added.push({ id: uid(), t: Date.now(), side: "customer", lang: convo.lang, src: d.src, out: d.to_owner, live: r.live, ...(allergy ? { allergy: true } : {}), ...(health ? { health } : {}) });
       const covered = !!d.answer?.covered && !!d.answer.text;
-      if (allergy) {
+      if (kind && health) {
+        // The fixed line, in the customer's language and the owner's. The AI's own answer is discarded.
+        const line = (lang: string) => (health === "emergency" ? emergencyLine(lang, kind, m.emergency) : adviceLine(lang, kind));
+        added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: line(convo.lang), out: line(m.ownerLang), cite: "", live: r.live });
+        convo.open = true; // the owner is told, whatever the customer asks next
+      } else if (allergy) {
         if (covered && hasAllergenInfo(this.chunks)) {
           // The owner's own words, plus a line the program adds, never one the AI has to remember.
           added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: withStaffLine(d.answer.text, convo.lang), out: withStaffLine(d.answer.text_owner || d.answer.text, m.ownerLang), cite: d.answer.cite, live: r.live });
@@ -852,9 +867,9 @@ export class Room extends DurableObject<Env> {
         convo.open = true; // the owner is told, even when Eco answered
       } else {
         if (covered) added.push({ id: uid(), t: Date.now(), side: "eco", lang: convo.lang, src: d.answer.text, out: d.answer.text_owner || d.answer.text, cite: d.answer.cite, live: r.live });
-        // An allergy question the owner has not yet answered keeps the conversation open, whatever the customer asks next.
+        // An allergy, emergency or medical question the owner has not yet answered keeps the conversation open, whatever the customer asks next.
         let pending = false;
-        for (let i = convo.turns.length - 1; i >= 0 && convo.turns[i].side !== "owner"; i--) if (convo.turns[i].allergy) pending = true;
+        for (let i = convo.turns.length - 1; i >= 0 && convo.turns[i].side !== "owner"; i--) if (convo.turns[i].allergy || convo.turns[i].health) pending = true;
         convo.open = !covered || pending;
       }
     } else {
