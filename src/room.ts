@@ -11,6 +11,7 @@ import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMo
 import { phraseEvidence } from "./utterance";
 import { translationTiming, timingHeader } from "./timing";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_PHARMACY, DEMO_PHARMACY_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
+import { deckLang, sanitizeDeckPages, type DeckPageRows, DEFAULT_DECK_LANG } from "./slide-rows";
 
 type Status = "lobby" | "live" | "ended";
 
@@ -32,6 +33,7 @@ export interface Meta {
   ownerLang: string; // counter
   emergency?: string; // counter, pharmacy/clinic/hospital: the local emergency number shown to customers
   deck?: boolean; // stage: the speaker's PDF is in R2, so every screen can show it
+  deckLang?: string; // stage: language of the deck's written words (default English)
   speakers?: Speaker[]; // stage: s0 is the host; co-speakers join from their own device
   joinKey?: string; // stage: in the host's "add a speaker" QR
   voiceMode?: VoiceMode; // stage: missing on older rooms = "sample"
@@ -71,6 +73,7 @@ export class Room extends DurableObject<Env> {
   peak = 0;
   summary: Summary | null = null;
   polls: Poll[] = [];
+  deckPages: DeckPageRows[] = [];
   private summarizing = false;
   private visitors = new Map<string, number>();
   private mockI = 0;
@@ -82,7 +85,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -93,10 +96,11 @@ export class Room extends DurableObject<Env> {
       this.peak = (s.get("peak") as number) ?? 0;
       this.summary = (s.get("summary") as Summary) ?? null;
       this.polls = (s.get("polls") as Poll[]) ?? [];
+      this.deckPages = (s.get("deckPages") as DeckPageRows[]) ?? [];
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -179,6 +183,7 @@ export class Room extends DurableObject<Env> {
       live: isLive(this.env),
       slides: m.mode === "stage" ? slidePages(this.pages) : [],
       deck: !!m.deck,
+      deckLang: m.deckLang ?? DEFAULT_DECK_LANG,
       speakers: (m.speakers ?? []).map(({ id, name, voice }) => ({ id, name, voice })),
       voice: m.voiceMode !== "phone" && canClone(this.env),
       voiceMode: m.voiceMode ?? "sample",
@@ -292,6 +297,15 @@ export class Room extends DurableObject<Env> {
       return json({ ok: true });
     }
     if (`${req.method} ${action}` === "GET sources") return json({ pages: this.pages });
+    if (`${req.method} ${action}` === "GET deckrows") return json({ deckLang: m.deckLang ?? DEFAULT_DECK_LANG, pages: this.deckPages });
+    if (`${req.method} ${action}` === "POST deckrows") {
+      if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
+      const body: any = await req.json().catch(() => ({}));
+      m.deckLang = deckLang(body.deckLang);
+      this.deckPages = sanitizeDeckPages(body.pages);
+      await this.save("meta", "deckPages");
+      return json({ ok: true, pages: this.deckPages.length });
+    }
     const body: any = await req.json().catch(() => ({}));
     switch (`${req.method} ${action}`) {
       case "POST slide": {
