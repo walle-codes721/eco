@@ -9,6 +9,7 @@ import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiv
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
 import { phraseEvidence } from "./utterance";
+import { customerTurn, ownerTurn, type CustomerTurn } from "./counter-turn";
 import { translationTiming, timingHeader } from "./timing";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_PHARMACY, DEMO_PHARMACY_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
 import { deckLang, rowsForTranslation, sanitizeDeckPages, type DeckPageRows, DEFAULT_DECK_LANG } from "./slide-rows";
@@ -48,7 +49,6 @@ export interface Convo { id: string; lang: string; started: number; open: boolea
 /** The talk's summary. `n` is the seq of the last line it covers: a newer line makes it stale. */
 export interface Summary { n: number; text: Record<string, string>; live: boolean; at: number }
 type Answer = { covered: boolean; answer: string; cite: string; q_en: string; sourceSeq?: number; sourceContext?: string };
-type CustomerTurn = { src: string; lang: string; to_owner: string; answer: { covered: boolean; text: string; text_owner: string; cite: string } };
 /** A usable Counter language code, or null: unknown, clipped or regional codes never drive a conversation. */
 function cleanCounterLang(v: unknown): string | null {
   const c = String(v ?? "").trim().toLowerCase();
@@ -926,7 +926,8 @@ export class Room extends DurableObject<Env> {
       const sensitive = kind ? sensitiveKind(text) : null;
       const usual = sensitive ? [] : selectContext(this.chunks, text).picked;
       const picked = askedAllergy && !sensitive ? allergyContext(this.chunks, usual) : usual;
-      const r = await tf<CustomerTurn>(this.env, "turn", turnModel(input), customerTurnPrompt({ name: m.title, type: m.bizType, ownerLang: m.ownerLang }, picked, input), {
+      const selectedLang = wav ? undefined : cleanCounterLang(body.lang) ?? convo.lang;
+      const r = await tf<CustomerTurn>(this.env, "turn", turnModel(input), customerTurnPrompt({ name: m.title, type: m.bizType, ownerLang: m.ownerLang }, picked, input, selectedLang), {
         pub: m.demo,
         mock: () => {
           if (!text && !m.demo) return { src: MOCK_LINE, lang: hint, to_owner: MOCK_LINE, answer: { covered: false, text: "", text_owner: "", cite: "" } };
@@ -937,7 +938,8 @@ export class Room extends DurableObject<Env> {
         },
       });
       if (r.data === null) return json({ error: "busy", fallback: r.fallback }, 503);
-      const d = r.data;
+      const d = customerTurn(r.data);
+      if (!d) return json({ error: "Invalid Counter response. Please try again.", fallback: "error" }, 503);
       // Language precedence: a typed turn carries the customer's explicit selector
       // choice, so the hint is authoritative and model detection must not silently
       // override it (German misdetected as Hindi would relabel the convo, mistranslate
@@ -957,7 +959,7 @@ export class Room extends DurableObject<Env> {
       const heard: Sensitive[] = kind ? [sensitive, sensitiveKind(d.src), sensitiveKind(d.to_owner)] : [];
       const health: Sensitive = heard.includes("emergency") ? "emergency" : heard.includes("advice") ? "advice" : null;
       added.push({ id: uid(), t: Date.now(), side: "customer", lang: convo.lang, src: d.src, out: d.to_owner, live: r.live, ...(allergy ? { allergy: true } : {}), ...(health ? { health } : {}) });
-      const covered = !!d.answer?.covered && !!d.answer.text;
+      const covered = d.answer.covered;
       if (kind && health) {
         // The fixed line, in the customer's language and the owner's. The AI's own answer is discarded.
         const line = (lang: string) => (health === "emergency" ? emergencyLine(lang, kind, m.emergency) : adviceLine(lang, kind));
@@ -985,7 +987,9 @@ export class Room extends DurableObject<Env> {
         mock: () => ({ src: text || "(audio)", out: text || "(audio)" }),
       });
       if (r.data === null) return json({ error: "busy", fallback: r.fallback }, 503);
-      added.push({ id: uid(), t: Date.now(), side: "owner", lang: m.ownerLang, src: r.data.src, out: r.data.out, live: r.live });
+      const d = ownerTurn(r.data);
+      if (!d) return json({ error: "Invalid Counter response. Please try again.", fallback: "error" }, 503);
+      added.push({ id: uid(), t: Date.now(), side: "owner", lang: m.ownerLang, src: d.src, out: d.out, live: r.live });
       convo.open = false;
     }
     convo.turns.push(...added);

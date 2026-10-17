@@ -234,13 +234,19 @@ export async function tf<T>(
   if (kind === "utterance" && finishReason && finishReason !== "stop") {
     return { data: null, live: true, ms, fallback: "error", why: `incomplete phrase output (${finishReason})`, invalidOutput: true };
   }
+  // Older gateway responses/fixtures can omit completion metadata. Absence is
+  // not itself truncation: still require complete JSON and Counter field validation.
+  // Explicit non-stop reasons, or an exhausted cap without a reason, fail closed.
+  if (kind === "turn" && (finishReason != null ? finishReason !== "stop" : usage.completion_tokens >= req.max_tokens)) {
+    return { data: null, live: true, ms, fallback: "error", why: `incomplete Counter output (${finishReason ?? "unknown"})`, invalidOutput: true };
+  }
   try {
     // Phrase evidence must be a complete response, not a JSON fragment extracted
     // from a malformed wrapper. Keep the existing parser for other job types.
-    const data = kind === "utterance"
+    const data = kind === "utterance" || kind === "turn"
       ? JSON.parse(content.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "")) as T
       : parseJson<T>(content);
-    if (kind === "utterance" && (!data || typeof data !== "object" || Array.isArray(data))) throw new Error("Expected phrase object");
+    if ((kind === "utterance" || kind === "turn") && (!data || typeof data !== "object" || Array.isArray(data))) throw new Error("Expected response object");
     return { data, live: true, ms };
   } catch {
     why = content ? "model didn't return JSON" : "model returned nothing";
