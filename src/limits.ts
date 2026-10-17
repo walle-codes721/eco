@@ -1,5 +1,5 @@
 // Admission rules for live calls, kept free of Workers imports so they can be unit tested.
-export type Kind = "utterance" | "turn" | "ask" | "extract" | "summary" | "voice" | "poll";
+export type Kind = "utterance" | "turn" | "ask" | "extract" | "summary" | "voice" | "poll" | "slide";
 export type Denied = "ceiling" | "rpm" | "busy" | "tripped" | "public-hourly";
 
 const RPM = 12;
@@ -25,7 +25,7 @@ export function admit(
   if (s.tripped) return "tripped";
   if (s.max > 0 && s.today >= s.max) return "ceiling"; // max 0 = no daily ceiling
   if (pub && s.pubHour >= s.pubMax) return "public-hourly";
-  const translation = kind === "utterance" || kind === "turn";
+  const translation = kind === "utterance" || kind === "turn" || kind === "slide";
   if (s.window >= (translation ? RPM : RPM - RESERVED)) return "rpm";
   if (s.inflight >= CONCURRENT) return "busy";
   return null;

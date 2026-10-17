@@ -6,6 +6,7 @@ import { t } from "/js/i18n.js";
 import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
+import { paintSlideRows } from "/js/slide-repaint.js";
 
 const id = roomId();
 let meta;
@@ -248,6 +249,7 @@ pollSlot.addEventListener("touchend", (e) => {
 // ---------- slides ----------
 let deck = null, view = 1, following = true;
 let drawn = 0; // newest render wins when taps outrun pdf.js
+const slideTr = new Map(); // slide n -> { rows, paints, deckLang }
 
 function goSlide(n) {
   const top = Math.min(meta.slide, deck?.count ?? 1);
@@ -267,7 +269,18 @@ async function drawSlide() {
   currentBtn.hidden = view === top;
   const n = ++drawn;
   const el = await deck.render(view, slideFrame.clientWidth || 360);
-  if (n === drawn) slideFrame.replaceChildren(el);
+  if (n !== drawn) return;
+  if (meta.deck && deck.pdf) {
+    let tr = slideTr.get(view);
+    if (!tr || tr.lang !== lang) {
+      tr = await api(`/api/rooms/${id}/slidetr?n=${view}&lang=${encodeURIComponent(lang)}`).catch(() => null);
+      if (tr) slideTr.set(view, { ...tr, lang });
+    }
+    if (tr?.rows?.length && tr.paints?.some((p) => p.paint)) {
+      paintSlideRows(el, tr.rows, tr.paints, el._pdfBaseH);
+    }
+  }
+  slideFrame.replaceChildren(el);
 }
 
 function zoom(on) {
@@ -490,7 +503,8 @@ if (meta.status === "ended") {
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") (meta.slide = m.n), drawSlide();
     if (m.type === "slides") (meta.slides = m.slides), loadSlides();
-    if (m.type === "deck") (meta.deck = true), loadSlides(true);
+    if (m.type === "deck") (meta.deck = true), (slideTr.clear(), loadSlides(true));
+    if (m.type === "slidetr") (slideTr.delete(m.n), drawSlide());
     if (m.type === "reset") { playback.clear(0); Object.assign(meta, m.meta); lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); drawSlide(); }
     if (m.type === "summary") (summary = m.summary), drawSummary();
     if (m.type === "status") {

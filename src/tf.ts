@@ -100,7 +100,7 @@ export async function tf<T>(
   if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = TEXT_FALLBACK;
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
-  const translation = kind === "utterance" || kind === "turn";
+  const translation = kind === "utterance" || kind === "turn" || kind === "slide";
   const admissionAt = Date.now();
   const gate = await budget.acquire(kind, opts.pub, translation ? 1500 : 0);
   if (opts.timing) opts.timing.budgetMs = Date.now() - admissionAt;

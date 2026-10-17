@@ -98,6 +98,8 @@ export async function renderPage(pdf, n, width) {
   canvas.style.width = "100%";
   canvas.style.height = "auto";
   await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+  canvas._pdfBaseH = base.height;
+  canvas._pdfBaseW = base.width;
   return canvas;
 }
 

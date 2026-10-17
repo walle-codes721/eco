@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, LANG_NAMES, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt } from "./prompts";
+import { MODELS, LANG_NAMES, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
 import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
@@ -11,7 +11,8 @@ import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMo
 import { phraseEvidence } from "./utterance";
 import { translationTiming, timingHeader } from "./timing";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_PHARMACY, DEMO_PHARMACY_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
-import { deckLang, sanitizeDeckPages, type DeckPageRows, DEFAULT_DECK_LANG } from "./slide-rows";
+import { deckLang, rowsForTranslation, sanitizeDeckPages, type DeckPageRows, DEFAULT_DECK_LANG } from "./slide-rows";
+import { parseSlideTranslation, rowTranslationTexts, slideTargetLangs, slidesToTranslate } from "./slide-repaint";
 
 type Status = "lobby" | "live" | "ended";
 
@@ -74,6 +75,8 @@ export class Room extends DurableObject<Env> {
   summary: Summary | null = null;
   polls: Poll[] = [];
   deckPages: DeckPageRows[] = [];
+  slideTranslations: Record<number, Record<string, string[]>> = {};
+  private slideTransPending = new Set<number>();
   private summarizing = false;
   private visitors = new Map<string, number>();
   private mockI = 0;
@@ -85,7 +88,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -97,10 +100,11 @@ export class Room extends DurableObject<Env> {
       this.summary = (s.get("summary") as Summary) ?? null;
       this.polls = (s.get("polls") as Poll[]) ?? [];
       this.deckPages = (s.get("deckPages") as DeckPageRows[]) ?? [];
+      this.slideTranslations = (s.get("slideTranslations") as typeof this.slideTranslations) ?? {};
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -303,8 +307,25 @@ export class Room extends DurableObject<Env> {
       const body: any = await req.json().catch(() => ({}));
       m.deckLang = deckLang(body.deckLang);
       this.deckPages = sanitizeDeckPages(body.pages);
-      await this.save("meta", "deckPages");
+      this.slideTranslations = {};
+      await this.save("meta", "deckPages", "slideTranslations");
       return json({ ok: true, pages: this.deckPages.length });
+    }
+    if (`${req.method} ${action}` === "GET slidetr") {
+      if (m.mode !== "stage" || !m.deck) return json({ error: "Not here" }, 404);
+      const n = Math.max(1, Number(url.searchParams.get("n")) || 1);
+      const lang = String(url.searchParams.get("lang") ?? "en").slice(0, 10);
+      const deckL = m.deckLang ?? DEFAULT_DECK_LANG;
+      const page = this.deckPages.find((p) => p.n === n);
+      const rows = page?.rows ?? [];
+      const out = this.slideTranslations[n];
+      return json({
+        deckLang: deckL,
+        rows,
+        ready: !!out,
+        pending: this.slideTransPending.has(n),
+        paints: rowTranslationTexts(rows, out, lang, deckL),
+      });
     }
     const body: any = await req.json().catch(() => ({}));
     switch (`${req.method} ${action}`) {
@@ -312,6 +333,7 @@ export class Room extends DurableObject<Env> {
         m.slide = Math.max(1, Math.min(Number(body.n) || 1, Math.max(1, slidePages(this.pages).length)));
         await this.save("meta");
         this.send(["listener", "screen", "host"], { type: "slide", n: m.slide });
+        this.ctx.waitUntil(this.ensureSlideTranslations(m.slide));
         return json({ slide: m.slide });
       }
       case "POST status":
@@ -462,6 +484,48 @@ export class Room extends DurableObject<Env> {
   }
 
   // ---------- Stage ----------
+
+  private deckPageCount() {
+    return Math.max(this.deckPages.reduce((m, p) => Math.max(m, p.n), 0), slidePages(this.pages).length, 1);
+  }
+
+  private deckRowsForSlide(n: number) {
+    return this.deckPages.find((p) => p.n === n)?.rows ?? [];
+  }
+
+  private async ensureSlideTranslations(currentSlide: number) {
+    const m = this.meta!;
+    if (m.mode !== "stage" || !m.deck || !this.deckPages.length) return;
+    const stored = new Set(Object.keys(this.slideTranslations).map(Number));
+    const due = slidesToTranslate(currentSlide, this.deckPageCount(), stored, (n) => rowsForTranslation(this.deckRowsForSlide(n)).length);
+    for (const n of due) await this.translateSlide(n);
+  }
+
+  private async translateSlide(n: number) {
+    const m = this.meta!;
+    if (this.slideTransPending.has(n) || this.slideTranslations[n]) return;
+    const rows = this.deckRowsForSlide(n);
+    const phrases = rowsForTranslation(rows);
+    if (!phrases.length) return;
+    const langs = slideTargetLangs(m.langs, m.deckLang ?? DEFAULT_DECK_LANG);
+    if (!langs.length) return;
+    if (!isLive(this.env)) return; // mock: original words, no API call
+    this.slideTransPending.add(n);
+    try {
+      const r = await tf(this.env, "slide", MODELS.answer, slideRowsPrompt(m.deckLang ?? DEFAULT_DECK_LANG, langs, phrases), {
+        pub: m.demo,
+        mock: () => ({ out: Object.fromEntries(langs.map((l) => [l, phrases])) }),
+      });
+      if (r.data === null) return;
+      const parsed = parseSlideTranslation(r.data, langs, phrases.length);
+      if (!parsed) return;
+      this.slideTranslations[n] = parsed;
+      await this.save("slideTranslations");
+      this.send(["listener"], { type: "slidetr", n });
+    } finally {
+      this.slideTransPending.delete(n);
+    }
+  }
 
   private async utterance(req: Request, tryVoice: boolean, speaker: string): Promise<Response> {
     const receivedAt = Date.now();
