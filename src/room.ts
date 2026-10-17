@@ -5,6 +5,7 @@ import { tf, isLive, type SpeechStatus } from "./tf";
 import { MODELS, LANG_NAMES, cleanTalkContext, type TalkContext, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt, scriptPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { lineKey, validReaction, tallyReactions, topLines, type LineReactions } from "./reaction";
+import { timeline, type SlideMark, type ReactMark } from "./replay";
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
 import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
@@ -96,6 +97,9 @@ export class Room extends DurableObject<Env> {
   summary: Summary | null = null;
   polls: Poll[] = [];
   reactions: Record<string, LineReactions> = {};
+  /** Append-only, for the Replay of an ended Stage: when each slide was shown and each reaction sent. */
+  slideLog: SlideMark[] = [];
+  reactLog: ReactMark[] = [];
   deckPages: DeckPageRows[] = [];
   /** Teleprompter script text. Host only: never in publicMeta, pages or chunks. */
   script = "";
@@ -119,7 +123,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions", "prepLines", "prepTr", "prepClips"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions", "prepLines", "prepTr", "prepClips", "slideLog", "reactLog"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -137,10 +141,12 @@ export class Room extends DurableObject<Env> {
       this.prepLines = (s.get("prepLines") as typeof this.prepLines) ?? [];
       this.prepTr = (s.get("prepTr") as typeof this.prepTr) ?? {};
       this.prepClips = (s.get("prepClips") as typeof this.prepClips) ?? {};
+      this.slideLog = (s.get("slideLog") as SlideMark[]) ?? [];
+      this.reactLog = (s.get("reactLog") as ReactMark[]) ?? [];
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations" | "script" | "reactions" | "prepLines" | "prepTr" | "prepClips")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations" | "script" | "reactions" | "prepLines" | "prepTr" | "prepClips" | "slideLog" | "reactLog")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -268,6 +274,9 @@ export class Room extends DurableObject<Env> {
         return this.openSocket(url, isHost, me);
       case "GET transcript":
         return json({ meta: this.publicMeta(), lines: this.lines });
+      case "GET timeline":
+        if (m.status !== "ended") return json({ error: "The talk hasn't ended" }, 409);
+        return json({ meta: this.publicMeta(), startedAt: m.startedAt, endedAt: m.endedAt, events: timeline(this.lines, this.questions, this.slideLog, this.reactLog, this.reactions) });
       case "GET summary":
         return json({ summary: this.summary });
       case "POST summary":
@@ -383,7 +392,8 @@ export class Room extends DurableObject<Env> {
     switch (`${req.method} ${action}`) {
       case "POST slide": {
         m.slide = Math.max(1, Math.min(Number(body.n) || 1, Math.max(1, slidePages(this.pages).length)));
-        await this.save("meta");
+        this.slideLog = [...this.slideLog, { n: m.slide, t: Date.now() }].slice(-2000);
+        await this.save("meta", "slideLog");
         this.send(["listener", "screen", "host"], { type: "slide", n: m.slide });
         this.ctx.waitUntil(this.ensureSlideTranslations(m.slide));
         return json({ slide: m.slide });
@@ -997,6 +1007,7 @@ export class Room extends DurableObject<Env> {
       p50: b.p50,
       speakers: (m.speakers ?? []).map((s) => ({ name: s.name, lines: this.lines.filter((l) => (l.speaker ?? "s0") === s.id).length })),
       reactions: this.reactionCard(),
+      ended: m.status === "ended",
     };
   }
 
@@ -1026,7 +1037,8 @@ export class Room extends DurableObject<Env> {
     else if (!x.by[voter] && Object.keys(x.by).length >= 2000) return json({ error: "full" }, 409);
     else x.by[voter] = r;
     if (!Object.keys(x.by).length) delete this.reactions[k];
-    await this.save("reactions");
+    if (r) this.reactLog = [...this.reactLog, { t: Date.now(), r }].slice(-5000);
+    await this.save("reactions", "reactLog");
     if (r) this.send(["screen"], { type: "react", r });
     return json({ ok: true });
   }
@@ -1133,11 +1145,12 @@ export class Room extends DurableObject<Env> {
       this.replayI = 0;
       this.lines = [];
       this.reactions = {}; // they were on the old loop's Lines
+      this.reactLog = [];
       this.summary = null; // it described the old loop
       this.questions = this.questions.slice(-30);
       m.startedAt = Date.now();
       m.slide = 1;
-      await this.save("lines", "meta", "questions", "summary", "reactions");
+      await this.save("lines", "meta", "questions", "summary", "reactions", "reactLog");
       this.send(["listener", "screen", "host"], { type: "reset", meta: this.publicMeta() });
       return void this.ctx.storage.setAlarm(Date.now() + 3000);
     }

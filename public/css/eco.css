@@ -470,6 +470,14 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .lobby .url { font-size: clamp(20px, 2.6vw, 44px); }
 .screen .fs { position: fixed; top: 16px; right: 16px; opacity: 0; transition: opacity 0.3s; }
 .screen:hover .fs { opacity: 1; }
+.screen .qticker { position: absolute; left: 4%; right: calc(4% + clamp(130px, 13vw, 220px) + 2%); top: 4%; background: rgba(22, 22, 24, 0.86); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 14px; padding: 10px 14px; font-size: clamp(14px, 1.5vw, 26px); }
+.screen .qticker .chip { background: rgba(255, 255, 255, 0.14); color: #fff; border: 0; margin-right: 10px; }
+.screen .replay-pill { position: fixed; top: 16px; left: 16px; }
+.screen.replay { padding-bottom: 72px; }
+.screen.replay .stage { width: min(100vw, calc((100vh - 72px) * 16 / 9)); }
+.screen .replay-bar select { width: auto; }
+.screen .replay-bar { position: fixed; left: 16px; right: 16px; bottom: 16px; display: flex; align-items: center; gap: 10px; background: rgba(22, 22, 24, 0.86); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 14px; padding: 8px 12px; }
+.screen .replay-bar input[type=range] { flex: 1; min-width: 0; }
 
 /* listener + customer (phones) */
 .phone { max-width: 640px; margin: 0 auto; padding: 0 var(--gutter); }
