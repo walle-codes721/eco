@@ -129,7 +129,7 @@ const section = (head, sub, ...body) => h("section.form-section", {}, h("header"
 const create = h("button.btn.primary.big", { type: "submit" }, "Create my counter", icon("right"));
 
 const form = h("form", {},
-  section("Your business", "Customers see this name when they scan.", h("label.field", {}, "Name", name), link.el, h("div.field", {}, h("span", { style: { fontSize: "14px", fontWeight: 600 } }, "Type"), seg)),
+  section("Your business", "Customers see this name when they scan.", h("label.field", {}, "Name", name), link.el, h("div.field", { style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" } }, h("span", { style: { fontSize: "14px", fontWeight: 600, letterSpacing: "-0.01em" } }, "Type"), seg)), // label above the buttons, like Name and Link
   section("The basics", "All optional. Eco answers customers from what you write here.", fieldsEl, healthEl),
   section("More info", "Add as many as you need: a menu, a price list, services, policies.",
     h("div.row", { style: { flexWrap: "wrap" } },
