@@ -13,6 +13,7 @@ import {
 } from "./voice";
 import { PRESET_VOICES, ensurePresetTranscript, presetAudioKey, publicPresets } from "./preset-voice";
 import { cloneDemand, parseListenerVoice, type ListenerVoice } from "./voice-choice";
+import { VOICE_CLIPS_IN_FLIGHT } from "./limits";
 import { phraseEvidence } from "./utterance";
 import { customerTurn, ownerTurn, type CustomerTurn } from "./counter-turn";
 import { translationTiming, timingHeader } from "./timing";
@@ -92,7 +93,7 @@ export class Room extends DurableObject<Env> {
   private summarizing = false;
   private visitors = new Map<string, number>();
   private mockI = 0;
-  private cloning = 0;
+  private clipsInFlight = 0;
   private samples = new Map<string, ArrayBuffer>();
   private sampleMime = new Map<string, VoiceSampleMime>();
   private replayI = 0;
@@ -654,75 +655,74 @@ export class Room extends DurableObject<Env> {
     return line;
   }
 
+  /** At most VOICE_CLIPS_IN_FLIGHT cloned clips per room; busy pairs fall back to the phone voice. */
+  private async clonedClip(run: () => Promise<ArrayBuffer | null>): Promise<ArrayBuffer | null> {
+    if (this.clipsInFlight >= VOICE_CLIPS_IN_FLIGHT) return null;
+    this.clipsInFlight++;
+    try {
+      return await run();
+    } finally {
+      this.clipsInFlight--;
+    }
+  }
+
   /** The line in its speaker's cloned voice, one clip per language that has listeners right now. */
   private async cloneSpeaker(line: Line) {
     const sp = this.meta!.speakers?.find((s) => s.id === line.speaker);
-    if (this.meta!.voiceMode === "phone" || !canClone(this.env) || !sp?.voice || this.cloning >= 2) return; // busy: phones fall back to their own voice
+    if (this.meta!.voiceMode === "phone" || !canClone(this.env) || !sp?.voice) return;
     const langs = cloneDemand(this.connectedListeners(), line.out).speakerLangs;
     if (!langs.length) return;
-    this.cloning++;
-    try {
-      let sample = this.samples.get(sp.id);
-      let mime = this.sampleMime.get(sp.id) ?? "audio/wav";
-      if (!sample) {
-        const stored = await loadStoredSample(this.env.FILES, sampleKey(this.meta!, sp.id));
-        if (!stored) return;
-        sample = stored.bytes;
-        mime = stored.mime;
-        this.samples.set(sp.id, sample);
-        this.sampleMime.set(sp.id, mime);
-      }
-      const audio: Record<string, string> = {};
-      await Promise.allSettled(langs.map(async (lang) => {
-        const wav = await voiceFor(this.env, sample!, line.out[lang], lang, mime);
-        if (!wav || !this.lines.includes(line)) return;
-        const k = `${line.seq}-${line.t}-${lang}`;
-        await this.env.FILES.put(`${this.meta!.id}/audio/${k}.wav`, wav);
-        // A reset may have reused the sequence number while this clip was generated.
-        if (!this.lines.includes(line)) return;
-        const url = `/api/rooms/${this.meta!.id}/audio?k=${k}`;
-        audio[lang] = url;
-        line.audio = { ...line.audio, [lang]: url };
-        this.send(["listener"], { type: "audio", seq: line.seq, audio: { [lang]: url } });
-      }));
-      if (!Object.keys(audio).length) return;
-      if (this.lines.includes(line)) await this.save("lines");
-    } finally {
-      this.cloning--;
+    let sample = this.samples.get(sp.id);
+    let mime = this.sampleMime.get(sp.id) ?? "audio/wav";
+    if (!sample) {
+      const stored = await loadStoredSample(this.env.FILES, sampleKey(this.meta!, sp.id));
+      if (!stored) return;
+      sample = stored.bytes;
+      mime = stored.mime;
+      this.samples.set(sp.id, sample);
+      this.sampleMime.set(sp.id, mime);
     }
+    const audio: Record<string, string> = {};
+    await Promise.allSettled(langs.map(async (lang) => {
+      const wav = await this.clonedClip(() => voiceFor(this.env, sample!, line.out[lang], lang, mime));
+      if (!wav || !this.lines.includes(line)) return;
+      const k = `${line.seq}-${line.t}-${lang}`;
+      await this.env.FILES.put(`${this.meta!.id}/audio/${k}.wav`, wav);
+      if (!this.lines.includes(line)) return;
+      const url = `/api/rooms/${this.meta!.id}/audio?k=${k}`;
+      audio[lang] = url;
+      line.audio = { ...line.audio, [lang]: url };
+      this.send(["listener"], { type: "audio", seq: line.seq, audio: { [lang]: url } });
+    }));
+    if (Object.keys(audio).length && this.lines.includes(line)) await this.save("lines");
   }
 
   /** Preset voice clips when the speaker enabled them for this talk. */
   private async clonePresets(line: Line) {
     const m = this.meta!;
-    if (!m.presetsEnabled || m.voiceMode === "phone" || !canClone(this.env) || this.cloning >= 2) return;
+    if (!m.presetsEnabled || m.voiceMode === "phone" || !canClone(this.env)) return;
     const demand = cloneDemand(this.connectedListeners(), line.out);
     if (!Object.keys(demand.presetLangs).length) return;
-    this.cloning++;
-    try {
-      for (const preset of PRESET_VOICES) {
-        const langs = demand.presetLangs[preset.id] ?? [];
-        if (!langs.length) continue;
-        const refText = await ensurePresetTranscript(this.env, this.env.FILES, preset.id);
-        if (!refText) return;
-        const sample = preset.clip();
-        const audio: Record<string, string> = {};
-        await Promise.allSettled(langs.map(async (lang) => {
-          const wav = await voiceFor(this.env, sample, line.out[lang], lang, preset.mime, refText);
-          if (!wav || !this.lines.includes(line)) return;
-          const k = `${line.seq}-${line.t}-${lang}-${preset.id}`;
-          await this.env.FILES.put(`${m.id}/audio/${k}.wav`, wav);
-          if (!this.lines.includes(line)) return;
-          const url = `/api/rooms/${m.id}/audio?k=${k}`;
-          const field = presetAudioKey(lang, preset.id);
-          audio[field] = url;
-          line.audio = { ...line.audio, [field]: url };
-          this.send(["listener"], { type: "audio", seq: line.seq, audio: { [field]: url } });
-        }));
-        if (Object.keys(audio).length && this.lines.includes(line)) await this.save("lines");
-      }
-    } finally {
-      this.cloning--;
+    for (const preset of PRESET_VOICES) {
+      const langs = demand.presetLangs[preset.id] ?? [];
+      if (!langs.length) continue;
+      const refText = await ensurePresetTranscript(this.env, this.env.FILES, preset.id);
+      if (!refText) return;
+      const sample = preset.clip();
+      const audio: Record<string, string> = {};
+      await Promise.allSettled(langs.map(async (lang) => {
+        const wav = await this.clonedClip(() => voiceFor(this.env, sample, line.out[lang], lang, preset.mime, refText));
+        if (!wav || !this.lines.includes(line)) return;
+        const k = `${line.seq}-${line.t}-${lang}-${preset.id}`;
+        await this.env.FILES.put(`${m.id}/audio/${k}.wav`, wav);
+        if (!this.lines.includes(line)) return;
+        const url = `/api/rooms/${m.id}/audio?k=${k}`;
+        const field = presetAudioKey(lang, preset.id);
+        audio[field] = url;
+        line.audio = { ...line.audio, [field]: url };
+        this.send(["listener"], { type: "audio", seq: line.seq, audio: { [field]: url } });
+      }));
+      if (Object.keys(audio).length && this.lines.includes(line)) await this.save("lines");
     }
   }
 

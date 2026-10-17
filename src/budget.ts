@@ -19,7 +19,9 @@ type LastError = { t: number; kind: Kind; model: string; status: number; why: st
 
 export class Budget extends DurableObject<Env> {
   private window: number[] = [];
+  private voiceWindow: number[] = [];
   private inflight = 0;
+  private voiceInflight = 0;
   private fails = 0;
   private tripped = false;
   private trippedAt = 0; // 0 on trips stored before probes existed: the first call after deploy probes
@@ -55,6 +57,7 @@ export class Budget extends DurableObject<Env> {
     for (;;) {
       const now = Date.now();
       this.window = this.window.filter((t) => now - t < 60_000);
+      this.voiceWindow = this.voiceWindow.filter((t) => now - t < 60_000);
       const probe = probeDue(this.tripped, this.trippedAt, this.probing, now);
       const reason = admit(
         {
@@ -62,6 +65,8 @@ export class Budget extends DurableObject<Env> {
           max: Number(this.env.ECO_MAX_CALLS ?? 0),
           window: this.window.length,
           inflight: this.inflight,
+          voiceInflight: this.voiceInflight,
+          voiceWindow: this.voiceWindow.length,
           tripped: this.tripped && !probe,
           pubHour: pub ? this.count(now - 3_600_000, true) : 0,
           pubMax: Number(this.env.ECO_PUBLIC_HOURLY ?? 30),
@@ -70,8 +75,13 @@ export class Budget extends DurableObject<Env> {
         pub,
       );
       if (!reason) {
-        this.window.push(now);
-        this.inflight++;
+        if (kind === "voice") {
+          this.voiceWindow.push(now);
+          this.voiceInflight++;
+        } else {
+          this.window.push(now);
+          this.inflight++;
+        }
         if (probe) this.probing = true;
         return { ok: true };
       }
@@ -81,7 +91,8 @@ export class Budget extends DurableObject<Env> {
   }
 
   async finish(rec: CallRecord): Promise<void> {
-    this.inflight = Math.max(0, this.inflight - 1);
+    if (rec.kind === "voice") this.voiceInflight = Math.max(0, this.voiceInflight - 1);
+    else this.inflight = Math.max(0, this.inflight - 1);
     this.ctx.storage.sql.exec(
       "INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       Date.now(), rec.kind, rec.model, rec.ms, rec.status, rec.tin, rec.tout, rec.pub ? 1 : 0,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { chunkPages, selectContext, bm25, normalize, bestSentence, slidePages, teach, tokensOf, TAUGHT_TAG } from "../src/retrieve";
-import { admit, countsTowardStop, isTranslationKind, probeDue, PROBE_MS } from "../src/limits";
+import { admit, countsTowardStop, isTranslationKind, isVoiceKind, probeDue, PROBE_MS, VOICE_CLIPS_IN_FLIGHT, VOICE_RPM } from "../src/limits";
 import { parseJson } from "../src/tf";
 import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, slideRowsPrompt } from "../src/prompts";
 import { DEMO_SLIDES, DEMO_SHOP } from "../src/fixtures/demo";
@@ -82,6 +82,18 @@ describe("budget admission", () => {
     expect(admit({ ...base, inflight: 3 }, "slide", false)).toBe("busy");
     expect(isTranslationKind("slide")).toBe(true);
     expect(isTranslationKind("ask")).toBe(false);
+  });
+  it("keeps voice in its own lane so translation concurrency stays available", () => {
+    expect(isVoiceKind("voice")).toBe(true);
+    expect(admit({ ...base, inflight: 3 }, "voice", false)).toBeNull();
+    expect(admit({ ...base, inflight: 0, voiceInflight: VOICE_CLIPS_IN_FLIGHT }, "voice", false)).toBe("busy");
+    expect(admit({ ...base, inflight: 3 }, "utterance", false)).toBe("busy");
+    expect(admit({ ...base, inflight: 3, voiceInflight: VOICE_CLIPS_IN_FLIGHT }, "utterance", false)).toBe("busy");
+  });
+  it("caps voice rpm separately from translation", () => {
+    expect(admit({ ...base, voiceWindow: VOICE_RPM - 1 }, "voice", false)).toBeNull();
+    expect(admit({ ...base, voiceWindow: VOICE_RPM }, "voice", false)).toBe("rpm");
+    expect(admit({ ...base, window: 10 }, "utterance", false)).toBeNull();
   });
 });
 
