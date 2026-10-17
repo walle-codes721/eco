@@ -50,6 +50,7 @@ const L = {
   teachAsked: it ? "Parole del cliente" : "Customer's words",
   teachA: it ? "Risposta" : "Answer",
   taught: it ? "Eco risponderà da solo la prossima volta ✓" : "Eco will answer this next time ✓",
+  allergy: it ? "Allergie o dieta" : "Allergy or diet",
 };
 
 let convos = [];
@@ -81,7 +82,9 @@ document.body.replaceChildren(
 
 function bubble(t, c) {
   if (t.side === "customer")
-    return h("div.bubble.them", {}, h("div.who", {}, langName(c.lang, OL)), t.out, t.out !== t.src ? h("div.orig", {}, t.src) : null);
+    return h("div.bubble.them", {}, h("div.who", {}, langName(c.lang, OL)),
+      t.allergy ? h("div", { style: { margin: "2px 0 6px" } }, h("span.chip.red", {}, `⚠ ${L.allergy}`)) : null, // Eco answered from the owner's own text; a person should know
+      t.out, t.out !== t.src ? h("div.orig", {}, t.src) : null);
   if (t.side === "eco")
     return h("div.bubble.eco", {}, h("div.who", {}, `${L.eco}${t.cite ? ` · ${t.cite}` : ""}`), t.out, h("div.orig", {}, t.src));
   const me = h("div.bubble.me", {}, t.src, t.out !== t.src ? h("div.orig", {}, t.out) : null);
@@ -137,7 +140,9 @@ function drawList() {
   const item = (c) => {
     const last = c.turns.at(-1);
     return h("button.convo-item", { type: "button", "aria-current": String(c.id === active), onclick: () => { active = c.id; drawList(); drawThread(); } },
-      h("div.top", {}, c.open ? h("span.needs") : null, h("b", {}, langName(c.lang, OL)), h("span.spacer"), last ? ago(last.t) : ""),
+      h("div.top", {}, c.open ? h("span.needs") : null, h("b", {}, langName(c.lang, OL)),
+        c.turns.some((t) => t.allergy) ? h("span.chip.red", { title: L.allergy }, "⚠") : null,
+        h("span.spacer"), last ? ago(last.t) : ""),
       h("div.last", {}, last ? (last.side === "owner" ? last.src : last.out) : ""));
   };
   const open = sorted.filter((c) => c.open);
