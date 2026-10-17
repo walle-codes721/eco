@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { chunkPages, selectContext, bm25, normalize, bestSentence, slidePages, teach, tokensOf, TAUGHT_TAG } from "../src/retrieve";
-import { admit } from "../src/limits";
+import { admit, probeDue, PROBE_MS } from "../src/limits";
 import { parseJson } from "../src/tf";
 import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations } from "../src/prompts";
 import { DEMO_SLIDES, DEMO_SHOP } from "../src/fixtures/demo";
@@ -40,6 +40,15 @@ describe("budget admission", () => {
   const base = { today: 0, max: 50, window: 0, inflight: 0, tripped: false, pubHour: 0, pubMax: 30 };
   it("admits under every limit", () => expect(admit(base, "utterance", false)).toBeNull());
   it("enforces the daily ceiling", () => expect(admit({ ...base, today: 50 }, "utterance", false)).toBe("ceiling"));
+  it("has no daily ceiling when max is 0", () => expect(admit({ ...base, max: 0, today: 10_000 }, "utterance", false)).toBeNull());
+  it("probes once after a trip has cooled down", () => {
+    const now = 1_000_000_000;
+    expect(probeDue(false, 0, false, now)).toBe(false); // not stopped
+    expect(probeDue(true, now - PROBE_MS + 1, false, now)).toBe(false); // still cooling down
+    expect(probeDue(true, now - PROBE_MS, false, now)).toBe(true);
+    expect(probeDue(true, 0, false, now)).toBe(true); // a trip stored before probes existed
+    expect(probeDue(true, 0, true, now)).toBe(false); // one probe at a time
+  });
   it("enforces 12 rpm and keeps the last 2 slots for translation", () => {
     expect(admit({ ...base, window: 10 }, "ask", false)).toBe("rpm");
     expect(admit({ ...base, window: 10 }, "utterance", false)).toBeNull();

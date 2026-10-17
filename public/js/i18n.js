@@ -1,6 +1,7 @@
 // UI strings for the pages strangers open: listener and customer. Falls back to English.
 const S = {
   en: {
+    slides: "Slides", current: "Current", newQuestion: "New question",
     poll: "Question from the speaker", send: "Send", sent: "Sent ✓", true: "True", false: "False", typeAnswer: "Type your answer…", results: "Results", closed: "Closed", votes: "answers",
     listen: "Listen to the talk", textOnly: "Text only", by: "by", joinNote: "No app, no account. Keep your screen on.",
     waiting: "The talk will start soon", waitingSub: "Captions appear here as soon as the speaker begins.",
@@ -15,6 +16,7 @@ const S = {
     micDenied: "Microphone blocked. Allow it in your browser settings, or type instead.",
   },
   it: {
+    slides: "Slide", current: "Attuale", newQuestion: "Nuova domanda",
     poll: "Domanda dal relatore", send: "Invia", sent: "Inviata ✓", true: "Vero", false: "Falso", typeAnswer: "Scrivi la tua risposta…", results: "Risultati", closed: "Chiusa", votes: "risposte",
     listen: "Ascolta il talk", textOnly: "Solo testo", by: "di", joinNote: "Nessuna app, nessun account. Tieni lo schermo acceso.",
     waiting: "Il talk inizierà a breve", waitingSub: "I sottotitoli appaiono qui appena il relatore inizia.",
@@ -29,6 +31,7 @@ const S = {
     micDenied: "Microfono bloccato. Consentilo nelle impostazioni del browser oppure scrivi.",
   },
   es: {
+    slides: "Diapositivas", current: "Actual", newQuestion: "Nueva pregunta",
     poll: "Pregunta del ponente", send: "Enviar", sent: "Enviada ✓", true: "Verdadero", false: "Falso", typeAnswer: "Escribe tu respuesta…", results: "Resultados", closed: "Cerrada", votes: "respuestas",
     listen: "Escuchar la charla", textOnly: "Solo texto", by: "por", joinNote: "Sin app, sin cuenta. Mantén la pantalla encendida.",
     waiting: "La charla empezará pronto", waitingSub: "Los subtítulos aparecerán aquí en cuanto empiece.",
@@ -43,6 +46,7 @@ const S = {
     micDenied: "Micrófono bloqueado. Permítelo en el navegador o escribe.",
   },
   hi: {
+    slides: "स्लाइड", current: "वर्तमान", newQuestion: "नया प्रश्न",
     poll: "वक्ता का प्रश्न", send: "भेजें", sent: "भेजा गया ✓", true: "सही", false: "गलत", typeAnswer: "अपना उत्तर लिखें…", results: "परिणाम", closed: "बंद", votes: "उत्तर",
     listen: "टॉक सुनें", textOnly: "सिर्फ़ टेक्स्ट", by: "द्वारा", joinNote: "कोई ऐप नहीं, कोई अकाउंट नहीं। स्क्रीन चालू रखें।",
     waiting: "टॉक जल्द शुरू होगा", waitingSub: "वक्ता के शुरू करते ही सबटाइटल यहाँ दिखेंगे।",
@@ -57,6 +61,7 @@ const S = {
     micDenied: "माइक्रोफ़ोन ब्लॉक है। ब्राउज़र सेटिंग में अनुमति दें या लिखें।",
   },
   fr: {
+    slides: "Diapositives", current: "Actuelle", newQuestion: "Nouvelle question",
     poll: "Question de l'intervenant", send: "Envoyer", sent: "Envoyée ✓", true: "Vrai", false: "Faux", typeAnswer: "Écrivez votre réponse…", results: "Résultats", closed: "Fermée", votes: "réponses",
     listen: "Écouter la conférence", textOnly: "Texte seul", by: "par", joinNote: "Sans appli, sans compte. Gardez l'écran allumé.",
     waiting: "La conférence va commencer", waitingSub: "Les sous-titres s'affichent dès que l'orateur commence.",
@@ -71,6 +76,7 @@ const S = {
     micDenied: "Micro bloqué. Autorisez-le dans le navigateur ou écrivez.",
   },
   de: {
+    slides: "Folien", current: "Aktuell", newQuestion: "Neue Frage",
     poll: "Frage vom Podium", send: "Senden", sent: "Gesendet ✓", true: "Wahr", false: "Falsch", typeAnswer: "Deine Antwort…", results: "Ergebnisse", closed: "Geschlossen", votes: "Antworten",
     listen: "Vortrag anhören", textOnly: "Nur Text", by: "von", joinNote: "Keine App, kein Konto. Bildschirm anlassen.",
     waiting: "Der Vortrag beginnt gleich", waitingSub: "Untertitel erscheinen hier, sobald es losgeht.",

@@ -5,6 +5,7 @@ import { stageAudio } from "/js/stage-audio.js";
 import { t } from "/js/i18n.js";
 import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
+import { deckFor } from "/js/slides.js";
 
 const id = roomId();
 let meta;
@@ -48,11 +49,28 @@ const qForm = h("form.ask-box", {}, qInput, qSend);
 const qList = h("div");
 const askHead = h("h2", { style: { fontSize: "20px" } });
 const pollHead = h("h2", { style: { fontSize: "20px" } });
-const pollList = h("div");
-const pollBox = h("section", { hidden: true, style: { paddingTop: "28px" } }, h("div.divider"), pollHead, pollList);
+const pollPrev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous question", onclick: () => showPoll(at - 1) }, icon("prev"));
+const pollNext = h("button.btn.icon-btn", { type: "button", "aria-label": "Next question", onclick: () => showPoll(at + 1) }, icon("next"));
+const pollSlot = h("div.poll-slot");
+const pollDots = h("div.poll-dots");
+const newQBtn = h("button.btn.sm.primary", { type: "button", hidden: true, onclick: () => showPoll(polls.findIndex((p) => unseen.has(p.id))) });
+const pollBox = h("section", { hidden: true, style: { paddingTop: "28px" } }, h("div.divider"),
+  h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, pollHead, h("span.spacer"), newQBtn),
+  h("div.poll-carousel", {}, pollPrev, pollSlot, pollNext), pollDots);
+// The deck: the live slide by default; listeners can page back, never ahead of the speaker.
+const slideHead = h("h2", { style: { fontSize: "20px" } });
+const slideFrame = h("div.slide-frame");
+const slideLabel = h("span.small.muted.mono");
+const slidePrev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous slide", onclick: () => goSlide(view - 1) }, icon("prev"));
+const slideNext = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(view + 1) }, icon("next"));
+const currentBtn = h("button.btn.sm", { type: "button", hidden: true, onclick: () => goSlide(Infinity) });
+const slideBox = h("section", { hidden: true, style: { paddingTop: "28px" } }, h("div.divider"),
+  h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, slideHead, h("span.spacer"), currentBtn),
+  slideFrame,
+  h("div.row", { style: { justifyContent: "center", gap: "12px", marginTop: "10px" } }, slidePrev, slideLabel, slideNext));
 const askSub = h("p.small.muted");
 const main = h("main.phone", {},
-  statusRow, capsWrap, pollBox,
+  statusRow, capsWrap, slideBox, pollBox,
   h("section", { style: { padding: "28px 0 48px" } },
     h("div.divider"),
     h("div.row", { style: { alignItems: "baseline", marginBottom: "4px" } }, askHead),
@@ -68,6 +86,9 @@ function labels() {
   qInput.placeholder = T("askPh");
   askHead.textContent = T("ask");
   pollHead.textContent = T("poll");
+  slideHead.textContent = T("slides");
+  currentBtn.textContent = T("current");
+  newQBtn.textContent = T("newQuestion");
   askSub.textContent = T("fromTalk");
   soundBtn.replaceChildren(icon(voice.on ? "sound" : "mute"));
   soundBtn.setAttribute("aria-label", voice.on ? T("soundOn") : T("soundOff"));
@@ -174,9 +195,75 @@ function drawQs() {
 }
 
 // ---------- polls from the speaker ----------
+// One poll at a time, oldest to newest. `curId` keeps the same poll on screen when the list changes.
+let at = 0, curId = null;
+const unseen = new Set(); // polls that arrived while the listener was looking at another one
+const todo = (p) => p.open && votes[p.id] === undefined;
+
+function showPoll(i) {
+  if (i < 0 || i >= polls.length) return;
+  at = i;
+  curId = polls[i].id;
+  drawPolls();
+}
+
 function drawPolls() {
   pollBox.hidden = !polls.length;
-  pollList.replaceChildren(...polls.slice().reverse().map(pollCard));
+  if (!polls.length) return;
+  const i = polls.findIndex((p) => p.id === curId);
+  at = Math.max(0, Math.min(i >= 0 ? i : at, polls.length - 1));
+  const p = polls[at];
+  curId = p.id;
+  unseen.delete(p.id);
+  pollSlot.replaceChildren(pollCard(p));
+  pollPrev.disabled = at === 0;
+  pollNext.disabled = at === polls.length - 1;
+  pollPrev.classList.toggle("todo", polls.slice(0, at).some(todo)); // something unanswered that way
+  pollNext.classList.toggle("todo", polls.slice(at + 1).some(todo));
+  pollDots.hidden = polls.length < 2;
+  pollDots.replaceChildren(...polls.map((x, j) =>
+    h(`button.poll-dot${j === at ? ".on" : ""}${todo(x) ? ".todo" : ""}`, { type: "button", "aria-label": `${j + 1} / ${polls.length}`, onclick: () => showPoll(j) })));
+  newQBtn.hidden = !unseen.size;
+}
+
+let touchX = null;
+pollSlot.addEventListener("touchstart", (e) => (touchX = e.touches[0].clientX), { passive: true });
+pollSlot.addEventListener("touchend", (e) => {
+  const dx = e.changedTouches[0].clientX - (touchX ?? e.changedTouches[0].clientX);
+  touchX = null;
+  if (Math.abs(dx) > 60 && !e.target.closest("input, button")) showPoll(at + (dx < 0 ? 1 : -1));
+});
+
+// ---------- slides ----------
+let deck = null, view = 1, following = true;
+let drawn = 0; // newest render wins when taps outrun pdf.js
+
+function goSlide(n) {
+  const top = Math.min(meta.slide, deck?.count ?? 1);
+  view = Math.max(1, Math.min(n, top));
+  following = view === top;
+  drawSlide();
+}
+
+async function drawSlide() {
+  if (!deck) return;
+  const top = Math.min(meta.slide, deck.count);
+  view = following ? top : Math.min(view, top);
+  slideBox.hidden = false;
+  slideLabel.textContent = `${view} / ${deck.count}`;
+  slidePrev.disabled = view <= 1;
+  slideNext.disabled = view >= top;
+  currentBtn.hidden = view === top;
+  const n = ++drawn;
+  const el = await deck.render(view, slideFrame.clientWidth || 360);
+  if (n === drawn) slideFrame.replaceChildren(el);
+}
+
+/** Never blocks the captions: the section appears once the deck is ready. `fresh` skips the cached copy after a new upload. */
+async function loadSlides(fresh = false) {
+  if (!meta.deck && !meta.slides?.length) return void (slideBox.hidden = true);
+  deck = await deckFor(id, meta, { fresh }).catch(() => null);
+  drawSlide();
 }
 
 function pollCard(p) {
@@ -203,7 +290,7 @@ function pollCard(p) {
     form.onsubmit = (e) => (e.preventDefault(), inp.value.trim() && vote(p, inp.value.trim()));
     input = form;
   }
-  return h("div.qa", {},
+  return h(`div.qa${todo(p) ? ".todo" : ""}`, {},
     h("div.q", {}, pollQ(p, lang)),
     input,
     h("div.meta", {}, !p.open ? h("span.chip", {}, T("closed")) : mine !== undefined ? h("span", {}, T("sent")) : null),
@@ -349,26 +436,37 @@ if (meta.status === "ended") {
   if (!sessionStorage.getItem(`eco:joined:${id}`)) await welcome();
   labels();
   keepAwake();
+  loadSlides();
   live = connect(id, { role: "listener", lang }, (m) => {
     if (m.type === "hello") {
       Object.assign(meta, m.meta);
       lines = m.lines ?? [];
       playback.clear(lines.at(-1)?.seq ?? 0);
       polls = m.polls ?? [];
+      const first = polls.findIndex(todo); // (re)join: land on the first poll still waiting for an answer, else the newest
+      curId = polls[first >= 0 ? first : polls.length - 1]?.id ?? null;
       drawPolls();
+      drawSlide();
       snapToLive(); // (re)connect: anchor on the newest line, clear any stale pill
       drawCaps();
       if (meta.status === "ended") return recap();
     }
     if (m.type === "line") addLine(m.line);
     if (m.type === "audio") onAudio(m);
-    if (m.type === "poll") polls.push(m.poll), drawPolls();
+    if (m.type === "poll") {
+      polls.push(m.poll);
+      if (polls.length === 1) curId = m.poll.id;
+      else unseen.add(m.poll.id);
+      drawPolls();
+    }
     if (m.type === "tally") { const p = polls.find((x) => x.id === m.pid); if (p) (p.tally = m.tally), drawPolls(); }
     if (m.type === "pollclose") (polls = m.poll ? polls.map((x) => (x.id === m.pid ? m.poll : x)) : polls.filter((x) => x.id !== m.pid)), drawPolls();
     if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
-    if (m.type === "slide") meta.slide = m.n;
-    if (m.type === "reset") { playback.clear(0); lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); }
+    if (m.type === "slide") (meta.slide = m.n), drawSlide();
+    if (m.type === "slides") (meta.slides = m.slides), loadSlides();
+    if (m.type === "deck") (meta.deck = true), loadSlides(true);
+    if (m.type === "reset") { playback.clear(0); Object.assign(meta, m.meta); lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); drawSlide(); }
     if (m.type === "summary") (summary = m.summary), drawSummary();
     if (m.type === "status") {
       meta.status = m.status;

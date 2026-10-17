@@ -40,6 +40,7 @@ export async function tfSpeech(env: Env, input: string, lang: string, refB64: st
   if (!gate.ok) return null;
   const t0 = Date.now();
   let status = 0;
+  let why = "";
   try {
     const res = await fetch(`${BASE}/audio/speech`, {
       method: "POST",
@@ -50,13 +51,14 @@ export async function tfSpeech(env: Env, input: string, lang: string, refB64: st
     });
     status = res.status;
     if (status === 200) return await res.arrayBuffer();
-    console.warn("tf voice failed", status, (await res.text().catch(() => "")).slice(0, 160));
+    why = `${status}: ${(await res.text().catch(() => "")).slice(0, 160)}`;
+    console.warn("tf voice failed", why);
     return null;
   } catch {
     status = status || 599;
     return null;
   } finally {
-    await budget.finish({ kind: "voice", model: MODELS.voice, ms: Date.now() - t0, status, tin: 0, tout: 0, pub: false });
+    await budget.finish({ kind: "voice", model: MODELS.voice, ms: Date.now() - t0, status, tin: 0, tout: 0, pub: false, why });
   }
 }
 
@@ -156,6 +158,7 @@ export async function tf<T>(
       tin: usage.prompt_tokens,
       tout: usage.completion_tokens,
       pub: opts.pub,
+      why,
     });
     if (opts.timing) opts.timing.accountingMs = Date.now() - accountingAt;
   }

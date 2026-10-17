@@ -21,6 +21,8 @@ function listener(playback: unknown) {
   const bindings = {
     playback, api, id: "stage/test/end", lines: [], meta: { title: "Talk", status: "live" },
     drawPolls: vi.fn(), drawSummary: vi.fn(), drawQs: vi.fn(), drawStatus: vi.fn(), drawCaps: vi.fn(), snapToLive: vi.fn(),
+    // Helpers the listener's handlers now call for slides and polls (added on main); offline stand-ins.
+    drawSlide: vi.fn(), loadSlides: vi.fn(), todo: (p: { open?: boolean }) => !!p.open, unseen: new Set<string>(),
     h: () => ({}), icon: () => ({}), T: (key: string) => key, main: { replaceChildren: vi.fn() },
     summaryText: () => "", summaryBox: {}, myQs: [], qList: {}, textOf: () => "", fmtTime: () => "",
     onAudio: (m: { seq: number; audio: Record<string, string> }) => (playback as { audio: (seq: number, audio: Record<string, string>) => void }).audio(m.seq, m.audio),
