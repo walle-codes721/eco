@@ -13,7 +13,8 @@ try {
   throw new Error("no room");
 }
 
-const cid = store(`eco:cid:${id}`) ?? (store(`eco:cid:${id}`, `c${crypto.randomUUID().slice(0, 10)}`), store(`eco:cid:${id}`));
+let cid = store(`eco:cid:${id}`) ?? (store(`eco:cid:${id}`, `c${crypto.randomUUID().slice(0, 10)}`), store(`eco:cid:${id}`));
+let live = null;
 let lang = store(`eco:clang:${id}`) ?? phoneLang();
 let turns = [];
 let open = false;
@@ -63,6 +64,7 @@ function draw() {
 }
 
 function merge(m, pending) {
+  if (m.cid && m.cid !== cid) return; // an old HTTP reply must not restore a deleted chat
   // Only the HTTP response knows which local request completed. WebSocket
   // delivery must not discard placeholders belonging to other in-flight sends.
   turns = turns.filter((x) => x !== pending);
@@ -78,6 +80,7 @@ function merge(m, pending) {
 }
 
 async function send(payload) {
+  const sendingCid = cid;
   sendError = null;
   const pending = { side: "customer", src: payload instanceof Blob ? "" : payload, pending: true };
   turns.push(pending);
@@ -86,8 +89,11 @@ async function send(payload) {
     const m = payload instanceof Blob
       ? await api(`/api/rooms/${id}/turn`, { method: "POST", body: payload, headers: { "content-type": "audio/wav", "x-side": "customer", "x-cid": cid, "x-lang": lang } })
       : await api(`/api/rooms/${id}/turn`, { method: "POST", body: { side: "customer", cid, lang, text: payload } });
+    if (sendingCid !== cid) return;
     merge(m, pending);
   } catch (err) {
+    if (sendingCid !== cid) return;
+    if (err.status === 410 && err.data?.deleted) { resetConversation(sendingCid); return; }
     turns = turns.filter((x) => x !== pending);
     if (typeof payload === "string" && !input.value) input.value = payload;
     sendError = err.status === 429 ? "limit" : "busy";
@@ -133,11 +139,34 @@ function welcome() {
 labels();
 draw();
 if (!sessionStorage.getItem(`eco:cjoined:${id}`)) await welcome();
-connect(id, { role: "customer", cid, lang }, (m) => {
-  if (m.type === "hello" && m.convo) {
-    turns = m.convo.turns;
-    open = m.convo.open;
-    draw();
-  }
-  if (m.type === "turns") merge(m);
-});
+function resetConversation(deletedCid) {
+  if (deletedCid !== cid) return;
+  live?.close();
+  cid = `c${crypto.randomUUID().slice(0, 10)}`;
+  store(`eco:cid:${id}`, cid);
+  turns = [];
+  open = false;
+  sendError = null;
+  input.value = "";
+  globalThis.speechSynthesis?.cancel();
+  draw();
+  connectCustomer();
+}
+
+function connectCustomer() {
+  const connectedCid = cid;
+  live = connect(id, { role: "customer", cid, lang }, (m) => {
+    if (connectedCid !== cid) return;
+    if ((m.type === "conversationDeleted" && m.cid === cid) || (m.type === "hello" && m.deleted)) {
+      resetConversation(connectedCid);
+      return;
+    }
+    if (m.type === "hello" && m.convo) {
+      turns = m.convo.turns;
+      open = m.convo.open;
+      draw();
+    }
+    if (m.type === "turns") merge(m);
+  });
+}
+connectCustomer();

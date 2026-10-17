@@ -94,6 +94,7 @@ export class Room extends DurableObject<Env> {
   lines: Line[] = [];
   questions: Question[] = [];
   convos: Convo[] = [];
+  private deletedConvos: string[] = []; // IDs only: old clients must not recreate deleted chats
   cache: Record<string, Answer> = {};
   peak = 0;
   summary: Summary | null = null;
@@ -131,13 +132,14 @@ export class Room extends DurableObject<Env> {
 
   /** Everything the room keeps, from storage. Also run after a delete, so a re-used name starts clean. */
   private async load() {
-    const s = await this.ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions", "prepLines", "prepTr", "prepClips", "slideLog", "reactLog"]);
+    const s = await this.ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "deletedConvos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions", "prepLines", "prepTr", "prepClips", "slideLog", "reactLog"]);
     this.meta = (s.get("meta") as Meta) ?? null;
     this.pages = (s.get("pages") as typeof this.pages) ?? [];
     this.chunks = (s.get("chunks") as Chunk[]) ?? [];
     this.lines = (s.get("lines") as Line[]) ?? [];
     this.questions = (s.get("questions") as Question[]) ?? [];
     this.convos = (s.get("convos") as Convo[]) ?? [];
+    this.deletedConvos = (s.get("deletedConvos") as string[]) ?? [];
     this.cache = (s.get("cache") as Record<string, Answer>) ?? {};
     this.peak = (s.get("peak") as number) ?? 0;
     this.summary = (s.get("summary") as Summary) ?? null;
@@ -401,6 +403,9 @@ export class Room extends DurableObject<Env> {
       return json({ script: this.script });
     }
     switch (`${req.method} ${action}`) {
+      case "DELETE convo":
+        if (id !== m.id) return json({ error: "Room not found" }, 404);
+        return this.deleteConvo(body?.cid);
       case "POST slide": {
         m.slide = Math.max(1, Math.min(Number(body.n) || 1, Math.max(1, slidePages(this.pages).length)));
         this.slideLog = [...this.slideLog, { n: m.slide, t: Date.now() }].slice(-2000);
@@ -582,8 +587,8 @@ export class Room extends DurableObject<Env> {
     if (m.mode === "stage") hello.lines = this.lines.slice(-50);
     if (role === "host") (hello.board = this.board()), (hello.polls = this.hostPolls());
     if (role === "listener") hello.polls = this.polls.filter((p) => p.open || p.share).map((p) => pollView(p, p.share));
-    if (role === "owner") hello.convos = this.convos;
-    if (role === "customer") hello.convo = this.convos.find((c) => c.id === cid) ?? null;
+    if (role === "owner") { hello.convos = this.convos; hello.deletedConvos = this.deletedConvos; }
+    if (role === "customer") { hello.convo = this.convos.find((c) => c.id === cid) ?? null; hello.deleted = this.deletedConvos.includes(cid); }
     pair[1].send(JSON.stringify(hello));
 
     if (role === "listener") this.presence();
@@ -1323,6 +1328,27 @@ export class Room extends DurableObject<Env> {
 
   // ---------- Counter ----------
 
+  private async deleteConvo(cid: unknown): Promise<Response> {
+    if (this.meta!.mode !== "counter" || this.meta!.demo) return json({ error: "Not allowed" }, 403);
+    if (typeof cid !== "string" || !cid || cid.length > 40) return json({ error: "Invalid conversation" }, 400);
+    // Serialize deletion with room events. Persist the removal and its marker
+    // together before updating memory or notifying either audience.
+    return this.ctx.blockConcurrencyWhile(async () => {
+      if (!this.convos.some((c) => c.id === cid) && !this.deletedConvos.includes(cid)) return json({ error: "No conversation" }, 404);
+      const convos = this.convos.filter((c) => c.id !== cid);
+      const deletedConvos = [...new Set([...this.deletedConvos, cid])];
+      try {
+        await this.ctx.storage.put({ convos, deletedConvos });
+      } catch {
+        return json({ error: "Couldn't delete the conversation. Try again." }, 503);
+      }
+      this.convos = convos;
+      this.deletedConvos = deletedConvos;
+      this.send(["owner"], { type: "conversationDeleted", cid }, [`c:${cid}`]);
+      return json({ ok: true, cid });
+    });
+  }
+
   private async turn(req: Request, isHost: boolean, ip: string): Promise<Response> {
     const m = this.meta!;
     if (m.mode !== "counter") return json({ error: "Not a counter" }, 400);
@@ -1336,6 +1362,7 @@ export class Room extends DurableObject<Env> {
     if (!cid || (!text && !wav)) return json({ error: "Empty" }, 400);
     if (wav && (wav.byteLength < 1000 || wav.byteLength > 800_000)) return json({ error: "Bad audio" }, 413);
     if (side === "owner" && !isHost && !m.demo) return json({ error: "Not allowed" }, 403);
+    if (this.deletedConvos.includes(cid)) return json({ error: "Conversation deleted", deleted: true, cid }, 410);
     if (!isHost && !this.allow(ip, "turn")) return json({ error: "limit" }, 429);
 
     let convo = this.convos.find((c) => c.id === cid);
@@ -1424,8 +1451,11 @@ export class Room extends DurableObject<Env> {
       added.push({ id: uid(), t: Date.now(), side: "owner", lang: m.ownerLang, src: d.src, out: d.out, live: r.live });
       convo.open = false;
     }
+    // An AI call may have been in flight when the owner deleted this chat.
+    if (this.deletedConvos.includes(cid)) return json({ error: "Conversation deleted", deleted: true, cid }, 410);
     convo.turns.push(...added);
     await this.save("convos");
+    if (this.deletedConvos.includes(cid)) return json({ error: "Conversation deleted", deleted: true, cid }, 410);
     const msg = { type: "turns", cid, lang: convo.lang, open: convo.open, turns: added };
     this.send(["owner"], msg, [`c:${cid}`]);
     return json(msg);

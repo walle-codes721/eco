@@ -306,11 +306,15 @@ describe("Stage playback completion", () => {
     vi.useFakeTimers();
     const { voice, clip, synth } = await browser();
     // @ts-expect-error browser module
-    const { stageAudio } = await import("../public/js/stage-audio.js");
+    const { CLONE_WAIT_MS, stageAudio } = await import("../public/js/stage-audio.js");
     const queue = stageAudio({ play: (...args: unknown[]) => voice.playStage(...args), stop: () => voice.stopStage() });
     queue.line({ seq: 1, text: "Hola", lang: "es", audioKey: "es@morgan-freeman", enabled: true, wait: true });
-    await vi.advanceTimersByTimeAsync(4000);
-    expect(clip.src).toMatch(/^blob:/); // only the unlock's silence was ever loaded
+    await vi.advanceTimersByTimeAsync(CLONE_WAIT_MS - 1);
+    expect(synth.speak).not.toHaveBeenCalled();
+    expect(clip.src).toMatch(/^blob:/); // only the unlock's silence was loaded while waiting
+    await vi.advanceTimersByTimeAsync(1);
+    expect(clip.src).toBeFalsy(); // phone fallback releases the audio element
+    expect(clip.play).toHaveBeenCalledTimes(1); // no missing preset clip was played
     expect(synth.speak).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
