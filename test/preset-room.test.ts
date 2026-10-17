@@ -41,7 +41,7 @@ async function presetRoom(presetsEnabled = true) {
     storage: { get: async () => new Map(), put: async () => {} },
     blockConcurrencyWhile: (fn: () => Promise<unknown>) => { ready = fn(); },
     getWebSockets: (tag: string) => tag === "listener" ? [{
-      deserializeAttachment: () => ({ lang: "en" }),
+      deserializeAttachment: () => ({ lang: "en", voice: "morgan-freeman" }),
       send: (data: string) => messages.push(JSON.parse(data)),
     }] : [],
     waitUntil: (p: Promise<unknown>) => { tasks.push(p); },

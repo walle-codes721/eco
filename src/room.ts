@@ -12,6 +12,7 @@ import {
   voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, type VoiceMode, type VoiceSampleMime,
 } from "./voice";
 import { PRESET_VOICES, ensurePresetTranscript, presetAudioKey, publicPresets } from "./preset-voice";
+import { cloneDemand, parseListenerVoice, type ListenerVoice } from "./voice-choice";
 import { phraseEvidence } from "./utterance";
 import { customerTurn, ownerTurn, type CustomerTurn } from "./counter-turn";
 import { translationTiming, timingHeader } from "./timing";
@@ -447,11 +448,14 @@ export class Room extends DurableObject<Env> {
     if ((role === "host" || role === "owner") && !isHost && !this.meta!.demo) return json({ error: "Not allowed" }, 403);
     if (role === "speaker" && !me) return json({ error: "Not allowed" }, 403);
     const lang = (url.searchParams.get("lang") ?? "en").slice(0, 5);
+    const voice = parseListenerVoice(url.searchParams.get("voice"));
     const cid = (url.searchParams.get("cid") ?? "").slice(0, 40);
     const pair = new WebSocketPair();
     const tags = [role, `lang:${lang}`, ...(cid ? [`c:${cid}`] : [])];
     this.ctx.acceptWebSocket(pair[1], tags);
-    pair[1].serializeAttachment({ role, lang, cid, speaker: role === "host" || role === "speaker" ? me?.id ?? "s0" : null });
+    pair[1].serializeAttachment({
+      role, lang, voice, cid, speaker: role === "host" || role === "speaker" ? me?.id ?? "s0" : null,
+    });
 
     const m = this.meta!;
     const hello: Record<string, unknown> = { type: "hello", meta: this.publicMeta() };
@@ -485,6 +489,10 @@ export class Room extends DurableObject<Env> {
       ws.serializeAttachment({ ...ws.deserializeAttachment(), lang: d.lang.slice(0, 5) });
       this.presence();
     }
+    if (d.type === "voice") {
+      ws.serializeAttachment({ ...ws.deserializeAttachment(), voice: parseListenerVoice(d.voice) });
+      this.presence();
+    }
   }
 
   async webSocketClose(ws: WebSocket) {
@@ -512,6 +520,13 @@ export class Room extends DurableObject<Env> {
       out[l] = (out[l] ?? 0) + 1;
     }
     return out;
+  }
+
+  private connectedListeners(): { lang: string; voice: ListenerVoice }[] {
+    return this.ctx.getWebSockets("listener").map((ws) => {
+      const att = ws.deserializeAttachment();
+      return { lang: att?.lang ?? "en", voice: parseListenerVoice(att?.voice) };
+    });
   }
 
   private presence() {
@@ -643,7 +658,7 @@ export class Room extends DurableObject<Env> {
   private async cloneSpeaker(line: Line) {
     const sp = this.meta!.speakers?.find((s) => s.id === line.speaker);
     if (this.meta!.voiceMode === "phone" || !canClone(this.env) || !sp?.voice || this.cloning >= 2) return; // busy: phones fall back to their own voice
-    const langs = Object.keys(this.listenerLangs()).filter((l) => line.out[l]);
+    const langs = cloneDemand(this.connectedListeners(), line.out).speakerLangs;
     if (!langs.length) return;
     this.cloning++;
     try {
@@ -681,11 +696,13 @@ export class Room extends DurableObject<Env> {
   private async clonePresets(line: Line) {
     const m = this.meta!;
     if (!m.presetsEnabled || m.voiceMode === "phone" || !canClone(this.env) || this.cloning >= 2) return;
-    const langs = Object.keys(this.listenerLangs()).filter((l) => line.out[l]);
-    if (!langs.length) return;
+    const demand = cloneDemand(this.connectedListeners(), line.out);
+    if (!Object.keys(demand.presetLangs).length) return;
     this.cloning++;
     try {
       for (const preset of PRESET_VOICES) {
+        const langs = demand.presetLangs[preset.id] ?? [];
+        if (!langs.length) continue;
         const refText = await ensurePresetTranscript(this.env, this.env.FILES, preset.id);
         if (!refText) return;
         const sample = preset.clip();

@@ -265,4 +265,31 @@ describe("Stage playback completion", () => {
     synth.speak.mock.calls[0][0].onerror();
     await playing;
   });
+
+  it("plays preset clips from a language-and-voice audio key", async () => {
+    vi.useFakeTimers();
+    const { voice, clip } = await browser();
+    // @ts-expect-error browser module
+    const { stageAudio } = await import("../public/js/stage-audio.js");
+    const queue = stageAudio({ play: (...args: unknown[]) => voice.playStage(...args), stop: () => voice.stopStage() });
+    const key = "es@morgan-freeman";
+    queue.line({ seq: 1, text: "Hola", lang: "es", audioKey: key, enabled: true, wait: true });
+    queue.audio(1, { [key]: "/preset-es.wav" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clip.src).toBe("/preset-es.wav");
+    vi.useRealTimers();
+  });
+
+  it("falls back to phone speech when a preset clip never arrives", async () => {
+    vi.useFakeTimers();
+    const { voice, clip, synth } = await browser();
+    // @ts-expect-error browser module
+    const { stageAudio } = await import("../public/js/stage-audio.js");
+    const queue = stageAudio({ play: (...args: unknown[]) => voice.playStage(...args), stop: () => voice.stopStage() });
+    queue.line({ seq: 1, text: "Hola", lang: "es", audioKey: "es@morgan-freeman", enabled: true, wait: true });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(clip.src).toBeFalsy();
+    expect(synth.speak).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
 });
