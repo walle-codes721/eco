@@ -50,7 +50,7 @@ async function prepRoom(clip: (text: string, lang: string) => ArrayBuffer | null
   await room.init(roomId, { langs: ["es", "it"], presetsEnabled: true, voice: "sample" });
   await room.fetch(new Request("https://room/meta", { headers: { "x-room": roomId } }));
   room.meta!.speakers![0]!.voice = true;
-  vi.spyOn(presets.PRESET_VOICES[0]!, "clip").mockReturnValue(new ArrayBuffer(30_000));
+  for (const p of presets.PRESET_VOICES) vi.spyOn(p, "clip").mockReturnValue(new ArrayBuffer(30_000));
   const voice = vi.spyOn(voices, "voiceFor").mockImplementation(async (_env, _ref, text, lang) => clip(text, lang));
   const prep = (body: object) => room.fetch(new Request("https://room/prep", {
     method: "POST",
@@ -73,36 +73,37 @@ async function prepRoom(clip: (text: string, lang: string) => ArrayBuffer | null
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
+const V = 1 + presets.PRESET_VOICES.length; // speaker + every preset
 describe("HACKATHON prep", () => {
   it("translates and voices every line × language × voice once, saving each clip", async () => {
     const { room, store, files, voice, prep, drain } = await prepRoom();
     const tf = vi.spyOn(client, "tf");
-    expect((await prep({ lines: LINES })).total).toBe(3 * 3 * 2); // lines × es,it,en × speaker,Morgan
-    expect(await drain()).toEqual({ lines: 3, translated: 3, total: 18, done: 18, failed: 0 });
-    expect([...files.keys()].filter((k) => k.includes("/audio/p-"))).toHaveLength(18);
-    expect(Object.keys(store.get("prepClips") as object)).toHaveLength(18);
+    expect((await prep({ lines: LINES })).total).toBe(3 * 3 * V); // lines × es,it,en × speaker,Morgan
+    expect(await drain()).toEqual({ lines: 3, translated: 3, total: 3 * 3 * V, done: 3 * 3 * V, failed: 0 });
+    expect([...files.keys()].filter((k) => k.includes("/audio/p-"))).toHaveLength(3 * 3 * V);
+    expect(Object.keys(store.get("prepClips") as object)).toHaveLength(3 * 3 * V);
     // English is the script as written: voiced from the line itself, never translated.
-    expect(voice.mock.calls.filter(([, , , lang]) => lang === "en").map(([, , text]) => text).sort()).toEqual([...LINES, ...LINES].sort());
+    expect(voice.mock.calls.filter(([, , , lang]) => lang === "en").map(([, , text]) => text).sort()).toEqual(Array.from({ length: V }, () => LINES).flat().sort());
     expect(tf).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(tf.mock.calls[0]![3])).not.toContain("English");
     // Preparing again (page reload, same script) redoes nothing.
     await prep({ lines: LINES });
     await drain();
-    expect(voice).toHaveBeenCalledTimes(18);
-    expect(room.prepStatus().done).toBe(18);
+    expect(voice).toHaveBeenCalledTimes(3 * 3 * V);
+    expect(room.prepStatus().done).toBe(3 * 3 * V);
   });
 
   it("retries a failing clip, keeps the ones that worked, and retries again on request", async () => {
     let broken = true;
     const { voice, prep, drain } = await prepRoom((text, lang) => (broken && text === LINES[2] && lang === "it" ? null : new ArrayBuffer(8)));
     await prep({ lines: LINES });
-    expect(await drain()).toMatchObject({ total: 18, done: 16, failed: 2 }); // speaker + Morgan for that line in Italian
+    expect(await drain()).toMatchObject({ total: 3 * 3 * V, done: 3 * 3 * V - V, failed: V }); // speaker + Morgan for that line in Italian
     const tries = voice.mock.calls.filter(([, , text, lang]) => text === LINES[2] && lang === "it").length;
-    expect(tries).toBe(2 * 3);
+    expect(tries).toBe(V * 3);
     broken = false;
     await prep({ retry: true });
-    expect(await drain()).toMatchObject({ done: 18, failed: 0 });
-    expect(voice).toHaveBeenCalledTimes(16 + 6 + 2); // the sixteen good clips were never redone
+    expect(await drain()).toMatchObject({ done: 3 * 3 * V, failed: 0 });
+    expect(voice).toHaveBeenCalledTimes(3 * 3 * V - V + V * 3 + V); // the sixteen good clips were never redone
   });
 
   it("plays a cued line from prep: translations and every clip, no call", async () => {
@@ -115,7 +116,7 @@ describe("HACKATHON prep", () => {
     await room.webSocketMessage(host as unknown as WebSocket, JSON.stringify({ type: "cue", text: LINES[1] }));
     const line = room.lines.at(-1)!;
     expect(line).toMatchObject({ src: LINES[1], cue: true, out: { es: LINES[1], it: LINES[1] }, flags: [] });
-    expect(Object.keys(line.audio!).sort()).toEqual(["en", "en@morgan-freeman", "es", "es@morgan-freeman", "it", "it@morgan-freeman"]);
+    expect(Object.keys(line.audio!).sort()).toEqual(["en", "es", "it"].flatMap((l) => [l, ...presets.PRESET_VOICES.map((p) => `${l}@${p.id}`)]).sort());
     for (const url of Object.values(line.audio!)) expect(url).toMatch(/[?&]v=\d+$/); // a remade clip gets a new URL, never a cached old one
     expect(room.meta!.status).toBe("live");
     expect(tf).not.toHaveBeenCalled();
@@ -162,9 +163,9 @@ describe("fixing a prepared talk without redoing it", () => {
     vi.setSystemTime(Date.now() + 60_000); // the fix runs later than the first prep
     await prep({ lines: LINES }); // the speaker page opens
     expect(room.prepTr[h]!.es).toBe(LINES[1]);
-    expect(await drain()).toMatchObject({ done: 18, failed: 0 });
+    expect(await drain()).toMatchObject({ done: 3 * 3 * V, failed: 0 });
     expect(tf).not.toHaveBeenCalled();
-    expect(voice.mock.calls.map(([, , text, lang]) => `${lang} ${text}`)).toEqual([`es ${LINES[1]}`, `es ${LINES[1]}`]); // speaker + Morgan
+    expect(voice.mock.calls.map(([, , text, lang]) => `${lang} ${text}`)).toEqual(Array(V).fill(`es ${LINES[1]}`)); // speaker + every preset
     await room.webSocketMessage(host as unknown as WebSocket, JSON.stringify({ type: "cue", text: LINES[1] }));
     const after = lastAudio(room);
     expect(after.es).not.toBe(before.es); // new version: a phone that cached the numbered clip fetches the new one
@@ -180,13 +181,13 @@ describe("fixing a prepared talk without redoing it", () => {
     const tf = vi.spyOn(client, "tf");
     voice.mockClear();
     const added = await call("langs", { add: "pl" });
-    expect(await added.json()).toMatchObject({ langs: ["es", "it", "pl"], prep: { translated: 0, total: 3 * 4 * 2 } });
-    expect(await drain()).toMatchObject({ translated: 3, done: 24, failed: 0 });
+    expect(await added.json()).toMatchObject({ langs: ["es", "it", "pl"], prep: { translated: 0, total: 3 * 4 * V } });
+    expect(await drain()).toMatchObject({ translated: 3, done: 3 * 4 * V, failed: 0 });
     expect(tf).toHaveBeenCalledTimes(1);
     const system = JSON.stringify(tf.mock.calls[0]![3]);
     expect(system).toContain("Polish");
     expect(system).not.toContain("Spanish");
-    expect(voice.mock.calls.map(([, , , lang]) => lang)).toEqual(Array(6).fill("pl")); // 3 lines × 2 voices, nothing else redone
+    expect(voice.mock.calls.map(([, , , lang]) => lang)).toEqual(Array(3 * V).fill("pl")); // 3 lines � every voice, nothing else redone
     await room.webSocketMessage(host as unknown as WebSocket, JSON.stringify({ type: "cue", text: LINES[0] }));
     expect(Object.keys(lastAudio(room))).toEqual(expect.arrayContaining(["pl", "pl@morgan-freeman"]));
     expect((await call("langs", { add: "en" })).status).toBe(400);
@@ -206,7 +207,7 @@ describe("fixing a prepared talk without redoing it", () => {
     expect(voice).not.toHaveBeenCalled(); // same recording: nothing to do
     voiceTag.etag = "second-recording";
     await prep({ lines: LINES });
-    expect(await drain()).toMatchObject({ done: 18 });
+    expect(await drain()).toMatchObject({ done: 3 * 3 * V });
     expect(voice).toHaveBeenCalledTimes(3 * 3); // 3 lines × es,it,en in the speaker's voice; Morgan's stay
     expect(voice.mock.calls.every(([, sample]) => (sample as ArrayBuffer).byteLength === 100)).toBe(true); // the speaker's sample
     expect(room.meta!.voiceTag).toBe("second-recording");
@@ -225,7 +226,7 @@ describe("saved presentations", () => {
     const b = await prepRoom(undefined, copyId, a.files);
     expect((await b.call("import", copy)).status).toBe(403); // a browser can't point clips at other files
     expect((await b.call("import", copy, true)).status).toBe(200);
-    expect(b.room.prepStatus()).toMatchObject({ translated: 3, total: 18, done: 18 });
+    expect(b.room.prepStatus()).toMatchObject({ translated: 3, total: 3 * 3 * V, done: 3 * 3 * V });
     const calls = b.voice.mock.calls.length;
     await b.prep({ lines: LINES }); // the speaker page sends the same script on load
     await b.drain();
@@ -233,7 +234,7 @@ describe("saved presentations", () => {
     await b.room.webSocketMessage(host as unknown as WebSocket, JSON.stringify({ type: "cue", text: LINES[0] }));
     const line = b.room.lines.at(-1)!;
     expect(b.room.lines).toHaveLength(1);
-    expect(Object.keys(line.audio!)).toHaveLength(6);
+    expect(Object.keys(line.audio!)).toHaveLength(3 * V);
     for (const url of Object.values(line.audio!)) expect((await b.call(`audio?k=${audioKey(url)}`)).status).toBe(200);
   });
 
@@ -252,7 +253,7 @@ describe("saved presentations", () => {
     expect(a.store.size).toBe(0);
     expect(a.files.has(`${id}/deck.pdf`)).toBe(false);
     expect(a.files.has(`${id}/audio/7-123-es.wav`)).toBe(false);
-    expect([...a.files.keys()].filter((k) => k.startsWith(`${id}/audio/p-`))).toHaveLength(18);
+    expect([...a.files.keys()].filter((k) => k.startsWith(`${id}/audio/p-`))).toHaveLength(3 * 3 * V);
     await b.room.webSocketMessage(host as unknown as WebSocket, JSON.stringify({ type: "cue", text: LINES[1] }));
     for (const url of Object.values(b.room.lines.at(-1)!.audio!)) expect((await b.call(`audio?k=${audioKey(url)}`)).status).toBe(200);
     // Deleting the duplicate too, with nothing left to keep, removes the shared clips.

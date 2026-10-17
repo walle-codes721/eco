@@ -80,7 +80,7 @@ function world() {
 describe("saved presentations (routes)", () => {
   it("duplicates a prepared presentation to start again, then deletes the original without breaking the copy", async () => {
     vi.spyOn(voices, "voiceFor").mockResolvedValue(new ArrayBuffer(8));
-    vi.spyOn(presets.PRESET_VOICES[0]!, "clip").mockReturnValue(new ArrayBuffer(30_000));
+    for (const p of presets.PRESET_VOICES) vi.spyOn(p, "clip").mockReturnValue(new ArrayBuffer(30_000));
     const w = world();
     const made = await w.api("/api/rooms", { mode: "stage", slug: "gold", title: "Gold", langs: ["es", "it"], voice: "sample", presetsEnabled: true, script: LINES.join("\n") });
     expect(made.status).toBe(200);

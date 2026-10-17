@@ -1,6 +1,6 @@
 // Demo-only preset voices (ADR 0006). One module: id, label, clip, MIME, reference transcript.
 import type { VoiceSampleMime } from "./voice";
-import { morganFreemanClip } from "./preset-clip";
+import { morganFreemanClip, jackSparrowClip, spongebobClip } from "./preset-clip";
 
 export interface PresetVoice {
   id: string;
@@ -17,6 +17,18 @@ export const PRESET_VOICES: readonly PresetVoice[] = [{
   mime: "audio/mpeg",
   referenceTranscript: "Hello, this is a test of my cloned voice.",
   clip: morganFreemanClip,
+}, {
+  id: "jack-sparrow",
+  label: "Jack Sparrow (AI)",
+  mime: "audio/mpeg",
+  referenceTranscript: "Hello, this is a test of my cloned voice.",
+  clip: jackSparrowClip,
+}, {
+  id: "spongebob",
+  label: "SpongeBob (AI)",
+  mime: "audio/mpeg",
+  referenceTranscript: "Hello, this is a test of my cloned voice.",
+  clip: spongebobClip,
 }] as const;
 
 export function presetAudioKey(lang: string, presetId: string) {
