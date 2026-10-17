@@ -90,11 +90,12 @@ describe("counter customer language routing", () => {
 
   it("answers a covered English question from the list and closes the convo", async () => {
     const { room, turn } = await testCounter();
-    const m = await turn({ side: "customer", cid: "c-en", lang: "en", text: "Is the pistachio gluten-free?" });
+    // A price question, not an allergy one: allergy questions stay open for the owner by design.
+    const m = await turn({ side: "customer", cid: "c-en", lang: "en", text: "How much is the 1 kg takeaway box?" });
     expect(m.lang).toBe("en");
     expect(m.open).toBe(false);
     expect(m.turns).toHaveLength(2);
-    expect(m.turns[1]).toMatchObject({ side: "eco", lang: "en", cite: "menu" });
+    expect(m.turns[1]).toMatchObject({ side: "eco", lang: "en", cite: "prices" });
     expect(room.convos.find((c) => c.id === "c-en")!.open).toBe(false);
   });
 
