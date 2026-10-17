@@ -20,13 +20,13 @@ function listener(playback: unknown) {
   const api = vi.fn(async () => ({ lines: [], summary: null }));
   const bindings = {
     playback, api, id: "stage/test/end", lines: [], meta: { title: "Talk", status: "live" },
-    drawSummary: vi.fn(), drawQs: vi.fn(), drawStatus: vi.fn(), drawCaps: vi.fn(), snapToLive: vi.fn(),
+    drawPolls: vi.fn(), drawSummary: vi.fn(), drawQs: vi.fn(), drawStatus: vi.fn(), drawCaps: vi.fn(), snapToLive: vi.fn(),
     h: () => ({}), icon: () => ({}), T: (key: string) => key, main: { replaceChildren: vi.fn() },
     summaryText: () => "", summaryBox: {}, myQs: [], qList: {}, textOf: () => "", fmtTime: () => "",
     onAudio: (m: { seq: number; audio: Record<string, string> }) => (playback as { audio: (seq: number, audio: Record<string, string>) => void }).audio(m.seq, m.audio),
   };
-  const onMessage = new Function(...Object.keys(bindings), `let summary = null; ${recap}; return ${messages};`)(...Object.values(bindings));
-  return { onMessage, api };
+  const handlers = new Function(...Object.keys(bindings), `let summary = null, polls = []; ${recap}; return { onMessage: ${messages}, getPolls: () => polls };`)(...Object.values(bindings));
+  return { ...handlers, api, drawPolls: bindings.drawPolls };
 }
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 beforeEach(() => vi.useFakeTimers());
@@ -83,6 +83,51 @@ describe("listener normal presentation completion", () => {
     expect(stop).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(5000);
     expect(play).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+
+describe("listener polling and audio integration", () => {
+  it("initializes polls on hello while cancelling stale audio and suppressing snapshot replay", async () => {
+    const play = vi.fn(async () => {}), stop = vi.fn();
+    const queue = stageAudio({ play, stop });
+    const { onMessage, getPolls, drawPolls } = listener(queue);
+    queue.line({ seq: 1, text: "Stale", lang: "en", enabled: true, wait: true });
+    const poll = { id: "p1", open: true };
+    onMessage({ type: "hello", meta: { status: "live" }, lines: [{ seq: 8 }], polls: [poll] });
+    expect(getPolls()).toEqual([poll]);
+    expect(drawPolls).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+    queue.line({ seq: 8, text: "Snapshot", lang: "en", enabled: true });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(play).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    onMessage({ type: "hello", meta: {}, lines: [] });
+    expect(getPolls()).toEqual([]);
+  });
+
+  it("updates and closes polls without interrupting pending or active audio", async () => {
+    let finish!: () => void;
+    const play = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })), stop = vi.fn();
+    const queue = stageAudio({ play, stop });
+    const { onMessage, getPolls, drawPolls } = listener(queue);
+    queue.line({ seq: 1, text: "Final phrase", lang: "en", speaker: 0, enabled: true, wait: true });
+    onMessage({ type: "poll", poll: { id: "p1", open: true } });
+    onMessage({ type: "tally", pid: "p1", tally: { n: 1 } });
+    expect(getPolls()[0].tally).toEqual({ n: 1 });
+    await vi.advanceTimersByTimeAsync(3500);
+    onMessage({ type: "audio", seq: 1, audio: { en: "/final.wav" } });
+    await flush();
+    onMessage({ type: "pollclose", pid: "p1", poll: { id: "p1", open: false, tally: { n: 1 } } });
+    expect(getPolls()[0].open).toBe(false);
+    onMessage({ type: "pollclose", pid: "p1", poll: null });
+    expect(getPolls()).toEqual([]);
+    expect(drawPolls).toHaveBeenCalledTimes(4);
+    expect(stop).not.toHaveBeenCalled();
+    finish();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(play).toHaveBeenCalledExactlyOnceWith("Final phrase", "en", "/final.wav", 0);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

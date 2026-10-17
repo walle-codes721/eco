@@ -87,3 +87,25 @@ describe("translation timing (all transport mocked)", () => {
     expect(budget.finish).not.toHaveBeenCalled();
   });
 });
+
+
+it.each([false, true])("preserves upstream poll timeout and budget with diagnostics enabled=%s", async (enabled) => {
+  const { tf } = await import("../src/tf");
+  const { pollPrompt } = await import("../src/prompts");
+  const { env, budget } = environment();
+  const timeout = vi.spyOn(AbortSignal, "timeout");
+  const transport = vi.fn(async () => Response.json({ choices: [{ message: { content: '{"q":{"en":"Which?"},"options":{"en":["A","B"]}}' } }] }));
+  vi.stubGlobal("fetch", transport);
+  const timing = enabled ? translationTiming() : undefined;
+  const req = pollPrompt("Quale?", ["A", "B"], "it", ["en"]);
+  const pending = tf(env, "poll", MODELS.answer, req, { pub: false, mock: () => ({}), timing });
+  await vi.runAllTimersAsync();
+  expect(await pending).toMatchObject({ data: { q: { en: "Which?" } }, live: true });
+  expect(timeout).toHaveBeenCalledExactlyOnceWith(30_000);
+  expect(budget.acquire).toHaveBeenCalledExactlyOnceWith("poll", false, 0);
+  expect(budget.finish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: "poll", model: MODELS.answer, status: 200 }));
+  expect(transport).toHaveBeenCalledTimes(1);
+  const body = JSON.parse((transport.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+  expect(body).toEqual({ model: MODELS.answer, ...req, temperature: 0.2 });
+  if (timing) expect(timing.attempts).toEqual([{ model: MODELS.answer, status: 200, ms: 0 }]);
+});

@@ -2,7 +2,8 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations } from "./prompts";
+import { MODELS, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt } from "./prompts";
+import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
 import { phraseEvidence } from "./utterance";
@@ -61,6 +62,7 @@ export class Room extends DurableObject<Env> {
   cache: Record<string, Answer> = {};
   peak = 0;
   summary: Summary | null = null;
+  polls: Poll[] = [];
   private summarizing = false;
   private visitors = new Map<string, number>();
   private mockI = 0;
@@ -72,7 +74,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -82,10 +84,11 @@ export class Room extends DurableObject<Env> {
       this.cache = (s.get("cache") as Record<string, Answer>) ?? {};
       this.peak = (s.get("peak") as number) ?? 0;
       this.summary = (s.get("summary") as Summary) ?? null;
+      this.polls = (s.get("polls") as Poll[]) ?? [];
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -204,6 +207,8 @@ export class Room extends DurableObject<Env> {
       }
       case "POST ask":
         return this.ask(await req.json(), ip);
+      case "POST vote":
+        return this.vote(await req.json().catch(() => ({})));
       case "POST turn":
         return this.turn(req, isHost, ip);
       case "GET board":
@@ -294,6 +299,10 @@ export class Room extends DurableObject<Env> {
         if (m.mode === "stage") this.send(["listener", "screen", "host"], { type: "slides", slides: this.publicMeta().slides });
         return json({ ok: true, chunks: this.chunks.length });
       }
+      case "POST poll":
+        return this.newPoll(body);
+      case "POST pollclose":
+        return this.closePoll(String(body.pid ?? ""));
       case "POST addanswer":
         return m.mode === "stage" ? this.teachQuestion(body) : this.teachAnswer(body);
     }
@@ -348,7 +357,8 @@ export class Room extends DurableObject<Env> {
     // 50 = the client's line buffer (public/js/pages/listener.js); the two must stay in lockstep,
     // otherwise a late joiner can't scroll back through everything a long-time listener has.
     if (m.mode === "stage") hello.lines = this.lines.slice(-50);
-    if (role === "host") hello.board = this.board();
+    if (role === "host") (hello.board = this.board()), (hello.polls = this.hostPolls());
+    if (role === "listener") hello.polls = this.polls.filter((p) => p.open || p.share).map((p) => pollView(p, p.share));
     if (role === "owner") hello.convos = this.convos;
     if (role === "customer") hello.convo = this.convos.find((c) => c.id === cid) ?? null;
     pair[1].send(JSON.stringify(hello));
@@ -656,6 +666,95 @@ export class Room extends DurableObject<Env> {
       p50: b.p50,
       speakers: (m.speakers ?? []).map((s) => ({ name: s.name, lines: this.lines.filter((l) => (l.speaker ?? "s0") === s.id).length })),
     };
+  }
+
+  // ---------- Polls ----------
+
+  private hostPolls() {
+    return this.polls.map((p) => pollView(p, true));
+  }
+
+  /** The speaker sends a poll: one call puts it into every room language. Nothing reaches listeners if that call fails. */
+  private async newPoll(body: any): Promise<Response> {
+    const m = this.meta!;
+    if (m.mode !== "stage") return json({ error: "Not a stage" }, 400);
+    if (this.polls.length >= 30) return json({ error: "Up to 30 polls per talk" }, 409);
+    const d = cleanPoll(body);
+    if (!d) return json({ error: "Check the question and its options" }, 400);
+    const langs = [...new Set(["en", ...m.langs])].filter((l) => l !== d.lang);
+    const p: Poll = { id: uid(), t: Date.now(), kind: d.kind, lang: d.lang, q: { [d.lang]: d.q }, options: { [d.lang]: d.options }, min: d.min, max: d.max, share: d.share, open: true, answers: [] };
+    if (langs.length) {
+      const r = await tf<{ q: Record<string, string>; options: Record<string, string[]> }>(this.env, "poll", MODELS.answer, pollPrompt(d.q, d.options, d.lang, langs), {
+        pub: m.demo,
+        mock: () => ({ q: Object.fromEntries(langs.map((l) => [l, d.q])), options: Object.fromEntries(langs.map((l) => [l, d.options])) }),
+      });
+      if (r.data === null) return json({ error: "busy", fallback: r.fallback }, 503);
+      for (const l of langs) {
+        const q = r.data.q?.[l], o = r.data.options?.[l];
+        p.q[l] = typeof q === "string" && q.trim() ? q.trim().slice(0, 300) : d.q; // a missing language reads the original
+        p.options[l] = Array.isArray(o) && o.length === d.options.length && o.every((x) => typeof x === "string" && x.trim()) ? o.map((x) => x.trim().slice(0, 120)) : d.options;
+      }
+    }
+    this.polls.push(p);
+    await this.save("polls");
+    this.send(["listener"], { type: "poll", poll: pollView(p, p.share) });
+    this.send(["host"], { type: "polls", polls: this.hostPolls() });
+    return json({ id: p.id });
+  }
+
+  /** A listener answers. No AI call: choices are indexes, free text waits for the close. One answer per voter, the last one counts. */
+  private async vote(body: any): Promise<Response> {
+    const p = this.polls.find((x) => x.id === body.pid);
+    if (!p?.open) return json({ error: "This poll is closed" }, 409);
+    const voter = String(body.voter ?? "").slice(0, 40);
+    const a = validVote(p, body.a);
+    if (!voter || a === null) return json({ error: "Bad answer" }, 400);
+    const lang = String(body.lang ?? "en").slice(0, 5);
+    const i = p.answers.findIndex((x) => x.voter === voter);
+    if (i >= 0) p.answers[i] = { voter, lang, a };
+    else if (p.answers.length >= 2000) return json({ error: "This poll is full" }, 409);
+    else p.answers.push({ voter, lang, a });
+    await this.save("polls");
+    this.send(["host"], { type: "polls", polls: this.hostPolls() });
+    if (p.share) this.send(["listener"], { type: "tally", pid: p.id, tally: tally(p) });
+    return json({ ok: true });
+  }
+
+  /**
+   * The speaker closes a poll. Free answers get one call into every language they must be read in.
+   * It closes even if that call fails; closing again retries only what's still missing.
+   */
+  private async closePoll(pid: string): Promise<Response> {
+    const m = this.meta!;
+    const p = this.polls.find((x) => x.id === pid);
+    if (!p) return json({ error: "No such poll" }, 404);
+    p.open = false;
+    let failed: string | null = null;
+    if (p.kind === "free") {
+      const langs = answerLangs(p);
+      for (const x of p.answers) x.out = { ...x.out, ...(langs.includes(x.lang) ? { [x.lang]: String(x.a) } : {}) };
+      // ponytail: answers past the cap stay in their own words; batch in several calls if talks get that big.
+      const todo = p.answers.filter((x) => langs.some((l) => !x.out?.[l])).slice(0, answerCap(p));
+      const want = [...new Set(todo.flatMap((x) => langs.filter((l) => !x.out?.[l])))];
+      if (todo.length) {
+        const texts = todo.map((x) => String(x.a));
+        const r = await tf<{ out: Record<string, string[]> }>(this.env, "poll", MODELS.answer, pollAnswersPrompt(texts, want, p.share), {
+          pub: m.demo,
+          mock: () => ({ out: Object.fromEntries(want.map((l) => [l, texts])) }),
+        });
+        if (r.data === null) failed = r.fallback;
+        else
+          for (const l of want) {
+            const o = r.data.out?.[l];
+            if (!Array.isArray(o) || o.length !== texts.length) continue; // a language came back short: leave it missing, a second close retries
+            todo.forEach((x, i) => typeof o[i] === "string" && o[i].trim() && !x.out![l] && (x.out![l] = o[i].trim().slice(0, 300)));
+          }
+      }
+    }
+    await this.save("polls");
+    this.send(["listener"], { type: "pollclose", pid, poll: p.share ? pollView(p, true) : null });
+    this.send(["host"], { type: "polls", polls: this.hostPolls() });
+    return failed ? json({ error: "busy", fallback: failed }, 503) : json({ ok: true });
   }
 
   // Replay for the public demo talk: plays the fixture with real gaps while anyone is watching.
