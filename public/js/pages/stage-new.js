@@ -1,8 +1,9 @@
 import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me } from "/js/eco.js";
-import { openPdf, pdfPages, renderPage, saveDeck, uploadDeck } from "/js/slides.js";
+import { openPdf, pdfPages, pdfDeckRows, renderPage, saveDeck, uploadDeck } from "/js/slides.js";
+import { deckPreviewSetup } from "/js/deck-preview.js";
 
 const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
-const state = { langs: ["it", "es", "hi"], pages: [], bytes: null };
+const state = { langs: ["it", "es", "hi"], pages: [], deckPages: [], deckLang: "en", bytes: null, pdf: null };
 
 const title = h("input", { type: "text", placeholder: "One engine, two rooms", maxlength: 120, autocomplete: "off" });
 const speaker = h("input", { type: "text", placeholder: "Your name", maxlength: 80, autocomplete: "name" });
@@ -10,6 +11,7 @@ const notes = h("textarea", { placeholder: "Things you'll say that aren't on the
 const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
 const thumbs = h("div.thumbs");
 const deckInfo = h("p.small.muted");
+const deckPreview = h("div");
 const drop = h("div.drop", { role: "button", tabindex: 0 },
   icon("doc"), h("p", { style: { marginTop: "8px", fontWeight: 600, color: "var(--ink)" } }, "Drop your slides (PDF)"),
   h("p.small", {}, "Export from Keynote, PowerPoint or Google Slides. Eco keeps the PDF so the projector and any laptop you present from show your real slides."),
@@ -30,10 +32,14 @@ async function readPdf(f) {
   if (!/pdf$/i.test(f.type) && !/\.pdf$/i.test(f.name)) return toast("That isn't a PDF");
   deckInfo.textContent = "Reading slides…";
   thumbs.replaceChildren();
+  deckPreview.replaceChildren();
   try {
     state.bytes = new Uint8Array(await f.arrayBuffer());
     const pdf = await openPdf(state.bytes);
+    state.pdf = pdf;
     state.pages = await pdfPages(pdf);
+    state.deckPages = await pdfDeckRows(pdf);
+    state.deckLang = "en";
     const withText = state.pages.filter((p) => p.text).length;
     deckInfo.textContent = `${f.name} · ${pdf.numPages} slides · text found on ${withText}` + (withText < pdf.numPages / 2 ? ". Some slides are images; add what they say in Notes." : "");
     if (!title.value) title.value = state.pages[0]?.text.split("\n")[0].slice(0, 120) ?? "";
@@ -42,10 +48,18 @@ async function readPdf(f) {
       thumbs.append(slot);
       slot.append(await renderPage(pdf, n, 160));
     }
+    deckPreview.replaceChildren(deckPreviewSetup(thumbs, state.pdf, state.deckPages, {
+      getDeckLang: () => state.deckLang,
+      onLang: (l) => { state.deckLang = l; },
+      onChange: (pages) => { state.deckPages = pages; },
+    }));
   } catch (err) {
     console.error(err);
     state.bytes = null;
     state.pages = [];
+    state.deckPages = [];
+    state.pdf = null;
+    deckPreview.replaceChildren();
     deckInfo.textContent = "Couldn't read that PDF. Try exporting it again.";
   }
 }
@@ -91,7 +105,7 @@ const section = (head, sub, ...body) =>
 const create = h("button.btn.primary.big", { type: "submit" }, "Create the room", icon("right"));
 const form = h("form", {},
   section("Your talk", "Shown on every listener's phone.", h("label.field", {}, "Title", title), h("label.field", {}, "Speaker", speaker), link.el),
-  section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs),
+  section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs, deckPreview),
   section("Notes", "Optional. Also used to answer questions.", notes),
   section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
   section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices))),
@@ -106,9 +120,14 @@ form.onsubmit = async (e) => {
   try {
     const { id, hostKey } = await api("/api/rooms", {
       method: "POST",
-      body: { mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs, pages: state.pages, notes: notes.value, voice: state.voice },
+      body: {
+        mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs,
+        pages: state.pages, notes: notes.value, voice: state.voice,
+      },
     });
     if (state.bytes) {
+      create.firstChild.textContent = "Storing slide rows…";
+      await api(`/api/rooms/${id}/deckrows`, { method: "POST", key: hostKey, body: { deckLang: state.deckLang, pages: state.deckPages } });
       await saveDeck(id, state.bytes);
       create.firstChild.textContent = "Uploading slides…";
       if (!(await uploadDeck(id, state.bytes, hostKey))) toast("Slides didn't upload: this laptop will still show them", 4000);

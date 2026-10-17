@@ -1,6 +1,7 @@
 // The ONE Token Factory client (CONTRIBUTING.md, token rule 3). Mock unless ECO_LIVE=1 and a key is set.
 import type { Env } from "./env";
 import type { Kind, Denied } from "./budget";
+import { isTranslationKind } from "./limits";
 import { MODELS } from "./prompts";
 import type { TranslationTiming } from "./timing";
 
@@ -18,8 +19,10 @@ export type TfResult<T> =
 
 // Gemma vanished from Token Factory on 15 Oct. Text jobs try it first and fall back to DeepSeek when it's "not supported",
 // then skip it for 10 minutes. When AMD restores it, Eco is back on Gemma with no deploy.
+// Slide row translation tries Gemma → MiMo → DeepSeek so a slow or missing model still paints the listener's slide.
 // ponytail: per-isolate memory, so each Worker isolate pays one free 400 per 10 min; move it into Budget if that ever matters.
 export const TEXT_FALLBACK = "DeepSeek-V4-Flash";
+export const SLIDE_MODELS = [MODELS.answer, MODELS.audio, TEXT_FALLBACK] as const; // Gemma → MiMo → DeepSeek
 const GEMMA_RECHECK_MS = 10 * 60_000;
 // A live phrase gives Gemma GEMMA_LIVE_MS alone, then DeepSeek races it. If DeepSeek wins, Gemma is skipped for GEMMA_SLOW_MS.
 const GEMMA_LIVE_MS = 6_000;
@@ -51,6 +54,12 @@ async function hedged(post: Post, limit: number): Promise<{ res: Response; model
 }
 
 export const isLive =(env: Env) => env.ECO_LIVE === "1" && !!env.RADEON_API_KEY;
+
+/** Next model in the slide chain, or null when every option has been tried. */
+export function nextSlideModel(current: string): string | null {
+  const i = (SLIDE_MODELS as readonly string[]).indexOf(current);
+  return i >= 0 && i < SLIDE_MODELS.length - 1 ? SLIDE_MODELS[i + 1]! : null;
+}
 
 /** Parses model output that should be JSON, tolerating ```json fences. */
 export function parseJson<T>(content: string): T {
@@ -97,10 +106,11 @@ export async function tf<T>(
   opts: { pub: boolean; mock: () => T; timing?: TranslationTiming },
 ): Promise<TfResult<T>> {
   if (!isLive(env)) return { data: opts.mock(), live: false, ms: 0 };
-  if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = TEXT_FALLBACK;
+  // Gemma missing from the catalog: other jobs jump to DeepSeek; slide jobs start at MiMo so DeepSeek stays last.
+  if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = kind === "slide" ? MODELS.audio : TEXT_FALLBACK;
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
-  const translation = kind === "utterance" || kind === "turn";
+  const translation = isTranslationKind(kind);
   const admissionAt = Date.now();
   const gate = await budget.acquire(kind, opts.pub, translation ? 1500 : 0);
   if (opts.timing) opts.timing.budgetMs = Date.now() - admissionAt;
@@ -118,6 +128,7 @@ export async function tf<T>(
       const measured = { model, status: 0, ms: 0 };
       opts.timing?.attempts.push(measured);
       let retryMs = 0;
+      let stop = false;
       try {
         const post = (m: string, signal: AbortSignal) =>
           fetch(`${BASE}/chat/completions`, {
@@ -131,7 +142,8 @@ export async function tf<T>(
             }),
             signal,
           });
-        const limit = kind === "extract" ? 60_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000; // a 4-language summary writes ~1,000 tokens
+        // a 4-language summary writes ~1,000 tokens; a slide is translated a slide ahead, so it can take longer than live speech
+        const limit = kind === "extract" ? 60_000 : kind === "slide" ? 45_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000;
         let res: Response;
         if (translation && model === MODELS.answer) ({ res, model } = await hedged(post, limit));
         else res = await post(model, AbortSignal.timeout(limit));
@@ -155,6 +167,7 @@ export async function tf<T>(
           content = typeof value === "string" ? value : "";
           finishReason = j.choices[0]?.finish_reason;
           usage = j.usage ?? usage;
+          stop = true;
         } else {
           // Gateway errors are {"error":{...}}, platform errors {"detail":{"error":{...}}}. Never includes the key.
           const body = await res.text().catch(() => "");
@@ -167,20 +180,36 @@ export async function tf<T>(
           // Gemma off the catalog: same request on the fallback, no retry. This 400 never reaches finish(), so it can't trip the stop.
           if (status === 400 && model === MODELS.answer && /not supported/i.test(msg)) {
             gemmaMissingUntil = Date.now() + GEMMA_RECHECK_MS;
-            model = TEXT_FALLBACK;
+            model = kind === "slide" ? MODELS.audio : TEXT_FALLBACK;
             why = "";
             continue;
           }
+          const next = kind === "slide" ? nextSlideModel(model) : null;
+          if (next) {
+            model = next;
+            why = "";
+            status = 0;
+            continue;
+          }
+          stop = true;
         }
-        break;
+      } catch (e) {
+        status = status || 599; // timeout or network
+        why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
+        const next = kind === "slide" ? nextSlideModel(model) : null;
+        if (next) {
+          model = next;
+          why = "";
+          status = 0;
+          continue;
+        }
+        stop = true;
       } finally {
         // Provider round trip and body decoding; excludes explicit retry sleeps.
         measured.ms = Date.now() - attemptAt - retryMs;
       }
+      if (stop) break;
     }
-  } catch (e) {
-    status = status || 599; // timeout or network
-    why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
   } finally {
     const accountingAt = Date.now();
     await budget.finish({

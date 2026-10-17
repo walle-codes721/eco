@@ -6,6 +6,7 @@ import { t } from "/js/i18n.js";
 import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
+import { paintSlideRows, showDesignedPage, slideViewToggleVisible } from "/js/slide-repaint.js";
 
 const id = roomId();
 let meta;
@@ -58,18 +59,29 @@ const pollBox = h("section.lst-panel.lst-polls", { hidden: true },
   h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, pollHead, h("span.spacer"), newQBtn),
   h("div.poll-carousel", {}, pollPrev, pollSlot, pollNext), pollDots);
 // The deck: the live slide by default; listeners can page back, never ahead of the speaker.
-const slideHead = h("h2", { style: { fontSize: "20px" } });
 const slideFrame = h("div.slide-frame");
-const slideLabel = h("span.small.muted.mono");
+const slideLabel = h("span.slide-count");
 const slidePrev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous slide", onclick: () => goSlide(view - 1) }, icon("prev"));
 const slideNext = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(view + 1) }, icon("next"));
 const currentBtn = h("button.btn.sm", { type: "button", hidden: true, onclick: () => goSlide(Infinity) });
+let viewDesigned = !!store(`eco:slideDesigned:${id}`);
+const slideViewBtn = h("button.btn.sm", {
+  type: "button",
+  hidden: true,
+  onclick: () => {
+    viewDesigned = !viewDesigned;
+    store(`eco:slideDesigned:${id}`, viewDesigned);
+    syncSlideViewBtn();
+    drawSlide();
+  },
+});
 // Expand: the slide at ~80% of the screen over the dimmed page; Esc or a tap outside closes it.
-const zoomBtn = h("button.btn.icon-btn", { type: "button", onclick: () => zoom(true) }, icon("expand"));
+const zoomBtn = h("button.btn.icon-btn.zoom-btn", { type: "button", onclick: () => zoom(true) }, icon("expand"));
+// No heading: the controls float over the slide, like the presenter's.
 const slideBox = h("section.lst-panel.lst-slides", { hidden: true }, h("div.divider"),
-  h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, slideHead, h("span.spacer"), currentBtn, zoomBtn),
-  slideFrame,
-  h("div.row", { style: { justifyContent: "center", gap: "12px", marginTop: "10px" } }, slidePrev, slideLabel, slideNext),
+  h("div.lst-slide", {}, slideFrame,
+    h("div.slide-tools", {}, slideViewBtn, currentBtn, zoomBtn),
+    h("div.slide-nav", {}, slidePrev, slideLabel, slideNext)),
   h("div.zoom-back", { onclick: () => zoom(false) }));
 const askSub = h("p.small.muted");
 const askBox = h("section.lst-panel.lst-ask", {},
@@ -94,7 +106,7 @@ function labels() {
   qInput.placeholder = T("askPh");
   askHead.textContent = T("ask");
   pollHead.textContent = T("poll");
-  slideHead.textContent = T("slides");
+  syncSlideViewBtn();
   currentBtn.textContent = T("current");
   newQBtn.textContent = T("newQuestion");
   askSub.textContent = T("fromTalk");
@@ -248,6 +260,7 @@ pollSlot.addEventListener("touchend", (e) => {
 // ---------- slides ----------
 let deck = null, view = 1, following = true;
 let drawn = 0; // newest render wins when taps outrun pdf.js
+const slideTr = new Map(); // slide n -> { rows, paints, deckLang }
 
 function goSlide(n) {
   const top = Math.min(meta.slide, deck?.count ?? 1);
@@ -267,7 +280,20 @@ async function drawSlide() {
   currentBtn.hidden = view === top;
   const n = ++drawn;
   const el = await deck.render(view, slideFrame.clientWidth || 360);
-  if (n === drawn) slideFrame.replaceChildren(el);
+  if (n !== drawn) return;
+  if (meta.deck && deck.pdf) {
+    let tr = slideTr.get(view);
+    if (!tr || tr.lang !== lang) {
+      tr = await api(`/api/rooms/${id}/slidetr?n=${view}&lang=${encodeURIComponent(lang)}`).catch(() => null);
+      if (tr) slideTr.set(view, { ...tr, lang });
+    }
+    const deckL = tr?.deckLang ?? meta.deckLang ?? "en";
+    syncSlideViewBtn(deckL);
+    if (!showDesignedPage(lang, deckL, viewDesigned) && tr?.rows?.length && tr.paints?.some((p) => p.paint)) {
+      paintSlideRows(el, tr.rows, tr.paints);
+    }
+  }
+  slideFrame.replaceChildren(el);
 }
 
 function zoom(on) {
@@ -282,6 +308,12 @@ addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft") goSlide(view - 1);
   if (e.key === "ArrowRight") goSlide(view + 1);
 });
+
+function syncSlideViewBtn(deckLang = meta.deckLang ?? "en") {
+  slideViewBtn.hidden = !meta.deck || !slideViewToggleVisible(lang, deckLang);
+  slideViewBtn.textContent = viewDesigned ? T("slideShowTranslated") : T("slideShowDesigned");
+  slideViewBtn.setAttribute("aria-pressed", String(viewDesigned));
+}
 
 /** Never blocks the captions: the section appears once the deck is ready. `fresh` skips the cached copy after a new upload. */
 async function loadSlides(fresh = false) {
@@ -368,6 +400,7 @@ langSel.onchange = () => {
   drawJump();
   drawStatus();
   drawPolls();
+  drawSlide(); // repaint from stored paints; do not wait for the next slide or slidetr
 };
 soundBtn.onclick = () => {
   playback.clear();
@@ -490,7 +523,8 @@ if (meta.status === "ended") {
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") (meta.slide = m.n), drawSlide();
     if (m.type === "slides") (meta.slides = m.slides), loadSlides();
-    if (m.type === "deck") (meta.deck = true), loadSlides(true);
+    if (m.type === "deck") (meta.deck = true), (slideTr.clear(), loadSlides(true));
+    if (m.type === "slidetr") (slideTr.delete(m.n), drawSlide());
     if (m.type === "reset") { playback.clear(0); Object.assign(meta, m.meta); lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); drawSlide(); }
     if (m.type === "summary") (summary = m.summary), drawSummary();
     if (m.type === "status") {

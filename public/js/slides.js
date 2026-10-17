@@ -1,6 +1,7 @@
 // Slides: the speaker's PDF, uploaded to Eco (R2) and cached in IndexedDB, rendered with pdf.js.
 // Rooms without an uploaded PDF fall back to text slides built from the room's page text.
 import { h } from "/js/eco.js";
+import { groupRows } from "/js/slide-rows.js";
 
 let pdfjs;
 async function lib() {
@@ -48,6 +49,27 @@ export async function openPdf(bytes) {
   return getDocument({ data: bytes.slice(0) }).promise;
 }
 
+/** Glyphs and grouped rows per page for the upload preview (no translation call). */
+export async function pdfDeckRows(pdf) {
+  const pages = [];
+  for (let n = 1; n <= pdf.numPages; n++) {
+    const page = await pdf.getPage(n);
+    const tc = await page.getTextContent();
+    const glyphs = [];
+    for (const it of tc.items) {
+      const text = it.str ?? "";
+      if (!text.trim()) continue;
+      const x = it.transform?.[4] ?? 0;
+      const y = it.transform?.[5] ?? 0;
+      const w = it.width ?? Math.abs(it.transform?.[0] ?? 0) * Math.max(1, text.length);
+      const h = it.height ?? Math.abs(it.transform?.[3] ?? 12);
+      glyphs.push({ text, x, y, w, h });
+    }
+    pages.push({ n, rows: groupRows(glyphs) });
+  }
+  return pages;
+}
+
 /** [{tag: "slide N", text}] from every page. */
 export async function pdfPages(pdf) {
   const out = [];
@@ -73,9 +95,13 @@ export async function renderPage(pdf, n, width) {
   const scale = (width / base.width) * Math.min(2, devicePixelRatio || 1);
   const vp = page.getViewport({ scale });
   const canvas = h("canvas", { width: Math.floor(vp.width), height: Math.floor(vp.height) });
-  canvas.style.width = "100%";
+  // Match CSS size to the pixels we rendered so a wide parent does not upscale a small bitmap.
+  canvas.style.width = `${width}px`;
+  canvas.style.maxWidth = "100%";
   canvas.style.height = "auto";
   await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+  canvas._pdfBaseH = base.height;
+  canvas._pdfBaseW = base.width;
   return canvas;
 }
 

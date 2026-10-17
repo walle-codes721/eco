@@ -89,6 +89,19 @@ describe("translation timing (all transport mocked)", () => {
 });
 
 
+it("gives a slide translation a prefetch-sized timeout, not the 15 seconds of live speech", async () => {
+  const { tf } = await import("../src/tf");
+  const { slideRowsPrompt } = await import("../src/prompts");
+  const { env, budget } = environment();
+  const timeout = vi.spyOn(AbortSignal, "timeout");
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ choices: [{ message: { content: '{"out":{"it":["Ciao"]}}' } }] })));
+  const pending = tf(env, "slide", MODELS.answer, slideRowsPrompt("en", ["it"], ["Hello"]), { pub: false, mock: () => ({}) });
+  await vi.runAllTimersAsync();
+  expect(await pending).toMatchObject({ live: true });
+  expect(timeout).toHaveBeenCalledExactlyOnceWith(45_000);
+  expect(budget.acquire).toHaveBeenCalledExactlyOnceWith("slide", false, 1500); // still admitted as translation
+});
+
 it.each([false, true])("preserves upstream poll timeout and budget with diagnostics enabled=%s", async (enabled) => {
   const { tf } = await import("../src/tf");
   const { pollPrompt } = await import("../src/prompts");

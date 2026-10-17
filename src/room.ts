@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, LANG_NAMES, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt } from "./prompts";
+import { MODELS, LANG_NAMES, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
 import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
@@ -12,6 +12,8 @@ import { phraseEvidence } from "./utterance";
 import { customerTurn, ownerTurn, type CustomerTurn } from "./counter-turn";
 import { translationTiming, timingHeader } from "./timing";
 import { DEMO_SLIDES, DEMO_TALK, DEMO_SHOP, DEMO_CONVOS, DEMO_PHARMACY, DEMO_PHARMACY_CONVOS, DEMO_SPEAKERS } from "./fixtures/demo";
+import { deckLang, rowsForTranslation, sanitizeDeckPages, type DeckPageRows, DEFAULT_DECK_LANG } from "./slide-rows";
+import { parseSlideTranslation, rowTranslationTexts, slideTargetLangs, slidesToTranslate } from "./slide-repaint";
 
 type Status = "lobby" | "live" | "ended";
 
@@ -33,6 +35,7 @@ export interface Meta {
   ownerLang: string; // counter
   emergency?: string; // counter, pharmacy/clinic/hospital: the local emergency number shown to customers
   deck?: boolean; // stage: the speaker's PDF is in R2, so every screen can show it
+  deckLang?: string; // stage: language of the deck's written words (default English)
   speakers?: Speaker[]; // stage: s0 is the host; co-speakers join from their own device
   joinKey?: string; // stage: in the host's "add a speaker" QR
   voiceMode?: VoiceMode; // stage: missing on older rooms = "sample"
@@ -71,6 +74,9 @@ export class Room extends DurableObject<Env> {
   peak = 0;
   summary: Summary | null = null;
   polls: Poll[] = [];
+  deckPages: DeckPageRows[] = [];
+  slideTranslations: Record<number, Record<string, string[]>> = {};
+  private slideTransPending = new Set<number>();
   private summarizing = false;
   private visitors = new Map<string, number>();
   private mockI = 0;
@@ -82,7 +88,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -93,10 +99,12 @@ export class Room extends DurableObject<Env> {
       this.peak = (s.get("peak") as number) ?? 0;
       this.summary = (s.get("summary") as Summary) ?? null;
       this.polls = (s.get("polls") as Poll[]) ?? [];
+      this.deckPages = (s.get("deckPages") as DeckPageRows[]) ?? [];
+      this.slideTranslations = (s.get("slideTranslations") as typeof this.slideTranslations) ?? {};
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -179,6 +187,7 @@ export class Room extends DurableObject<Env> {
       live: isLive(this.env),
       slides: m.mode === "stage" ? slidePages(this.pages) : [],
       deck: !!m.deck,
+      deckLang: m.deckLang ?? DEFAULT_DECK_LANG,
       speakers: (m.speakers ?? []).map(({ id, name, voice }) => ({ id, name, voice })),
       voice: m.voiceMode !== "phone" && canClone(this.env),
       voiceMode: m.voiceMode ?? "sample",
@@ -279,6 +288,16 @@ export class Room extends DurableObject<Env> {
       }
       case "GET convos":
         return isHost || m.demo ? json({ convos: this.convos }) : json({ error: "Not allowed" }, 403);
+      case "GET slidetr": {
+        // Listeners read this: a slide's stored rows and, for their language, the words to paint. No call is made here.
+        if (m.mode !== "stage" || !m.deck) return json({ error: "Not here" }, 404);
+        const n = Math.floor(Number(url.searchParams.get("n")));
+        const asked = url.searchParams.get("lang") ?? "";
+        const lang = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(asked) ? asked : "en";
+        const deckL = m.deckLang ?? DEFAULT_DECK_LANG;
+        const rows = n >= 1 && n <= 200 ? this.deckRowsForSlide(n) : [];
+        return json({ deckLang: deckL, rows, paints: rowTranslationTexts(rows, this.slideTranslations[n], lang, deckL) });
+      }
     }
     if (!isHost) return json({ error: "Not allowed" }, 403);
     if (`${req.method} ${action}` === "PUT deck") {
@@ -289,15 +308,28 @@ export class Room extends DurableObject<Env> {
       m.deck = true;
       await this.save("meta");
       this.send(["listener", "screen", "host"], { type: "deck" });
+      if (m.status !== "ended") this.ctx.waitUntil(this.ensureSlideTranslations(m.slide)); // the first slides are ready before listeners look
       return json({ ok: true });
     }
     if (`${req.method} ${action}` === "GET sources") return json({ pages: this.pages });
+    if (`${req.method} ${action}` === "GET deckrows") return json({ deckLang: m.deckLang ?? DEFAULT_DECK_LANG, pages: this.deckPages });
+    if (`${req.method} ${action}` === "POST deckrows") {
+      if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
+      const body: any = await req.json().catch(() => ({}));
+      m.deckLang = deckLang(body.deckLang);
+      this.deckPages = sanitizeDeckPages(body.pages);
+      this.slideTranslations = {};
+      await this.save("meta", "deckPages", "slideTranslations");
+      if (m.status !== "ended") this.ctx.waitUntil(this.ensureSlideTranslations(m.slide)); // a new or swapped deck, in the lobby or mid-talk
+      return json({ ok: true, pages: this.deckPages.length });
+    }
     const body: any = await req.json().catch(() => ({}));
     switch (`${req.method} ${action}`) {
       case "POST slide": {
         m.slide = Math.max(1, Math.min(Number(body.n) || 1, Math.max(1, slidePages(this.pages).length)));
         await this.save("meta");
         this.send(["listener", "screen", "host"], { type: "slide", n: m.slide });
+        this.ctx.waitUntil(this.ensureSlideTranslations(m.slide));
         return json({ slide: m.slide });
       }
       case "POST status":
@@ -357,6 +389,8 @@ export class Room extends DurableObject<Env> {
     // The talk is over: write the summary now, in the background, so listeners find it on their recap without anyone asking.
     // A second End with nothing new said is a cache hit (no call), and a failure just leaves the speaker's button.
     if (status === "ended" && m.mode === "stage") this.ctx.waitUntil(this.summarize(true, "").catch(() => {}));
+    // The speaker has reached the current slide: translate it and the next (already stored slides make no call).
+    if (status === "live" && m.mode === "stage") this.ctx.waitUntil(this.ensureSlideTranslations(m.slide));
     return { status };
   }
 
@@ -448,6 +482,49 @@ export class Room extends DurableObject<Env> {
   }
 
   // ---------- Stage ----------
+
+  private deckPageCount() {
+    return Math.max(this.deckPages.reduce((m, p) => Math.max(m, p.n), 0), slidePages(this.pages).length, 1);
+  }
+
+  private deckRowsForSlide(n: number) {
+    const page = this.deckPages.find((p) => p.n === n);
+    return page && !page.skip ? page.rows : []; // a skipped slide has nothing to translate or paint
+  }
+
+  private async ensureSlideTranslations(currentSlide: number) {
+    const m = this.meta!;
+    if (m.mode !== "stage" || !m.deck || !this.deckPages.length) return;
+    const stored = new Set(Object.keys(this.slideTranslations).map(Number));
+    const due = slidesToTranslate(currentSlide, this.deckPageCount(), stored, (n) => rowsForTranslation(this.deckRowsForSlide(n)).length);
+    for (const n of due) await this.translateSlide(n);
+  }
+
+  private async translateSlide(n: number) {
+    const m = this.meta!;
+    if (this.slideTransPending.has(n) || this.slideTranslations[n]) return;
+    const rows = this.deckRowsForSlide(n);
+    const phrases = rowsForTranslation(rows);
+    if (!phrases.length) return;
+    const langs = slideTargetLangs(m.langs, m.deckLang ?? DEFAULT_DECK_LANG); // includes English
+    if (!langs.length) return;
+    if (!isLive(this.env)) return; // mock: original words, no API call
+    this.slideTransPending.add(n);
+    try {
+      const r = await tf(this.env, "slide", MODELS.answer, slideRowsPrompt(m.deckLang ?? DEFAULT_DECK_LANG, langs, phrases), {
+        pub: m.demo,
+        mock: () => ({ out: {} }), // not reached: mock rooms return above and keep the original words
+      });
+      if (r.data === null) return;
+      const parsed = parseSlideTranslation(r.data, langs, phrases.length);
+      if (!parsed) return;
+      this.slideTranslations[n] = parsed;
+      await this.save("slideTranslations");
+      this.send(["listener"], { type: "slidetr", n });
+    } finally {
+      this.slideTransPending.delete(n);
+    }
+  }
 
   private async utterance(req: Request, tryVoice: boolean, speaker: string): Promise<Response> {
     const receivedAt = Date.now();

@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { chunkPages, selectContext, bm25, normalize, bestSentence, slidePages, teach, tokensOf, TAUGHT_TAG } from "../src/retrieve";
-import { admit, countsTowardStop, probeDue, PROBE_MS } from "../src/limits";
+import { admit, countsTowardStop, isTranslationKind, probeDue, PROBE_MS } from "../src/limits";
 import { parseJson } from "../src/tf";
-import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations } from "../src/prompts";
+import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, slideRowsPrompt } from "../src/prompts";
 import { DEMO_SLIDES, DEMO_SHOP } from "../src/fixtures/demo";
 // @ts-expect-error plain browser module, tested in Node
 import { Cutter, encodeWav, resample } from "../public/js/vad.js";
@@ -73,6 +73,29 @@ describe("budget admission", () => {
     expect(admit({ ...base, today: 50 }, "summary", false)).toBe("ceiling");
     expect(admit({ ...base, tripped: true }, "summary", false)).toBe("tripped");
     expect(admit({ ...base, inflight: 3 }, "summary", false)).toBe("busy");
+  });
+  it("treats a slide translation as translation: it gets the reserved last slots, and obeys every other limit", () => {
+    expect(admit({ ...base, window: 10 }, "slide", false)).toBeNull();
+    expect(admit({ ...base, window: 12 }, "slide", false)).toBe("rpm");
+    expect(admit({ ...base, today: 50 }, "slide", false)).toBe("ceiling");
+    expect(admit({ ...base, tripped: true }, "slide", false)).toBe("tripped");
+    expect(admit({ ...base, inflight: 3 }, "slide", false)).toBe("busy");
+    expect(isTranslationKind("slide")).toBe(true);
+    expect(isTranslationKind("ask")).toBe(false);
+  });
+});
+
+describe("slide rows prompt", () => {
+  it("asks for one string per row in every target language, in one call, with a bounded output", () => {
+    const p = slideRowsPrompt("en", ["it", "hi"], ["Hello", "World"]);
+    const system = String((p.messages[0] as { content: string }).content);
+    expect(system).toContain("exactly 2 rows");
+    expect(system).toContain("Italian");
+    expect(system).toContain("Hindi");
+    expect(system).toContain('"it": string[]');
+    expect(String((p.messages[1] as { content: string }).content)).toBe("1. Hello\n2. World");
+    expect(p.response_format).toEqual({ type: "json_object" });
+    expect(p.max_tokens).toBeLessThanOrEqual(1200);
   });
 });
 
@@ -394,9 +417,62 @@ describe("new-lines pill counter", () => {
 });
 
 import { vi } from "vitest";
-import { tf, TEXT_FALLBACK } from "../src/tf";
+import { tf, TEXT_FALLBACK, nextSlideModel, SLIDE_MODELS } from "../src/tf";
 
 describe("Gemma fallback (fetch mocked, no real calls)", () => {
+  it("walks the slide chain Gemma → MiMo → DeepSeek", () => {
+    expect(SLIDE_MODELS).toEqual([MODELS.answer, MODELS.audio, TEXT_FALLBACK]);
+    expect(nextSlideModel(MODELS.answer)).toBe(MODELS.audio);
+    expect(nextSlideModel(MODELS.audio)).toBe(TEXT_FALLBACK);
+    expect(nextSlideModel(TEXT_FALLBACK)).toBeNull();
+  });
+
+  it("retries a slide translation on MiMo when Gemma times out", async () => {
+    const finished: { model: string; status: number }[] = [];
+    const env = {
+      ECO_LIVE: "1",
+      RADEON_API_KEY: "test",
+      BUDGET: { idFromName: () => "g", get: () => ({ acquire: async () => ({ ok: true }), finish: async (r: { model: string; status: number }) => void finished.push(r) }) },
+    } as never;
+    const sent: string[] = [];
+    const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"out":{"it":["Ciao"]}}' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }));
+    vi.stubGlobal("fetch", async (_u: string, init: { body: string }) => {
+      const model = JSON.parse(init.body).model;
+      sent.push(model);
+      if (model === MODELS.answer) throw new DOMException("The operation timed out.", "TimeoutError");
+      return ok();
+    });
+    const req = slideRowsPrompt("en", ["it"], ["Hello"]);
+    const r = await tf(env, "slide", MODELS.answer, req, { pub: false, mock: () => ({ out: {} }) });
+    expect(r.data).toEqual({ out: { it: ["Ciao"] } });
+    expect(sent).toEqual([MODELS.answer, MODELS.audio]);
+    expect(finished).toEqual([expect.objectContaining({ model: MODELS.audio, status: 200 })]);
+    vi.unstubAllGlobals();
+  });
+
+  it("falls through to DeepSeek when Gemma and MiMo both fail a slide translation", async () => {
+    const finished: { model: string; status: number }[] = [];
+    const env = {
+      ECO_LIVE: "1",
+      RADEON_API_KEY: "test",
+      BUDGET: { idFromName: () => "g", get: () => ({ acquire: async () => ({ ok: true }), finish: async (r: { model: string; status: number }) => void finished.push(r) }) },
+    } as never;
+    const sent: string[] = [];
+    const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"out":{"it":["Ciao"]}}' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }));
+    vi.stubGlobal("fetch", async (_u: string, init: { body: string }) => {
+      const model = JSON.parse(init.body).model;
+      sent.push(model);
+      if (model === TEXT_FALLBACK) return ok();
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    });
+    const req = slideRowsPrompt("en", ["it"], ["Hello"]);
+    const r = await tf(env, "slide", MODELS.answer, req, { pub: false, mock: () => ({ out: {} }) });
+    expect(r.data).toEqual({ out: { it: ["Ciao"] } });
+    expect(sent).toEqual([MODELS.answer, MODELS.audio, TEXT_FALLBACK]);
+    expect(finished).toEqual([expect.objectContaining({ model: TEXT_FALLBACK, status: 200 })]);
+    vi.unstubAllGlobals();
+  });
+
   it("answers on DeepSeek when Gemma is 'not supported', without counting a failure, then skips Gemma", async () => {
     const finished: { model: string; status: number }[] = [];
     const env = {
