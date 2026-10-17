@@ -24,16 +24,19 @@ export function micErrorMessage(error) {
 /** fetch headers + body for a phrase: recognised text, or a WAV blob. */
 export const phraseInit = (p) => (typeof p === "string" ? [{ "content-type": "application/json" }, JSON.stringify({ text: p })] : [{ "content-type": "audio/wav" }, p]);
 
-function sr(lang) {
+function sr(lang, interim = false) {
   const r = new SR();
   r.lang = BCP47[lang] ?? lang;
   r.continuous = true;
-  r.interimResults = false;
+  r.interimResults = interim;
   return r;
 }
 
-function srPhrases({ onPhrase, onLevel, maxTotalMs, lang, onError }) {
-  const r = sr(lang);
+/** `onHeard(text, run)`: everything this recognition run has heard so far, interim words included, on every result.
+ *  `run` goes up each time recognition restarts after silence, and the text starts again from empty. */
+function srPhrases({ onPhrase, onHeard, onLevel, maxTotalMs, lang, onError }) {
+  const r = sr(lang, !!onHeard);
+  let run = 0;
   let stopped = false;
   let started = false;
   let timer;
@@ -46,25 +49,27 @@ function srPhrases({ onPhrase, onLevel, maxTotalMs, lang, onError }) {
   };
   r.onspeechstart = () => onLevel(1);
   r.onresult = (e) => {
-    for (let i = e.resultIndex; i < e.results.length; i++) {
+    if (onHeard) onHeard(Array.from(e.results, (x) => x[0].transcript).join(" "), run);
+    for (let i = e.resultIndex; onPhrase && i < e.results.length; i++) {
       const t = e.results[i].isFinal && e.results[i][0].transcript.trim();
       if (t) onPhrase(t, performance.now());
     }
-    onLevel(0);
+    if (!onHeard) onLevel(0); // with interim results the level comes from speech start/end instead
   };
+  if (onHeard) r.onspeechend = () => onLevel(0);
   return new Promise((ok, fail) => {
     const failed = (error) => {
       if (stopped) return;
       stopped = true;
       clearTimeout(timer);
       // Detach before aborting: abort can itself emit error/end events.
-      r.onstart = r.onend = r.onerror = r.onresult = r.onspeechstart = null;
+      r.onstart = r.onend = r.onerror = r.onresult = r.onspeechstart = r.onspeechend = null;
       try { r.abort ? r.abort() : r.stop(); } catch {}
       onLevel(0);
       if (!started) fail(error);
       else onError(error);
     };
-    const start = () => { try { r.start(); } catch (error) { failed(error); } };
+    const start = () => { try { run++; r.start(); } catch (error) { failed(error); } };
     r.onend = () => {
       if (stopped) return;
       if (!started) failed(Object.assign(new Error("Recognition ended before starting"), { code: "aborted" }));
@@ -112,8 +117,8 @@ async function open(onFrame) {
 }
 
 /** Stage: listens until stopped, calls onPhrase(textOrWav, cutAt) at each pause. */
-export async function phraseMic({ onPhrase, onLevel = () => {}, onError = () => {}, maxTotalMs = Infinity, lang = navigator.language }) {
-  if (SR) return srPhrases({ onPhrase, onLevel, onError, maxTotalMs, lang });
+export async function phraseMic({ onPhrase, onHeard, onLevel = () => {}, onError = () => {}, maxTotalMs = Infinity, lang = navigator.language }) {
+  if (SR) return srPhrases({ onPhrase, onHeard, onLevel, onError, maxTotalMs, lang });
   const cut = new Cutter();
   const started = performance.now();
   let stop;

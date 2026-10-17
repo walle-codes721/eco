@@ -59,6 +59,7 @@ function lineAudioUrl(l) {
   return key ? l.audio?.[key] : null;
 }
 function waitForClip(l) {
+  if (l.cue) return false; // HACKATHON: a script line arrives with every clip prep made; none for this voice means the phone speaks now
   if (voiceChoice === "phone" || !meta.voice) return false;
   if (voiceChoice === "speaker") {
     const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
@@ -301,6 +302,7 @@ function addLine(l) {
     audioKey: audioKeyForChoice(),
     wait: waitForClip(l),
     enabled: voice.on,
+    cue: !!l.cue,
   });
 }
 function onAudio(m) {

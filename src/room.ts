@@ -1,8 +1,8 @@
 // One Durable Object per room: state, WebSocket fan-out, and every call the room makes.
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
-import { tf, isLive } from "./tf";
-import { MODELS, LANG_NAMES, cleanTalkContext, type TalkContext, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt } from "./prompts";
+import { tf, isLive, type SpeechStatus } from "./tf";
+import { MODELS, LANG_NAMES, cleanTalkContext, type TalkContext, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt, scriptPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { lineKey, validReaction, tallyReactions, topLines, type LineReactions } from "./reaction";
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
@@ -11,9 +11,9 @@ import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLin
 import {
   voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, type VoiceMode, type VoiceSampleMime,
 } from "./voice";
-import { PRESET_VOICES, presetAudioKey, publicPresets } from "./preset-voice";
+import { PRESET_VOICES, presetAudioKey, publicPresets, type PresetVoice } from "./preset-voice";
 import { cloneDemand, parseListenerVoice, type ListenerVoice } from "./voice-choice";
-import { VOICE_CLIPS_IN_FLIGHT } from "./limits";
+import { VOICE_CLIPS_IN_FLIGHT, PREP_IN_FLIGHT } from "./limits";
 import { phraseEvidence } from "./utterance";
 import { customerTurn, ownerTurn, type CustomerTurn } from "./counter-turn";
 import { translationTiming, timingHeader } from "./timing";
@@ -50,7 +50,7 @@ export interface Meta extends TalkContext {
 }
 /** One device = one speaker. `key` authorises that device; `voice` = a consented sample is stored. */
 export interface Speaker { id: string; name: string; key: string; voice: boolean }
-export interface Line { speaker?: string; seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string> }
+export interface Line { speaker?: string; seq: number; t: number; at: number; slide: number; src: string; out: Record<string, string>; flags: string[]; ms: number; live: boolean; audio?: Record<string, string>; cue?: boolean /* HACKATHON mode: a script line played from prep, no call made */ }
 export interface Question { id: string; t: number; at: number; slide: number; lang: string; text: string; q_en: string; covered: boolean; answer: string; cite: string; answeredAt: number | null; taught?: string /* the speaker's typed answer (Teach Eco) */; taughtOut?: Record<string, string> /* that answer in each language of the room, once translated */ }
 export interface Turn { id: string; t: number; side: "customer" | "owner" | "eco"; lang: string; src: string; out: string; cite?: string; live: boolean; taught?: boolean /* owner turn already added to the list (Teach Eco) */; allergy?: boolean /* customer turn that asked about allergies, ingredients or diet */; health?: "emergency" | "advice" /* pharmacy, clinic or hospital: the customer asked for urgent help or for medical advice */ }
 export interface Convo { id: string; lang: string; started: number; open: boolean; turns: Turn[] }
@@ -74,6 +74,16 @@ const uid = () => crypto.randomUUID().slice(0, 8);
 /** Raw teleprompter script, parsed on the speaker's laptop. Arrays are the first version's stored phrases. */
 const cleanScript = (v: unknown): string => (Array.isArray(v) ? v.join("\n") : String(v ?? "")).slice(0, 50_000).trim();
 
+/** HACKATHON mode. A script line is known by a short hash of its text, so editing the script only redoes the lines that changed. */
+const lineHash = async (text: string) =>
+  [...new Uint8Array(await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
+const cleanLine = (t: unknown) => oneLine(t, 300);
+/** R2 key (under {room}/audio/) of one prepared clip; null voice = the speaker's own clone.
+ *  ponytail: not keyed by the sample, so re-recording your voice after prep keeps the old clips; add the sample's etag if that matters. */
+const clipKey = (h: string, lang: string, voice: PresetVoice | null) => `p-${h}-${lang}${voice ? `-${voice.id}` : ""}`;
+const PREP_BATCH = 15; // script lines per translation call
+const PREP_TRIES = 3; // real failures before a clip is left to the phone voice
+
 export class Room extends DurableObject<Env> {
   meta: Meta | null = null;
   pages: { tag: string; text: string }[] = [];
@@ -89,6 +99,12 @@ export class Room extends DurableObject<Env> {
   deckPages: DeckPageRows[] = [];
   /** Teleprompter script text. Host only: never in publicMeta, pages or chunks. */
   script = "";
+  /** HACKATHON mode: the script lines sent by the speaker's laptop and what prep has made for them, saved as each piece lands. */
+  prepLines: { h: string; text: string }[] = [];
+  prepTr: Record<string, Record<string, string>> = {};
+  prepClips: Record<string, 1> = {};
+  private prepFails: Record<string, number> = {};
+  private prepTrFails = 0;
   slideTranslations: Record<number, Record<string, string[]>> = {};
   private slideTransPending = new Set<number>();
   private summarizing = false;
@@ -103,7 +119,7 @@ export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
-      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions"]);
+      const s = await ctx.storage.get(["meta", "pages", "chunks", "lines", "questions", "convos", "cache", "peak", "summary", "polls", "deckPages", "slideTranslations", "script", "reactions", "prepLines", "prepTr", "prepClips"]);
       this.meta = (s.get("meta") as Meta) ?? null;
       this.pages = (s.get("pages") as typeof this.pages) ?? [];
       this.chunks = (s.get("chunks") as Chunk[]) ?? [];
@@ -118,10 +134,13 @@ export class Room extends DurableObject<Env> {
       this.slideTranslations = (s.get("slideTranslations") as typeof this.slideTranslations) ?? {};
       this.script = cleanScript(s.get("script"));
       this.reactions = (s.get("reactions") as typeof this.reactions) ?? {};
+      this.prepLines = (s.get("prepLines") as typeof this.prepLines) ?? [];
+      this.prepTr = (s.get("prepTr") as typeof this.prepTr) ?? {};
+      this.prepClips = (s.get("prepClips") as typeof this.prepClips) ?? {};
     });
   }
 
-  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations" | "script" | "reactions")[]) {
+  private save(...keys: ("meta" | "pages" | "chunks" | "lines" | "questions" | "convos" | "cache" | "peak" | "summary" | "polls" | "deckPages" | "slideTranslations" | "script" | "reactions" | "prepLines" | "prepTr" | "prepClips")[]) {
     const entries: Record<string, unknown> = {};
     for (const k of keys) entries[k] = this[k];
     return this.ctx.storage.put(entries);
@@ -302,6 +321,7 @@ export class Room extends DurableObject<Env> {
         me!.voice = true;
         await this.save("meta");
         this.sendSpeakers();
+        if (me!.id === "s0" && this.prepLines.length) await this.ctx.storage.setAlarm(Date.now()); // HACKATHON: clone the script in this voice
         return json({ ok: true });
       }
       case "DELETE voice": {
@@ -392,10 +412,23 @@ export class Room extends DurableObject<Env> {
         return this.closePoll(String(body.pid ?? ""));
       case "POST addanswer":
         return m.mode === "stage" ? this.teachQuestion(body) : this.teachAnswer(body);
+      case "POST prep": {
+        // HACKATHON mode: translate and clone every script line once, before the talk. The alarm does the work.
+        if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
+        if (Array.isArray(body.lines)) {
+          const texts = [...new Set((body.lines as unknown[]).slice(0, 600).map(cleanLine).filter(Boolean))];
+          this.prepLines = await Promise.all(texts.map(async (text) => ({ h: await lineHash(text), text })));
+          await this.save("prepLines");
+        }
+        if (body.retry) (this.prepFails = {}), (this.prepTrFails = 0);
+        if (!(await this.ctx.storage.getAlarm())) await this.ctx.storage.setAlarm(Date.now());
+        return json(this.prepStatus());
+      }
       case "POST presets": {
         if (m.mode !== "stage" || m.demo) return json({ error: "Not here" }, 400);
         m.presetsEnabled = !!body.enabled;
         await this.save("meta");
+        if (m.presetsEnabled && this.prepLines.length) await this.ctx.storage.setAlarm(Date.now()); // HACKATHON: prep the preset clips too
         const presets = m.presetsEnabled ? publicPresets() : [];
         this.send(["listener", "screen", "host", "speaker"], { type: "presets", presetsEnabled: m.presetsEnabled, presets });
         return json({ ok: true, presetsEnabled: m.presetsEnabled, presets });
@@ -496,6 +529,8 @@ export class Room extends DurableObject<Env> {
       ws.serializeAttachment({ ...ws.deserializeAttachment(), voice: parseListenerVoice(d.voice) });
       this.presence();
     }
+    // HACKATHON mode: the host's laptop heard a script line start. Over the socket, not HTTP: every millisecond is latency.
+    if (d.type === "cue" && ws.deserializeAttachment()?.role === "host") await this.cue(cleanLine(d.text));
   }
 
   async webSocketClose(ws: WebSocket) {
@@ -647,14 +682,25 @@ export class Room extends DurableObject<Env> {
     return reply({ line });
   }
 
-  private async addLine(p: Pick<Line, "speaker" | "src" | "out" | "flags" | "ms" | "live">): Promise<Line> {
+  private async addLine(p: Pick<Line, "speaker" | "src" | "out" | "flags" | "ms" | "live"> & Pick<Partial<Line>, "audio" | "cue">): Promise<Line> {
     const line: Line = { seq: (this.lines.at(-1)?.seq ?? 0) + 1, t: Date.now(), at: this.elapsed(), slide: this.meta!.slide, ...p };
     this.lines.push(line);
     if (this.lines.length > 600) this.lines.splice(0, this.lines.length - 600);
     await this.save("lines");
     this.send(["listener", "screen", "host", "speaker"], { type: "line", line });
-    this.ctx.waitUntil(Promise.allSettled([this.cloneSpeaker(line), this.clonePresets(line)]));
+    if (!line.cue) this.ctx.waitUntil(Promise.allSettled([this.cloneSpeaker(line), this.clonePresets(line)])); // a cue's clips are already made
     return line;
+  }
+
+  /** A speaker's consented sample, from memory or R2. */
+  private async speakerSample(id: string): Promise<{ sample: ArrayBuffer; mime: VoiceSampleMime } | null> {
+    const sample = this.samples.get(id);
+    if (sample) return { sample, mime: this.sampleMime.get(id) ?? "audio/wav" };
+    const stored = await loadStoredSample(this.env.FILES, sampleKey(this.meta!, id));
+    if (!stored) return null;
+    this.samples.set(id, stored.bytes);
+    this.sampleMime.set(id, stored.mime);
+    return { sample: stored.bytes, mime: stored.mime };
   }
 
   /** At most VOICE_CLIPS_IN_FLIGHT cloned clips per room; busy pairs fall back to the phone voice. */
@@ -674,16 +720,9 @@ export class Room extends DurableObject<Env> {
     if (this.meta!.voiceMode === "phone" || !canClone(this.env) || !sp?.voice) return;
     const langs = cloneDemand(this.connectedListeners(), line.out).speakerLangs;
     if (!langs.length) return;
-    let sample = this.samples.get(sp.id);
-    let mime = this.sampleMime.get(sp.id) ?? "audio/wav";
-    if (!sample) {
-      const stored = await loadStoredSample(this.env.FILES, sampleKey(this.meta!, sp.id));
-      if (!stored) return;
-      sample = stored.bytes;
-      mime = stored.mime;
-      this.samples.set(sp.id, sample);
-      this.sampleMime.set(sp.id, mime);
-    }
+    const ref = await this.speakerSample(sp.id);
+    if (!ref) return;
+    const { sample, mime } = ref;
     const audio: Record<string, string> = {};
     await Promise.allSettled(langs.map(async (lang) => {
       const wav = await this.clonedClip(() => voiceFor(this.env, sample!, line.out[lang], lang, mime));
@@ -725,6 +764,95 @@ export class Room extends DurableObject<Env> {
       }));
       if (Object.keys(audio).length && this.lines.includes(line)) await this.save("lines");
     }
+  }
+
+  // ---------- HACKATHON mode: prep once, cue live ----------
+
+  /** Voices prep makes, besides the phone: the host's clone (null) when they have a sample, then each enabled preset.
+   *  None without a voice model (mock with no VOICE_URL): mock only echoes the reference clip, and a saved echo would never be redone. */
+  private prepVoices(): (PresetVoice | null)[] {
+    const m = this.meta!;
+    if (m.voiceMode === "phone" || !canClone(this.env) || (!isLive(this.env) && !this.env.VOICE_URL)) return [];
+    return [...(m.speakers?.[0]?.voice ? [null] : []), ...(m.presetsEnabled ? PRESET_VOICES : [])];
+  }
+
+  /** Every clip the script needs: line × room language × voice. */
+  private prepJobs() {
+    const voices = this.prepVoices();
+    return this.prepLines.flatMap((l) => this.meta!.langs.flatMap((lang) => voices.map((voice) => ({ ...l, lang, voice, key: clipKey(l.h, lang, voice) }))));
+  }
+
+  prepStatus() {
+    const jobs = this.prepJobs();
+    return {
+      lines: this.prepLines.length,
+      translated: this.prepLines.filter((l) => this.prepTr[l.h]).length,
+      total: jobs.length,
+      done: jobs.filter((j) => this.prepClips[j.key]).length,
+      failed: jobs.filter((j) => !this.prepClips[j.key] && (this.prepFails[j.key] ?? 0) >= PREP_TRIES).length + (this.prepTrFails >= PREP_TRIES ? 1 : 0),
+    };
+  }
+
+  /** One step of prep: a batch of translations, else up to PREP_IN_FLIGHT clips. Each success is saved at once and never redone.
+   *  Not admitted or 429 waits for Token Factory; real failures retry up to PREP_TRIES, then the phone voice covers that clip. */
+  private async prepTick() {
+    const m = this.meta!;
+    if (m.mode !== "stage" || !this.prepLines.length) return;
+    let wait = 250;
+    const untranslated = this.prepLines.filter((l) => !this.prepTr[l.h]);
+    if (untranslated.length && this.prepTrFails < PREP_TRIES) {
+      const batch = untranslated.slice(0, PREP_BATCH);
+      const texts = batch.map((l) => l.text);
+      const r = await tf<{ out?: Record<string, unknown> }>(this.env, "script", MODELS.answer, scriptPrompt(m.langs, texts, m), {
+        pub: false,
+        mock: () => ({ out: Object.fromEntries(m.langs.map((l) => [l, texts])) }),
+      });
+      if (r.data) {
+        batch.forEach((l, i) => (this.prepTr[l.h] = cleanTranslations(Object.fromEntries(m.langs.map((g) => [g, (r.data!.out?.[g] as unknown[] | undefined)?.[i]])), m.langs)));
+        this.prepTrFails = 0;
+        await this.save("prepTr");
+      } else if (r.fallback === "error") (this.prepTrFails++, (wait = 5_000));
+      else wait = r.fallback === "tripped" ? 30_000 : 3_000;
+    } else {
+      const live = isLive(this.env);
+      const jobs = this.prepJobs().filter((j) => !this.prepClips[j.key] && this.prepTr[j.h]?.[j.lang] && (this.prepFails[j.key] ?? 0) < PREP_TRIES);
+      const ref = jobs.some((j) => !j.voice) ? await this.speakerSample("s0") : null;
+      await Promise.allSettled(jobs.slice(0, PREP_IN_FLIGHT).map(async (j) => {
+        const out: SpeechStatus = { status: 0, retryAfter: 0 };
+        const text = this.prepTr[j.h]![j.lang]!;
+        if (!j.voice && !ref) return void (this.prepFails[j.key] = PREP_TRIES); // the sample is gone: nothing to clone from
+        const wav = j.voice
+          ? await voiceFor(this.env, j.voice.clip(), text, j.lang, j.voice.mime, j.voice.referenceTranscript, "prep", out)
+          : await voiceFor(this.env, ref!.sample, text, j.lang, ref!.mime, SAMPLE_TEXT, "prep", out);
+        if (wav) {
+          await this.env.FILES.put(`${m.id}/audio/${j.key}.wav`, wav);
+          this.prepClips[j.key] = 1;
+          await this.save("prepClips");
+        } else if (live && (out.status === 0 || out.status === 429)) wait = Math.max(wait, out.retryAfter || 3_000);
+        else (this.prepFails[j.key] = (this.prepFails[j.key] ?? 0) + 1), (wait = Math.max(wait, 2_000));
+      }));
+    }
+    this.send(["host"], { type: "prep", ...this.prepStatus() });
+    const more = (this.prepTrFails < PREP_TRIES && this.prepLines.some((l) => !this.prepTr[l.h]))
+      || this.prepJobs().some((j) => !this.prepClips[j.key] && this.prepTr[j.h]?.[j.lang] && (this.prepFails[j.key] ?? 0) < PREP_TRIES);
+    if (more) await this.ctx.storage.setAlarm(Date.now() + wait);
+  }
+
+  /** The host started a script line: send it with its prepared translations and clips. No call is made. */
+  private async cue(text: string) {
+    const m = this.meta!;
+    if (!text || m.mode !== "stage" || m.demo || m.status === "ended") return;
+    const h = await lineHash(text);
+    const out = this.prepTr[h] ?? {};
+    const audio: Record<string, string> = {};
+    for (const lang of m.langs) {
+      for (const voice of this.prepVoices()) {
+        const k = clipKey(h, lang, voice);
+        if (this.prepClips[k]) audio[voice ? presetAudioKey(lang, voice.id) : lang] = `/api/rooms/${m.id}/audio?k=${k}`;
+      }
+    }
+    if (m.status === "lobby") await this.setStatus("live");
+    await this.addLine({ speaker: "s0", src: text, out, flags: m.langs.filter((l) => !out[l]), ms: 0, live: false, audio, cue: true });
   }
 
   /** Deck chunks plus what the speaker has said so far, ~150 words per transcript chunk. */
@@ -990,6 +1118,7 @@ export class Room extends DurableObject<Env> {
   // Replay for the public demo talk: plays the fixture with real gaps while anyone is watching.
   async alarm() {
     const m = this.meta;
+    if (m && !m.demo) return this.prepTick(); // the only other alarm: HACKATHON prep
     if (!m?.demo || m.mode !== "stage") return;
     const watching = this.ctx.getWebSockets("listener").length + this.ctx.getWebSockets("screen").length + this.ctx.getWebSockets("host").length;
     if (!watching) return; // next connection restarts it

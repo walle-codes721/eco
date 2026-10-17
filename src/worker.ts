@@ -82,7 +82,8 @@ async function api(req: Request, env: Env, url: URL, path: string, ip: string): 
   if (path === "/api/me") {
     if (!sub) return json({ user: null, signin: !!env.GOOGLE_CLIENT_ID });
     if (req.method === "POST") {
-      const { name } = (await req.json().catch(() => ({}))) as { name?: string };
+      const { name, hackathon } = (await req.json().catch(() => ({}))) as { name?: string; hackathon?: unknown };
+      if (typeof hackathon === "boolean") return json(await account(`u:${sub}`).setHackathon(hackathon));
       const r = await account(`u:${sub}`).rename(String(name ?? "").toLowerCase());
       return json(r, r.ok ? 200 : 400);
     }
