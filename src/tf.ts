@@ -19,8 +19,10 @@ export type TfResult<T> =
 
 // Gemma vanished from Token Factory on 15 Oct. Text jobs try it first and fall back to DeepSeek when it's "not supported",
 // then skip it for 10 minutes. When AMD restores it, Eco is back on Gemma with no deploy.
+// Slide row translation tries Gemma → MiMo → DeepSeek so a slow or missing model still paints the listener's slide.
 // ponytail: per-isolate memory, so each Worker isolate pays one free 400 per 10 min; move it into Budget if that ever matters.
 export const TEXT_FALLBACK = "DeepSeek-V4-Flash";
+export const SLIDE_MODELS = [MODELS.answer, MODELS.audio, TEXT_FALLBACK] as const; // Gemma → MiMo → DeepSeek
 const GEMMA_RECHECK_MS = 10 * 60_000;
 // A live phrase gives Gemma GEMMA_LIVE_MS alone, then DeepSeek races it. If DeepSeek wins, Gemma is skipped for GEMMA_SLOW_MS.
 const GEMMA_LIVE_MS = 6_000;
@@ -53,9 +55,10 @@ async function hedged(post: Post, limit: number): Promise<{ res: Response; model
 
 export const isLive =(env: Env) => env.ECO_LIVE === "1" && !!env.RADEON_API_KEY;
 
-/** Slide prefetch: one retry on the text fallback when Gemma fails (timeout, gateway, etc.). */
-function retrySlideOnTextFallback(kind: Kind, model: string, already: boolean) {
-  return kind === "slide" && model === MODELS.answer && !already;
+/** Next model in the slide chain, or null when every option has been tried. */
+export function nextSlideModel(current: string): string | null {
+  const i = (SLIDE_MODELS as readonly string[]).indexOf(current);
+  return i >= 0 && i < SLIDE_MODELS.length - 1 ? SLIDE_MODELS[i + 1]! : null;
 }
 
 /** Parses model output that should be JSON, tolerating ```json fences. */
@@ -103,7 +106,8 @@ export async function tf<T>(
   opts: { pub: boolean; mock: () => T; timing?: TranslationTiming },
 ): Promise<TfResult<T>> {
   if (!isLive(env)) return { data: opts.mock(), live: false, ms: 0 };
-  if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = TEXT_FALLBACK;
+  // Gemma missing from the catalog: other jobs jump to DeepSeek; slide jobs start at MiMo so DeepSeek stays last.
+  if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = kind === "slide" ? MODELS.audio : TEXT_FALLBACK;
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
   const translation = isTranslationKind(kind);
@@ -118,7 +122,6 @@ export async function tf<T>(
   let content = "";
   let finishReason: string | undefined;
   let why = "";
-  let slideFallbackTried = model === TEXT_FALLBACK;
   try {
     for (let attempt = 0; ; attempt++) {
       const attemptAt = Date.now();
@@ -177,14 +180,13 @@ export async function tf<T>(
           // Gemma off the catalog: same request on the fallback, no retry. This 400 never reaches finish(), so it can't trip the stop.
           if (status === 400 && model === MODELS.answer && /not supported/i.test(msg)) {
             gemmaMissingUntil = Date.now() + GEMMA_RECHECK_MS;
-            model = TEXT_FALLBACK;
-            slideFallbackTried = true;
+            model = kind === "slide" ? MODELS.audio : TEXT_FALLBACK;
             why = "";
             continue;
           }
-          if (retrySlideOnTextFallback(kind, model, slideFallbackTried)) {
-            slideFallbackTried = true;
-            model = TEXT_FALLBACK;
+          const next = kind === "slide" ? nextSlideModel(model) : null;
+          if (next) {
+            model = next;
             why = "";
             status = 0;
             continue;
@@ -194,9 +196,9 @@ export async function tf<T>(
       } catch (e) {
         status = status || 599; // timeout or network
         why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
-        if (retrySlideOnTextFallback(kind, model, slideFallbackTried)) {
-          slideFallbackTried = true;
-          model = TEXT_FALLBACK;
+        const next = kind === "slide" ? nextSlideModel(model) : null;
+        if (next) {
+          model = next;
           why = "";
           status = 0;
           continue;
