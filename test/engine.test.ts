@@ -544,9 +544,9 @@ import { sampleKey } from "../src/voice";
 describe("voice samples", () => {
   const room = { id: "stage/seb/talk", owner: "g123" };
   it("uses the account's saved voice only for the host of a saved-voice room", () => {
-    expect(sampleKey({ ...room, voiceMode: "saved" }, "s0")).toBe("users/g123/voice.wav");
-    expect(sampleKey({ ...room, voiceMode: "saved" }, "s1")).toBe("stage/seb/talk/voice/s1.wav");
-    expect(sampleKey({ ...room, voiceMode: "sample" }, "s0")).toBe("stage/seb/talk/voice/s0.wav");
-    expect(sampleKey({ ...room, owner: "", voiceMode: "saved" }, "s0")).toBe("stage/seb/talk/voice/s0.wav");
+    expect(sampleKey({ ...room, voiceMode: "saved" }, "s0")).toBe("users/g123/voice");
+    expect(sampleKey({ ...room, voiceMode: "saved" }, "s1")).toBe("stage/seb/talk/voice/s1");
+    expect(sampleKey({ ...room, voiceMode: "sample" }, "s0")).toBe("stage/seb/talk/voice/s0");
+    expect(sampleKey({ ...room, owner: "", voiceMode: "saved" }, "s0")).toBe("stage/seb/talk/voice/s0");
   });
 });

@@ -8,7 +8,9 @@ import { lineKey, validReaction, tallyReactions, topLines, type LineReactions } 
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
 import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
-import { voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, type VoiceMode } from "./voice";
+import {
+  voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, type VoiceMode, type VoiceSampleMime,
+} from "./voice";
 import { phraseEvidence } from "./utterance";
 import { customerTurn, ownerTurn, type CustomerTurn } from "./counter-turn";
 import { translationTiming, timingHeader } from "./timing";
@@ -89,6 +91,7 @@ export class Room extends DurableObject<Env> {
   private mockI = 0;
   private cloning = 0;
   private samples = new Map<string, ArrayBuffer>();
+  private sampleMime = new Map<string, VoiceSampleMime>();
   private replayI = 0;
   private replayPausedUntil = 0;
 
@@ -146,7 +149,7 @@ export class Room extends DurableObject<Env> {
     if (mode === "stage") {
       // "saved" needs a signed-in owner who has recorded one; otherwise they record a sample for this talk.
       const want = (["saved", "sample", "phone"] as const).find((v) => v === body.voice) ?? "sample";
-      this.meta.voiceMode = want === "saved" && !(owner && (await this.env.FILES.head(savedKey(owner)))) ? "sample" : want;
+      this.meta.voiceMode = want === "saved" && !(owner && (await loadStoredSample(this.env.FILES, savedKey(owner)))) ? "sample" : want;
     }
     const pages: { tag: string; text: string }[] = (Array.isArray(body.pages) ? body.pages : [])
       .slice(0, 200)
@@ -278,22 +281,27 @@ export class Room extends DurableObject<Env> {
       }
       case "PUT voice": {
         // The speaker's own sample, only with their consent. Stored in R2; deleted with DELETE voice.
-        if (!me || m.demo || sampleKey(m, me.id) !== `${m.id}/voice/${me.id}.wav` || m.voiceMode === "phone") return json({ error: "Not allowed" }, 403);
+        if (!this.talkVoiceAllowed(me)) return json({ error: "Not allowed" }, 403);
         if (req.headers.get("x-consent") !== "yes") return json({ error: "Consent needed" }, 400);
-        const wav = await req.arrayBuffer();
-        if (wav.byteLength < 20_000 || wav.byteLength > 1_500_000) return json({ error: "Record about 10 seconds" }, 413);
-        await this.env.FILES.put(`${m.id}/voice/${me.id}.wav`, wav, { httpMetadata: { contentType: "audio/wav" } });
-        this.samples.set(me.id, wav);
-        me.voice = true;
+        const parsed = parseVoiceUpload(req.headers.get("content-type") ?? "", await req.arrayBuffer());
+        if (!parsed.ok) return json({ error: parsed.error }, parsed.status);
+        const prefix = sampleKey(m, me!.id);
+        await deleteStoredSample(this.env.FILES, prefix);
+        await this.env.FILES.put(sampleObjectKey(prefix, parsed.ext), parsed.bytes, { httpMetadata: { contentType: parsed.mime } });
+        this.samples.set(me!.id, parsed.bytes);
+        this.sampleMime.set(me!.id, parsed.mime);
+        me!.voice = true;
         await this.save("meta");
         this.sendSpeakers();
         return json({ ok: true });
       }
       case "DELETE voice": {
-        if (!me || sampleKey(m, me.id) !== `${m.id}/voice/${me.id}.wav`) return json({ error: "Not allowed" }, 403); // a saved voice is deleted from /me
-        await this.env.FILES.delete(`${m.id}/voice/${me.id}.wav`);
-        this.samples.delete(me.id);
-        me.voice = false;
+        if (!this.talkVoiceAllowed(me)) return json({ error: "Not allowed" }, 403); // a saved voice is deleted from /me
+        const prefix = sampleKey(m, me!.id);
+        await deleteStoredSample(this.env.FILES, prefix);
+        this.samples.delete(me!.id);
+        this.sampleMime.delete(me!.id);
+        me!.voice = false;
         await this.save("meta");
         this.sendSpeakers();
         return json({ ok: true });
@@ -377,6 +385,14 @@ export class Room extends DurableObject<Env> {
         return m.mode === "stage" ? this.teachQuestion(body) : this.teachAnswer(body);
     }
     return json({ error: "Unknown action" }, 404);
+  }
+
+  /** Per-talk voice sample on this speaker's device (not the account saved voice on s0). */
+  private talkVoiceAllowed(me: Speaker | undefined): me is Speaker {
+    const m = this.meta!;
+    if (!me || m.demo || m.voiceMode === "phone") return false;
+    if (m.voiceMode === "saved" && me.id === "s0" && m.owner) return false;
+    return true;
   }
 
   /** Per-visitor hourly limits; cached and mock-free paths don't call this. */
@@ -619,14 +635,18 @@ export class Room extends DurableObject<Env> {
     this.cloning++;
     try {
       let sample = this.samples.get(sp.id);
+      let mime = this.sampleMime.get(sp.id) ?? "audio/wav";
       if (!sample) {
-        sample = await (await this.env.FILES.get(sampleKey(this.meta!, sp.id)))?.arrayBuffer();
-        if (!sample) return;
+        const stored = await loadStoredSample(this.env.FILES, sampleKey(this.meta!, sp.id));
+        if (!stored) return;
+        sample = stored.bytes;
+        mime = stored.mime;
         this.samples.set(sp.id, sample);
+        this.sampleMime.set(sp.id, mime);
       }
       const audio: Record<string, string> = {};
       await Promise.allSettled(langs.map(async (lang) => {
-        const wav = await voiceFor(this.env, sample!, line.out[lang], lang);
+        const wav = await voiceFor(this.env, sample!, line.out[lang], lang, mime);
         if (!wav || !this.lines.includes(line)) return;
         const k = `${line.seq}-${line.t}-${lang}`;
         await this.env.FILES.put(`${this.meta!.id}/audio/${k}.wav`, wav);
