@@ -401,6 +401,7 @@ langSel.onchange = () => {
   drawJump();
   drawStatus();
   drawPolls();
+  drawSlide(); // repaint from stored paints; do not wait for the next slide or slidetr
 };
 soundBtn.onclick = () => {
   playback.clear();
