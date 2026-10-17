@@ -27,21 +27,27 @@ export function stageAudio({ play, stop }) {
     for (const entry of backlog.slice(0, Math.max(0, backlog.length - 3))) remove(entry);
     drain();
   };
+  const pickUrl = (item, audio) => {
+    if (!item.audioKey) return null;
+    return audio[item.audioKey] ?? null;
+  };
   return {
-    line({ seq, text, lang, speaker, url, wait, enabled }) {
+    line({ seq, text, lang, speaker, url, audioKey = lang, wait, enabled }) {
       if (seq <= latest) return; // duplicate frames/reconnect history must not replay
       latest = seq;
       if (!enabled) return;
-      const item = { seq, text, lang, speaker, url, ready: false, deadline: Date.now() + 4000, timer: null };
+      const item = { seq, text, lang, speaker, url, audioKey, ready: false, deadline: Date.now() + 4000, timer: null };
       pending.set(seq, item);
-      if (wait && !url) item.timer = setTimeout(() => ready(item, null), 4000);
-      else ready(item, url);
+      if (wait && audioKey && !url) item.timer = setTimeout(() => ready(item, null), 4000);
+      else ready(item, url ?? null);
       drain();
     },
     audio(seq, audio) {
       const item = pending.get(seq);
-      if (!item || item.ready || !audio[item.lang]) return;
-      ready(item, Date.now() < item.deadline ? audio[item.lang] : null);
+      if (!item || item.ready) return;
+      if (item.audioKey && !Object.prototype.hasOwnProperty.call(audio, item.audioKey)) return;
+      const url = pickUrl(item, audio);
+      ready(item, Date.now() < item.deadline ? url : null);
     },
     clear(sequence = latest) {
       for (const item of pending.values()) clearTimeout(item.timer);

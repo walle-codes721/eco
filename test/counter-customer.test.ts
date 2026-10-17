@@ -1,4 +1,3 @@
-// @ts-expect-error test-only Node built-in
 import { readFileSync } from "node:fs";
 import * as ts from "typescript";
 import { describe, expect, it, vi } from "vitest";

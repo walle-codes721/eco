@@ -3,6 +3,7 @@
   "name": "eco",
   "main": "src/worker.ts",
   "compatibility_date": "2026-10-01",
+  "rules": [{ "type": "Data", "globs": ["**/*.mp3"], "fallthrough": true }],
   // No *.workers.dev URL: Eco is served only at its own domain.
   "workers_dev": false,
   "preview_urls": false,

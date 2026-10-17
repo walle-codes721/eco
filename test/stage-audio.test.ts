@@ -118,7 +118,7 @@ describe("Stage audio decisions", () => {
     expect(play).toHaveBeenCalledTimes(2);
     finish[1]();
     await flush();
-    expect(play.mock.calls[2]).toEqual(["Dopo", "it", undefined, 2]);
+    expect(play.mock.calls[2]).toEqual(["Dopo", "it", null, 2]);
     expect(stop).toHaveBeenCalledTimes(1);
   });
 

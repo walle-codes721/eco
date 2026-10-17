@@ -6,6 +6,7 @@ import { t } from "/js/i18n.js";
 import { captionFor, focusIndex, nearBottom, nextNewCount } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
+import { voiceChip } from "/js/voice-chip.js";
 import { paintSlideRows, showDesignedPage, slideViewToggleVisible } from "/js/slide-repaint.js";
 
 const id = roomId();
@@ -35,14 +36,51 @@ let atBottom = true; // smart follow: pinned to live unless the listener scrolls
 let newCount = 0; // lines that arrived while reading history
 const T = (k) => t(lang, k);
 const textOf = (l) => captionFor(l, lang).text;
+let voiceChoice = store(`eco:voice:${id}`) ?? "speaker";
 const playback = stageAudio({ play: (...args) => voice.playStage(...args), stop: () => voice.stopStage() });
+
+function voiceOptions() {
+  const opts = [{ v: "speaker", label: "Speaker's voice" }];
+  if (meta.presetsEnabled && meta.presets?.length) opts.push(...meta.presets.map((p) => ({ v: p.id, label: p.label })));
+  opts.push({ v: "phone", label: "Phone voice" });
+  return opts;
+}
+function normalizeVoice() {
+  if (voiceChoice === "speaker" || voiceChoice === "phone") return;
+  if (!meta.presetsEnabled || !meta.presets?.some((p) => p.id === voiceChoice)) voiceChoice = "speaker";
+}
+function audioKeyForChoice() {
+  if (voiceChoice === "phone") return null;
+  if (voiceChoice === "speaker") return lang;
+  return `${lang}@${voiceChoice}`;
+}
+function lineAudioUrl(l) {
+  const key = audioKeyForChoice();
+  return key ? l.audio?.[key] : null;
+}
+function waitForClip(l) {
+  if (voiceChoice === "phone" || !meta.voice) return false;
+  if (voiceChoice === "speaker") {
+    const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
+    return !!sp?.voice;
+  }
+  return true;
+}
+const voiceChipLabel = (l) => voiceChip(meta.presets, voiceChoice, l, lang);
 addEventListener("pagehide", () => playback.clear());
 
 // ---------- shell ----------
 const langSel = h("select.lang-select", { "aria-label": "Language" }, ...choices.map((l) => h("option", { value: l, selected: l === lang }, langName(l, l))));
+const voiceSel = h("select.lang-select", { "aria-label": "Voice" });
+const drawVoiceSel = () => {
+  normalizeVoice();
+  voiceSel.replaceChildren(...voiceOptions().map((o) => h("option", { value: o.v, selected: o.v === voiceChoice }, o.label)));
+};
 const soundBtn = h("button.btn.icon-btn", { type: "button" });
 const titleEl = h("span.title.truncate", {}, meta.title);
-const bar = h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), titleEl, h("span.spacer"), langSel, soundBtn));
+const bar = h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), titleEl, h("span.spacer"), langSel, voiceSel, soundBtn));
+normalizeVoice();
+drawVoiceSel();
 const statusRow = h("div.status-row");
 const caps = h("div.captions", { "aria-live": "polite" });
 const summaryBox = h("section", { hidden: true });
@@ -138,6 +176,7 @@ function drawCaps() {
     return;
   }
   caps.replaceChildren(...lines.slice(-50).map((l) => h(keyOf(l) === picked ? "p.picked" : "p", { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
+    voiceChipLabel(l) ? h("span.chip", {}, voiceChipLabel(l)) : null,
     !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l),
     reacts[keyOf(l)] ? h("span.emo.my-react", {}, reacts[keyOf(l)]) : null)));
   if (atBottom) caps.scrollTop = caps.scrollHeight;
@@ -255,12 +294,18 @@ function addLine(l) {
   // A speaker with a voice sample: wait briefly for their cloned clip, else the phone speaks.
   const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
   const idx = Math.max(0, meta.speakers?.indexOf(sp) ?? 0);
-  playback.line({ seq: l.seq, text: textOf(l), lang, speaker: idx, url: l.audio?.[lang], wait: meta.voice && sp?.voice, enabled: voice.on });
+  playback.line({
+    seq: l.seq, text: textOf(l), lang, speaker: idx, url: lineAudioUrl(l),
+    audioKey: audioKeyForChoice(),
+    wait: waitForClip(l),
+    enabled: voice.on,
+  });
 }
 function onAudio(m) {
   const l = lines.find((x) => x.seq === m.seq);
   if (l) l.audio = { ...l.audio, ...m.audio };
   playback.audio(m.seq, m.audio);
+  if (l && voiceChipLabel(l)) drawCaps(); // the label appears once the preset clip exists
 }
 
 // The speaker's typed answer in the listener's language once it is translated, otherwise exactly as the speaker typed it.
@@ -453,6 +498,13 @@ qForm.onsubmit = async (e) => {
   drawQs();
 };
 
+voiceSel.onchange = () => {
+  voiceChoice = voiceSel.value;
+  store(`eco:voice:${id}`, voiceChoice);
+  live?.send({ type: "voice", voice: voiceChoice });
+  drawCaps();
+};
+
 langSel.onchange = () => {
   playback.clear();
   lang = langSel.value;
@@ -560,9 +612,11 @@ if (meta.status === "ended") {
   labels();
   keepAwake();
   loadSlides();
-  live = connect(id, { role: "listener", lang }, (m) => {
+  live = connect(id, { role: "listener", lang, voice: voiceChoice }, (m) => {
     if (m.type === "hello") {
       Object.assign(meta, m.meta);
+      normalizeVoice();
+      drawVoiceSel();
       lines = m.lines ?? [];
       playback.clear(lines.at(-1)?.seq ?? 0);
       polls = m.polls ?? [];
@@ -584,6 +638,13 @@ if (meta.status === "ended") {
     }
     if (m.type === "tally") { const p = polls.find((x) => x.id === m.pid); if (p) (p.tally = m.tally), drawPolls(); }
     if (m.type === "pollclose") (polls = m.poll ? polls.map((x) => (x.id === m.pid ? m.poll : x)) : polls.filter((x) => x.id !== m.pid)), drawPolls();
+    if (m.type === "presets") {
+      meta.presetsEnabled = m.presetsEnabled;
+      meta.presets = m.presets ?? [];
+      normalizeVoice();
+      drawVoiceSel();
+      drawCaps();
+    }
     if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") (meta.slide = m.n), drawSlide();

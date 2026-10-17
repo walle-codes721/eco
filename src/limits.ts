@@ -5,6 +5,11 @@ export type Denied = "ceiling" | "rpm" | "busy" | "tripped" | "public-hourly";
 const RPM = 12;
 const CONCURRENT = 3;
 const RESERVED = 2; // last rpm slots are kept for translation (utterance, turn)
+/** Voice lane: cloned clips in one room, separate from translation concurrency. */
+export const VOICE_CLIPS_IN_FLIGHT = 2;
+/** Voice lane rpm. 12 translation/other + 6 voice = 18, under the 20/min per-account gateway limit in the Token Factory guide. */
+export const VOICE_RPM = 6;
+
 // Points per 1M tokens, from the Token Factory guide. Only used for the on-screen estimate.
 export const PRICE: Record<string, [number, number]> = { "MiMo-V2.6-Flash": [0.14, 0.28], "Gemma-4-31B-IT": [0.5, 3.0], "DeepSeek-V4-Flash": [0.14, 0.28] };
 
@@ -18,18 +23,33 @@ export const countsTowardStop = (status: number) => status >= 400 && status < 50
 
 /** Translation jobs keep the reserved last rpm slots and the tighter latency budget. One definition for tf.ts and admit(). */
 export const isTranslationKind = (kind: Kind) => kind === "utterance" || kind === "turn" || kind === "slide";
+export const isVoiceKind = (kind: Kind) => kind === "voice";
+
+export type AdmitState = {
+  today: number;
+  max: number;
+  window: number;
+  inflight: number;
+  voiceInflight?: number;
+  voiceWindow?: number;
+  tripped: boolean;
+  pubHour: number;
+  pubMax: number;
+};
 
 /** Pure admission rule, kept apart from the DO so it can be unit tested. */
-export function admit(
-  s: { today: number; max: number; window: number; inflight: number; tripped: boolean; pubHour: number; pubMax: number },
-  kind: Kind,
-  pub: boolean,
-): Denied | null {
+export function admit(s: AdmitState, kind: Kind, pub: boolean): Denied | null {
   if (s.tripped) return "tripped";
   if (s.max > 0 && s.today >= s.max) return "ceiling"; // max 0 = no daily ceiling
   if (pub && s.pubHour >= s.pubMax) return "public-hourly";
+  const voiceInflight = s.voiceInflight ?? 0;
+  const voiceWindow = s.voiceWindow ?? 0;
+  if (isVoiceKind(kind)) {
+    if (voiceWindow >= VOICE_RPM) return "rpm";
+    if (voiceInflight >= VOICE_CLIPS_IN_FLIGHT) return "busy";
+    return null;
+  }
   if (s.window >= (isTranslationKind(kind) ? RPM : RPM - RESERVED)) return "rpm";
   if (s.inflight >= CONCURRENT) return "busy";
   return null;
 }
-

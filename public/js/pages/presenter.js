@@ -407,13 +407,39 @@ refreshCalls();
 setInterval(refreshCalls, 15000);
 latency.replaceChildren(h("span.dot"), "— s");
 
+function presetToggle() {
+  const box = h("input", { type: "checkbox", checked: !!meta.presetsEnabled });
+  const status = h("p.small.muted", {}, meta.presetsEnabled ? "Listeners hear the preset voice and see it labelled as AI." : "Preset voice is off for this talk.");
+  box.onchange = async () => {
+    box.disabled = true;
+    try {
+      const r = await api(`/api/rooms/${id}/presets`, { method: "POST", key, body: { enabled: box.checked } });
+      meta.presetsEnabled = r.presetsEnabled;
+      meta.presets = r.presets ?? [];
+      status.textContent = meta.presetsEnabled ? "Listeners hear the preset voice and see it labelled as AI." : "Preset voice is off for this talk.";
+    } catch {
+      box.checked = !!meta.presetsEnabled;
+      toast("Couldn't update preset voice");
+    } finally {
+      box.disabled = false;
+    }
+  };
+  return h("div.card", {},
+    h("div.card-head", {}, h("span.eyebrow", {}, "Preset voice (demo)")),
+    h("p.small", {}, "Morgan Freeman (AI) is a bundled demo voice (ADR 0006). Never offered in Counter."),
+    h("label.check", {}, box, h("span.small", {}, "Enable Morgan Freeman (AI) for listeners")),
+    status,
+  );
+}
+
 /** Setup that doesn't belong on the live console: swap the deck, record or check the voice. */
 function setupSheet() {
   const wrap = h("div.sheet-wrap", { onclick: (e) => e.target === wrap && wrap.remove() }, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "560px", width: "100%" } },
     h("div.row", {}, h("h2", {}, "Slides & voice"), h("span.spacer"), h("button.btn.icon-btn", { type: "button", "aria-label": "Close", onclick: () => wrap.remove() }, icon("x"))),
     replaceSlides(),
     meta.voiceMode === "sample" ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
-    meta.voiceMode === "saved" ? h("p.small", {}, "This talk uses your saved voice. ", h("a", { href: "/me" }, "Hear or re-record it"), ".") : null));
+    meta.voiceMode === "saved" ? h("p.small", {}, "This talk uses your saved voice. ", h("a", { href: "/me" }, "Hear or re-record it"), ".") : null,
+    presetToggle()));
   document.body.append(wrap);
 }
 

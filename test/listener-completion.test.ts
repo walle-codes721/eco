@@ -1,4 +1,3 @@
-// @ts-expect-error test-only Node built-in; the Worker tsconfig omits Node types
 import { readFileSync } from "node:fs";
 import * as ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +20,8 @@ function listener(playback: unknown) {
   const bindings = {
     playback, api, id: "stage/test/end", lines: [], meta: { title: "Talk", status: "live" },
     drawPolls: vi.fn(), drawSummary: vi.fn(), drawQs: vi.fn(), drawStatus: vi.fn(), drawCaps: vi.fn(), snapToLive: vi.fn(),
+    normalizeVoice: () => {}, drawVoiceSel: () => {}, voiceChoice: "speaker", store: () => null, live: { send: vi.fn() },
+    voiceSel: { replaceChildren: vi.fn() },
     // Helpers the listener's handlers now call for slides and polls (added on main); offline stand-ins.
     drawSlide: vi.fn(), loadSlides: vi.fn(), todo: (p: { open?: boolean }) => !!p.open, unseen: new Set<string>(),
     h: () => ({}), icon: () => ({}), T: (key: string) => key, main: { replaceChildren: vi.fn() },

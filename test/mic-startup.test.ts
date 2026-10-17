@@ -1,4 +1,3 @@
-// @ts-expect-error test-only Node built-in; the Worker tsconfig intentionally omits Node types
 import { readFileSync } from "node:fs";
 import * as ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
