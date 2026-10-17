@@ -1,4 +1,4 @@
-// A voice sample for the cloned voice: ~10 s reading a fixed passage, only with consent.
+// A voice sample for the cloned voice: ~5 s reading a fixed 15-word passage, only with consent.
 import { h, icon, toast } from "/js/eco.js";
 import { holdMic } from "/js/mic.js";
 
@@ -28,7 +28,7 @@ export function voiceCard(id, meta, headers) {
 export function sampleCard({ url, headers = {}, sampleText, has, intro, onChange = () => {}, playUrl, title = "Your voice" }) {
   const consent = h("input", { type: "checkbox" });
   const status = h("p.small.muted");
-  const btn = h("button.btn.primary", { type: "button" }, icon("mic"), "Record 10 seconds");
+  const btn = h("button.btn.primary", { type: "button" }, icon("mic"), "Record about 5 seconds");
   const upload = h("input", { type: "file", accept: ".mp3,.ogg,.wav,audio/mpeg,audio/ogg,audio/wav", hidden: true });
   const uploadBtn = h("button.btn", { type: "button" }, icon("doc"), "Upload MP3, OGG or WAV");
   const play = h("button.btn.sm", { type: "button" }, icon("sound"), "Play it back");

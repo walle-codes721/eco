@@ -9,7 +9,7 @@ import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, wit
 import { adviceLine, cleanEmergencyNumber, emergencyLine, isHealthKind, sensitiveKind, type Sensitive } from "./health";
 import { bestSentence, chunkPages, contextFingerprint, isEcho, normalize, oneLine, questionKey, selectContext, slidePages, teach, terms, transcriptChunks, type Chunk } from "./retrieve";
 import {
-  voiceFor, SAMPLE_TEXT, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, type VoiceMode, type VoiceSampleMime,
+  voiceFor, SAMPLE_TEXT, clipFormat, b64, canClone, sampleKey, savedKey, sampleObjectKey, parseVoiceUpload, loadStoredSample, deleteStoredSample, type VoiceMode, type VoiceSampleMime,
 } from "./voice";
 import { PRESET_VOICES, presetAudioKey, publicPresets } from "./preset-voice";
 import { cloneDemand, parseListenerVoice, type ListenerVoice } from "./voice-choice";
@@ -274,8 +274,10 @@ export class Room extends DurableObject<Env> {
         return obj ? new Response(obj.body, { headers: { "content-type": "application/pdf", "cache-control": "private, max-age=300" } }) : json({ error: "No slides" }, 404);
       }
       case "GET audio": {
-        const obj = await this.env.FILES.get(`${m.id}/audio/${(url.searchParams.get("k") ?? "").replace(/[^a-z0-9-]/g, "")}.wav`);
-        return obj ? new Response(obj.body, { headers: { "content-type": "audio/wav", "cache-control": "public, max-age=86400" } }) : json({ error: "No clip" }, 404);
+        const k = (url.searchParams.get("k") ?? "").replace(/[^a-z0-9-]/g, "");
+        const mp3 = await this.env.FILES.get(`${m.id}/audio/${k}.mp3`);
+        const obj = mp3 ?? (await this.env.FILES.get(`${m.id}/audio/${k}.wav`)); // clips stored before mp3 are wav
+        return obj ? new Response(obj.body, { headers: { "content-type": mp3 ? "audio/mpeg" : "audio/wav", "cache-control": "public, max-age=86400" } }) : json({ error: "No clip" }, 404);
       }
       case "POST join": {
         // A co-speaker: anyone holding the host's join QR, on their own device.
@@ -689,7 +691,8 @@ export class Room extends DurableObject<Env> {
       const wav = await this.clonedClip(() => voiceFor(this.env, sample!, line.out[lang], lang, mime));
       if (!wav || !this.lines.includes(line)) return;
       const k = `${line.seq}-${line.t}-${lang}`;
-      await this.env.FILES.put(`${this.meta!.id}/audio/${k}.wav`, wav);
+      const fmt = clipFormat(wav);
+      await this.env.FILES.put(`${this.meta!.id}/audio/${k}.${fmt.ext}`, wav, { httpMetadata: { contentType: fmt.mime } });
       if (!this.lines.includes(line)) return;
       const url = `/api/rooms/${this.meta!.id}/audio?k=${k}`;
       audio[lang] = url;
@@ -715,7 +718,8 @@ export class Room extends DurableObject<Env> {
         const wav = await this.clonedClip(() => voiceFor(this.env, sample, line.out[lang], lang, preset.mime, refText));
         if (!wav || !this.lines.includes(line)) return;
         const k = `${line.seq}-${line.t}-${lang}-${preset.id}`;
-        await this.env.FILES.put(`${m.id}/audio/${k}.wav`, wav);
+        const fmt = clipFormat(wav);
+        await this.env.FILES.put(`${m.id}/audio/${k}.${fmt.ext}`, wav, { httpMetadata: { contentType: fmt.mime } });
         if (!this.lines.includes(line)) return;
         const url = `/api/rooms/${m.id}/audio?k=${k}`;
         const field = presetAudioKey(lang, preset.id);

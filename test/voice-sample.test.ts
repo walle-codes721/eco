@@ -52,10 +52,10 @@ async function stageRoom() {
 }
 
 describe("voice sample intake at the room boundary", () => {
-  it("shows about thirty words of script to the speaker", async () => {
+  it("shows about fifteen words of script to the speaker, so the reference stays short", async () => {
     const words = SAMPLE_TEXT.trim().split(/\s+/);
-    expect(words.length).toBeGreaterThanOrEqual(28);
-    expect(words.length).toBeLessThanOrEqual(32);
+    expect(words.length).toBeGreaterThanOrEqual(13);
+    expect(words.length).toBeLessThanOrEqual(17);
   });
 
   it("accepts recorded WAV and uploaded MP3 when consent is ticked", async () => {
@@ -105,6 +105,44 @@ describe("voice sample intake at the room boundary", () => {
     }
   });
 
+  const MP3 = () => new Uint8Array([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0]).buffer; // "ID3" tag, as OmniVoice's mp3 starts
+  const speakAndGetClipKey = async (clip: ArrayBuffer) => {
+    const { room, r2, voice, tasks } = await stageRoom();
+    await voice(wav(), { "content-type": "audio/wav", "x-consent": "yes" });
+    const spy = vi.spyOn(voices, "voiceFor").mockResolvedValue(clip);
+    try {
+      await room.fetch(new Request("https://room/utterance", {
+        method: "POST",
+        headers: { "x-room": id, "x-key": room.meta!.hostKey, "content-type": "application/json" },
+        body: JSON.stringify({ text: "We operate in fifteen countries." }),
+      }));
+      await Promise.all(tasks);
+    } finally {
+      spy.mockRestore();
+    }
+    const key = [...r2.keys()].find((k) => k.includes("/audio/"))!;
+    return { room, r2, key };
+  };
+
+  it("stores and serves a clone that comes back as mp3", async () => {
+    const { room, r2, key } = await speakAndGetClipKey(MP3());
+    expect(key.endsWith(".mp3")).toBe(true);
+    expect(r2.get(key)!.contentType).toBe("audio/mpeg");
+    const k = key.split("/audio/")[1]!.replace(/\.mp3$/, "");
+    const res = await room.fetch(new Request(`https://room/audio?k=${k}`, { headers: { "x-room": id } }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("audio/mpeg");
+  });
+
+  it("keeps a clone that comes back as wav, and still plays clips stored as wav before mp3", async () => {
+    const { room, r2, key } = await speakAndGetClipKey(new ArrayBuffer(8));
+    expect(key.endsWith(".wav")).toBe(true);
+    expect(r2.get(key)!.contentType).toBe("audio/wav");
+    const k = key.split("/audio/")[1]!.replace(/\.wav$/, "");
+    const res = await room.fetch(new Request(`https://room/audio?k=${k}`, { headers: { "x-room": id } }));
+    expect(res.headers.get("content-type")).toBe("audio/wav");
+  });
+
   it("returns the recorded sample in mock mode", async () => {
     const { room, voice } = await stageRoom();
     const body = wav();
@@ -137,6 +175,24 @@ describe("voice sample intake at the room boundary", () => {
   });
 });
 
+
+describe("reference audio encoding", () => {
+  it("converts a sample to base64 once, however many clones use it", () => {
+    const sample = new Uint8Array([1, 2, 3, 250, 251, 252]).buffer;
+    const spy = vi.spyOn(globalThis, "btoa");
+    try {
+      const first = voices.refB64(sample);
+      expect(voices.refB64(sample)).toBe(first);
+      expect(voices.refB64(sample)).toBe(first);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(first).toBe(voices.b64(sample)); // same text as the uncached encoder
+      voices.refB64(new Uint8Array([9, 9]).buffer); // another speaker's sample is its own entry
+      expect(spy).toHaveBeenCalledTimes(3); // + 1 for the uncached b64 above, + 1 for the new sample
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
 
 describe("hasStoredSample", () => {
   it("checks existence with head, never downloading the clip", async () => {

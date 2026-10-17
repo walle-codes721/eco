@@ -75,7 +75,7 @@ describe("voice choice at the room boundary", () => {
       await Promise.all(tasks);
       expect(voiceSpy).toHaveBeenCalledTimes(1);
       expect(voiceSpy.mock.calls[0][3]).toBe("es");
-      expect(put).toHaveBeenCalledWith(expect.stringContaining("-es-morgan-freeman"), expect.any(ArrayBuffer));
+      expect(put).toHaveBeenCalledWith(expect.stringContaining("-es-morgan-freeman"), expect.any(ArrayBuffer), { httpMetadata: { contentType: "audio/wav" } });
       const field = presetAudioKey("es", "morgan-freeman");
       expect(room.lines[0].audio?.[field]).toBeTruthy();
     } finally {
