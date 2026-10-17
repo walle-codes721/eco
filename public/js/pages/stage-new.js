@@ -1,9 +1,9 @@
 import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me } from "/js/eco.js";
 import { openPdf, pdfPages, pdfDeckRows, renderPage, saveDeck, uploadDeck } from "/js/slides.js";
-import { deckPreviewPanel } from "/js/deck-preview.js";
+import { deckPreviewSetup } from "/js/deck-preview.js";
 
 const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
-const state = { langs: ["it", "es", "hi"], pages: [], deckPages: [], deckLang: "en", bytes: null };
+const state = { langs: ["it", "es", "hi"], pages: [], deckPages: [], deckLang: "en", bytes: null, pdf: null };
 
 const title = h("input", { type: "text", placeholder: "One engine, two rooms", maxlength: 120, autocomplete: "off" });
 const speaker = h("input", { type: "text", placeholder: "Your name", maxlength: 80, autocomplete: "name" });
@@ -36,6 +36,7 @@ async function readPdf(f) {
   try {
     state.bytes = new Uint8Array(await f.arrayBuffer());
     const pdf = await openPdf(state.bytes);
+    state.pdf = pdf;
     state.pages = await pdfPages(pdf);
     state.deckPages = await pdfDeckRows(pdf);
     state.deckLang = "en";
@@ -47,7 +48,7 @@ async function readPdf(f) {
       thumbs.append(slot);
       slot.append(await renderPage(pdf, n, 160));
     }
-    deckPreview.replaceChildren(deckPreviewPanel(state.deckPages, {
+    deckPreview.replaceChildren(deckPreviewSetup(thumbs, state.pdf, state.deckPages, {
       deckLang: state.deckLang,
       onLang: (l) => { state.deckLang = l; },
       onChange: (pages) => { state.deckPages = pages; },
@@ -57,6 +58,7 @@ async function readPdf(f) {
     state.bytes = null;
     state.pages = [];
     state.deckPages = [];
+    state.pdf = null;
     deckPreview.replaceChildren();
     deckInfo.textContent = "Couldn't read that PDF. Try exporting it again.";
   }

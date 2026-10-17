@@ -2,7 +2,7 @@ import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fm
 import { connect } from "/js/live.js";
 import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck } from "/js/slides.js";
-import { deckPreviewPanel } from "/js/deck-preview.js";
+import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
 import { pollQ, pollResults } from "/js/polls.js";
@@ -331,24 +331,12 @@ function replaceSlides() {
       const pages = await pdfPages(pdf);
       const deckPages = await pdfDeckRows(pdf);
       let deckLang = meta.deckLang || "en";
-      const panel = deckPreviewPanel(deckPages, {
+      const ok = await openDeckRowCarousel(pdf, deckPages, {
         deckLang,
         onLang: (l) => { deckLang = l; },
         onChange: () => {},
-      });
-      const ok = await new Promise((resolve) => {
-        const backdrop = h("div", { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 50, display: "grid", placeItems: "center", padding: "20px" } },
-          h("div.card", { style: { maxWidth: "520px", maxHeight: "80vh", overflow: "auto", width: "100%" } },
-            h("h3", { style: { margin: "0 0 8px" } }, "Preview slide rows"),
-            h("p.small.muted", {}, "Check rows to keep in the deck's language. Then store this PDF."),
-            panel,
-            h("div.row", { style: { marginTop: "16px", justifyContent: "flex-end", gap: "8px" } },
-              h("button.btn", { type: "button", onclick: () => (backdrop.remove(), resolve(false)) }, "Cancel"),
-              h("button.btn.primary", { type: "button", onclick: () => (backdrop.remove(), resolve(true)) }, "Store slides"),
-            ),
-          ),
-        );
-        document.body.append(backdrop);
+        startSlide: 1,
+        confirmLabel: "Store slides",
       });
       if (!ok) {
         btn.disabled = false;
