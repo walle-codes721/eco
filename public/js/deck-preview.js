@@ -111,7 +111,8 @@ export function openDeckRowCarousel(pdf, pages, { deckLang, onLang, onChange, st
     overlay.style.display = "none";
     drawRows();
     if (!pdf) return;
-    const canvas = await renderPage(pdf, current, 420);
+    const cssW = Math.min(720, Math.max(320, stage.clientWidth || 0));
+    const canvas = await renderPage(pdf, current, cssW || 680);
     if (mine !== drawId) return;
     stage.replaceChildren(canvas, overlay);
   };

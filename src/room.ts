@@ -308,6 +308,7 @@ export class Room extends DurableObject<Env> {
       m.deck = true;
       await this.save("meta");
       this.send(["listener", "screen", "host"], { type: "deck" });
+      if (m.status !== "ended") this.ctx.waitUntil(this.ensureSlideTranslations(m.slide)); // the first slides are ready before listeners look
       return json({ ok: true });
     }
     if (`${req.method} ${action}` === "GET sources") return json({ pages: this.pages });
@@ -319,7 +320,7 @@ export class Room extends DurableObject<Env> {
       this.deckPages = sanitizeDeckPages(body.pages);
       this.slideTranslations = {};
       await this.save("meta", "deckPages", "slideTranslations");
-      if (m.status === "live") this.ctx.waitUntil(this.ensureSlideTranslations(m.slide)); // a deck swapped mid-talk
+      if (m.status !== "ended") this.ctx.waitUntil(this.ensureSlideTranslations(m.slide)); // a new or swapped deck, in the lobby or mid-talk
       return json({ ok: true, pages: this.deckPages.length });
     }
     const body: any = await req.json().catch(() => ({}));

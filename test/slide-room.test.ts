@@ -18,7 +18,7 @@ const deckPages = [
 ];
 
 /** A live-looking stage room with a stored PDF, no network: tf is replaced per test. */
-async function slideRoom(langs: string[]) {
+async function slideRoom(langs: string[], { deck = true } = {}) {
   const saved = new Map<string, unknown>();
   const background: Promise<unknown>[] = [];
   let ready: Promise<unknown>;
@@ -31,17 +31,20 @@ async function slideRoom(langs: string[]) {
     getWebSockets: () => [],
     waitUntil: (promise: Promise<unknown>) => { background.push(promise); },
   };
-  const room = new Room(ctx as unknown as DurableObjectState, { ECO_LIVE: "1", RADEON_API_KEY: "test" } as Env);
+  const files = { put: async () => ({}) }; // the PDF itself is not needed: only the room's reaction to it is under test
+  const room = new Room(ctx as unknown as DurableObjectState, { ECO_LIVE: "1", RADEON_API_KEY: "test", FILES: files } as unknown as Env);
   await ready!;
   const id = "stage/test/slides";
   await room.init(id, { langs, pages: [1, 2, 3].map((n) => ({ tag: `slide ${n}`, text: `Slide ${n} text` })) });
-  room.meta!.deck = true;
+  room.meta!.deck = deck;
   const host = { "x-room": id, "x-key": room.meta!.hostKey, "content-type": "application/json" };
   const post = (action: string, body: unknown) =>
     room.fetch(new Request(`https://room/${action}`, { method: "POST", headers: host, body: JSON.stringify(body) }));
+  const putDeck = () =>
+    room.fetch(new Request("https://room/deck", { method: "PUT", headers: { ...host, "content-type": "application/pdf", "content-length": "4" }, body: "%PDF" }));
   const listenerGet = (path: string) => room.fetch(new Request(`https://room/${path}`, { headers: { "x-room": id } }));
   const settle = async () => { await Promise.all(background.splice(0)); };
-  return { room, post, listenerGet, settle };
+  return { room, post, putDeck, listenerGet, settle };
 }
 
 const answer = (langs: string[], rows: number) => ({
@@ -50,24 +53,45 @@ const answer = (langs: string[], rows: number) => ({
 });
 
 describe("slide translation in the room", () => {
-  it("makes no call while the talk has not started, and translates the first slide and the next once it is live", async () => {
+  it("translates the first slide and the next as soon as the deck is ready, while listeners wait in the lobby", async () => {
     const spy = vi.spyOn(client, "tf").mockImplementation((async (_e: Env, kind: string, _m: string, req: { messages: { content: string }[] }) => {
       expect(kind).toBe("slide");
       const rows = String(req.messages[1].content).split("\n").length;
       return answer(["it"], rows);
     }) as never);
-    const t = await slideRoom(["it"]);
+    const t = await slideRoom(["it"], { deck: false });
     await t.post("deckrows", { deckLang: "en", pages: deckPages });
     await t.settle();
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled(); // no PDF yet: nothing for a listener to look at
+
+    await t.putDeck();
+    await t.settle();
+    expect(t.room.meta!.status).toBe("lobby");
+    expect(spy).toHaveBeenCalledTimes(2); // slide 1 and slide 2, not slide 3
+    const lobby = (await (await t.listenerGet("slidetr?n=1&lang=it")).json()) as { paints: { paint: string | null }[] };
+    expect(lobby.paints.map((p) => p.paint)).toEqual(["it-1", null, "it-2"]);
 
     await t.post("status", { status: "live" });
-    await t.settle();
-    expect(spy).toHaveBeenCalledTimes(2); // slide 1 and slide 2, not slide 3
     await t.post("status", { status: "ended" });
     await t.post("status", { status: "live" });
     await t.settle();
     expect(spy).toHaveBeenCalledTimes(2); // stored, so not asked again
+    spy.mockRestore();
+  });
+
+  it("translates the first slides when rows are stored after the PDF, and not once the talk has ended", async () => {
+    const spy = vi.spyOn(client, "tf").mockImplementation((async (_e: Env, _k: string, _m: string, req: { messages: { content: string }[] }) =>
+      answer(["it"], String(req.messages[1].content).split("\n").length)) as never);
+    const ended = await slideRoom(["it"]);
+    await ended.post("status", { status: "ended" });
+    await ended.post("deckrows", { deckLang: "en", pages: deckPages });
+    await ended.settle();
+    expect(spy).not.toHaveBeenCalled();
+
+    const swapped = await slideRoom(["it"]);
+    await swapped.post("deckrows", { deckLang: "en", pages: deckPages });
+    await swapped.settle();
+    expect(spy).toHaveBeenCalledTimes(2); // a replaced deck is translated in the lobby too
     spy.mockRestore();
   });
 
@@ -141,10 +165,13 @@ describe("slide translation in the room", () => {
   });
 
   it("answers a slide number past the deck with no rows rather than an error", async () => {
+    const spy = vi.spyOn(client, "tf").mockResolvedValue({ data: null, live: true, ms: 0, fallback: "error" });
     const t = await slideRoom(["it"]);
     await t.post("deckrows", { deckLang: "en", pages: deckPages });
     const res = await t.listenerGet("slidetr?n=99999&lang=it");
     expect(res.status).toBe(200);
     expect(((await res.json()) as { rows: unknown[] }).rows).toEqual([]);
+    await t.settle();
+    spy.mockRestore();
   });
 });

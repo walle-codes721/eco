@@ -95,7 +95,9 @@ export async function renderPage(pdf, n, width) {
   const scale = (width / base.width) * Math.min(2, devicePixelRatio || 1);
   const vp = page.getViewport({ scale });
   const canvas = h("canvas", { width: Math.floor(vp.width), height: Math.floor(vp.height) });
-  canvas.style.width = "100%";
+  // Match CSS size to the pixels we rendered so a wide parent does not upscale a small bitmap.
+  canvas.style.width = `${width}px`;
+  canvas.style.maxWidth = "100%";
   canvas.style.height = "auto";
   await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
   canvas._pdfBaseH = base.height;
