@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 import { tf, isLive } from "./tf";
-import { MODELS, LANG_NAMES, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt } from "./prompts";
+import { MODELS, LANG_NAMES, cleanTalkContext, type TalkContext, turnModel, utterancePrompt, answerPrompt, customerTurnPrompt, ownerTurnPrompt, summaryPrompt, transcriptText, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, pollPrompt, pollAnswersPrompt, slideRowsPrompt } from "./prompts";
 import { cleanPoll, validVote, pollView, tally, answerLangs, answerCap, type Poll } from "./poll";
 import { lineKey, validReaction, tallyReactions, topLines, type LineReactions } from "./reaction";
 import { allergyContext, hasAllergenInfo, isAllergyQuestion, noAllergenInfo, withStaffLine } from "./safety";
@@ -23,7 +23,8 @@ import { parseSlideTranslation, rowTranslationTexts, slideTargetLangs, slidesToT
 
 type Status = "lobby" | "live" | "ended";
 
-export interface Meta {
+/** Stage rooms also carry the talk context (about, keep) that every translation prompt gets. */
+export interface Meta extends TalkContext {
   id: string;
   mode: "stage" | "counter";
   title: string;
@@ -155,6 +156,7 @@ export class Room extends DurableObject<Env> {
       const want = (["saved", "sample", "phone"] as const).find((v) => v === body.voice) ?? "sample";
       this.meta.voiceMode = want === "saved" && !(owner && (await loadStoredSample(this.env.FILES, savedKey(owner)))) ? "sample" : want;
       this.meta.presetsEnabled = !!body.presetsEnabled;
+      Object.assign(this.meta, cleanTalkContext(body));
     }
     const pages: { tag: string; text: string }[] = (Array.isArray(body.pages) ? body.pages : [])
       .slice(0, 200)
@@ -573,7 +575,7 @@ export class Room extends DurableObject<Env> {
     if (!isLive(this.env)) return; // mock: original words, no API call
     this.slideTransPending.add(n);
     try {
-      const r = await tf(this.env, "slide", MODELS.answer, slideRowsPrompt(m.deckLang ?? DEFAULT_DECK_LANG, langs, phrases), {
+      const r = await tf(this.env, "slide", MODELS.answer, slideRowsPrompt(m.deckLang ?? DEFAULT_DECK_LANG, langs, phrases, m), {
         pub: m.demo,
         mock: () => ({ out: {} }), // not reached: mock rooms return above and keep the original words
       });
@@ -616,7 +618,7 @@ export class Room extends DurableObject<Env> {
     // English is always offered to listeners; the original speech may be in any language.
     // Include it in the same phrase call, with the existing output cap and budget admission.
     const langs = [...new Set(["en", ...m.langs])];
-    const r = await tf(this.env, "utterance", turnModel(input), utterancePrompt(input, langs, prev), {
+    const r = await tf(this.env, "utterance", turnModel(input), utterancePrompt(input, langs, prev, m), {
       pub: m.demo,
       timing,
       mock: () => {
@@ -912,7 +914,7 @@ export class Room extends DurableObject<Env> {
     const langs = [...new Set(["en", ...m.langs])].filter((l) => l !== d.lang);
     const p: Poll = { id: uid(), t: Date.now(), kind: d.kind, lang: d.lang, q: { [d.lang]: d.q }, options: { [d.lang]: d.options }, min: d.min, max: d.max, share: d.share, open: true, answers: [] };
     if (langs.length) {
-      const r = await tf<{ q: Record<string, string>; options: Record<string, string[]> }>(this.env, "poll", MODELS.answer, pollPrompt(d.q, d.options, d.lang, langs), {
+      const r = await tf<{ q: Record<string, string>; options: Record<string, string[]> }>(this.env, "poll", MODELS.answer, pollPrompt(d.q, d.options, d.lang, langs, m), {
         pub: m.demo,
         mock: () => ({ q: Object.fromEntries(langs.map((l) => [l, d.q])), options: Object.fromEntries(langs.map((l) => [l, d.options])) }),
       });
@@ -966,7 +968,7 @@ export class Room extends DurableObject<Env> {
       const want = [...new Set(todo.flatMap((x) => langs.filter((l) => !x.out?.[l])))];
       if (todo.length) {
         const texts = todo.map((x) => String(x.a));
-        const r = await tf<{ out: Record<string, string[]> }>(this.env, "poll", MODELS.answer, pollAnswersPrompt(texts, want, p.share), {
+        const r = await tf<{ out: Record<string, string[]> }>(this.env, "poll", MODELS.answer, pollAnswersPrompt(texts, want, p.share, m), {
           pub: m.demo,
           mock: () => ({ out: Object.fromEntries(want.map((l) => [l, texts])) }),
         });
@@ -1172,7 +1174,7 @@ export class Room extends DurableObject<Env> {
     const m = this.meta!;
     const langs = [...new Set(["en", ...m.langs])];
     try {
-      const r = await tf<Record<string, string>>(this.env, "ask", MODELS.answer, translateAnswerPrompt(answer, langs), {
+      const r = await tf<Record<string, string>>(this.env, "ask", MODELS.answer, translateAnswerPrompt(answer, langs, m), {
         pub: m.demo,
         mock: () => mockTranslations(answer, langs),
       });
