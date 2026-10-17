@@ -51,12 +51,13 @@ const bar = h("header.bar", {}, h("div.inner", {},
   latency, calls,
   h("a.btn.sm", { href: `/${id}/screen`, target: "eco-screen" }, icon("ext"), "Projector"),
   host ? h("a.btn.sm", { href: `/${id}/card` }, "Card") : null,
+  host && !meta.demo ? h("button.btn.sm", { type: "button", onclick: () => setupSheet() }, icon("doc"), "Slides & voice") : null,
   host ? endBtn : null,
 ));
 
-// ---------- left: slides, QR, mic ----------
+// ---------- slides, mic, QR ----------
 const slideNow = h("div.slide-frame");
-const slideNext = h("div.slide-frame.slide-next");
+const slideNext = h("div.slide-frame.slide-next", { title: "Next slide" });
 const slideLabel = h("span.small.muted");
 const prev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous slide", onclick: () => goSlide(meta.slide - 1), disabled: demo }, icon("prev"));
 const next = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(meta.slide + 1), disabled: demo }, icon("next"));
@@ -67,72 +68,75 @@ const spokenLang = h("select", { disabled: !hasSpeechRecognition },
   ...SPOKEN_LANGUAGES.map((l) => h("option", { value: l }, langName(l, "en"))),
 );
 const micState = h("div.small.muted", {}, "Off");
-const micBtn = h("button.mic-btn", { type: "button", onclick: () => toggleMic() },
+const micBtn = h("button.mic-btn", { type: "button", onclick: () => toggleMic(), title: demo ? "30 seconds of live mic. The replay pauses while you talk." : "Eco cuts at your natural pauses. Space toggles the mic." },
   h("span.ico", {}, icon("mic")),
-  h("div", { style: { flex: 1 } }, h("div", { style: { fontWeight: 600 } }, demo ? "Try with your voice" : "Microphone"), micState),
+  h("div", {}, h("div", { style: { fontWeight: 600 } }, demo ? "Try with your voice" : "Microphone"), micState),
+);
+spokenLang.title = hasSpeechRecognition ? "Spoken language. Stop the mic to change it." : "This browser uses audio upload; the language only applies to browser speech recognition.";
+
+// QR box: the audience link, or (Add a speaker) the co-speaker join link.
+const joinUrl = meta.joinKey ? fullUrl(`/${id}/join#j=${meta.joinKey}`) : null;
+const qrBox = h("div.card.center.area-qr");
+const drawQr = (join) => qrBox.replaceChildren(
+  h("div.card-head", {}, h("span.eyebrow", {}, join ? "Add a speaker" : "Audience link"), h("span.spacer"),
+    join ? h("button.btn.sm", { type: "button", onclick: () => drawQr(false) }, "Back") : null),
+  h("div.qr-fit", {}, qrSvg(join ? joinUrl : fullUrl(`/${id}`))),
+  join ? h("p.tiny.muted", {}, "Co-speakers scan this with their own phone and use its mic.") : h("p.url", { style: { fontSize: "14px" } }, shortUrl(`/${id}`)),
+);
+drawQr(false);
+
+const speakersList = h("div.row", { style: { flexWrap: "wrap", gap: "8px" } });
+drawSpeakers = () => speakersList.replaceChildren(...meta.speakers.map((s) =>
+  h(`span.chip${speaking.has(s.id) ? ".speaking" : ""}`, {}, speaking.has(s.id) ? h("span.dot.live") : null, s.name, s.voice ? h("span.faint", { title: "Voice sample saved" }, " · voice") : null)));
+
+const micStrip = h("div.card.mic-strip.area-mic", {},
+  micBtn,
+  h("div.level", {}, level),
+  spokenLang,
+  speakersList,
+  joinUrl ? h("button.btn.sm", { type: "button", onclick: () => drawQr(true) }, icon("plus"), "Add a speaker") : null,
 );
 
-const left = h("div.col-left", {},
-  h("div.card", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, "Slides"), h("span.spacer"), slideLabel, prev, next),
-    slideNow,
-    h("p.tiny.muted", { style: { margin: "12px 0 6px" } }, "Next"),
-    slideNext,
-    deck.pdf || meta.demo ? null : h("p.tiny.faint", { style: { marginTop: "10px" } }, "Showing text slides: no PDF was uploaded for this talk."),
-    host && !meta.demo ? replaceSlides() : null,
-  ),
-  h("div.card", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, demo ? "Your turn" : "Stage input")),
-    h("label.field", {}, "Spoken Language", spokenLang),
-    h("p.tiny.muted", {}, hasSpeechRecognition ? "Choose before starting. Stop the mic to change languages." : "This browser uses audio upload. The language selector only applies to browser speech recognition."),
-    micBtn,
-    h("div.level", { style: { marginTop: "12px" } }, level),
-    h("p.tiny.muted", { style: { marginTop: "10px" } }, demo ? "30 seconds of live mic. The replay pauses while you talk." : "Eco cuts at your natural pauses. Space toggles the mic."),
-  ),
-  h("div.card.center", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, "Audience link")),
-    h("div", { style: { width: "70%", margin: "0 auto" } }, qrSvg(fullUrl(`/${id}`))),
-    h("p.url", { style: { marginTop: "10px", fontSize: "14px" } }, shortUrl(`/${id}`)),
-  ),
-  speakersCard(),
-  host && !demo && meta.voiceMode === "sample" ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
-  host && !demo && meta.voiceMode === "saved" ? h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Your voice")),
-    h("p.small", {}, "This talk uses your saved voice. ", h("a", { href: "/me" }, "Hear or re-record it"), ".")) : null,
-);
-
-// ---------- middle: what you said ----------
-const now = h("div.said");
-const mid = h("div.col-mid", {},
-  h("div.card", { style: { minHeight: "60vh" } },
-    h("div.card-head", {}, h("span.eyebrow", {}, "You said"), h("span.spacer"), h("span.chip", {}, "Original")),
-    now,
-  ),
-);
-
-// ---------- right: the board ----------
-const listenersEl = h("div");
-const topicsEl = h("div");
 const barsEl = h("div");
-const queueEl = h("div");
-const pollsEl = h("div");
-const right = h("div.col-right", {},
-  host ? askCard() : null,
-  h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "In the room")), listenersEl),
-  h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "What they asked")), topicsEl),
-  h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Questions per slide")), barsEl),
-  h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Not in your slides"), h("span.spacer"), h("span.tiny.muted", {}, "answer out loud, then tap")), queueEl),
+const slidesCard = h("div.card.area-slides", {},
+  h("div.card-head", {}, h("span.eyebrow", {}, "Slides"), h("span.spacer"), slideLabel, prev, next),
+  h("div.slide-wrap", {}, h("div.slide-box", {}, slideNow, slideNext)),
+  barsEl,
+  deck.pdf || meta.demo ? null : h("p.tiny.faint", {}, "Showing text slides: no PDF was uploaded for this talk."),
 );
 
-document.body.replaceChildren(...[bar, demo ? h("div.wrap", { style: { maxWidth: "1840px", paddingTop: "16px" } },
+// ---------- transcript ----------
+const now = h("div.said");
+const saidCard = h("div.card.area-said", {},
+  h("div.card-head", {}, h("span.eyebrow", {}, "You said"), h("span.spacer"), h("span.chip", {}, "Original")),
+  now,
+);
+
+// ---------- the board ----------
+const listenersEl = h("div");
+const askedEl = h("div");
+const pollsEl = h("div");
+
+document.body.classList.add("console-page");
+document.body.replaceChildren(...[bar, demo ? h("div.wrap", { style: { maxWidth: "1840px", paddingTop: "12px" } },
   h("div.banner", {}, icon("play"), h("div", {}, h("b", {}, "Demo talk, replaying. "), "Open the audience link on your phone to follow it, ask it a question, and watch the board update. Or press “Try with your voice”."))) : null,
-  h("main.console", {}, left, mid, right)].filter(Boolean));
+  h("main.console", {},
+    h("div.card.area-room", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Who's in the room")), listenersEl),
+    micStrip,
+    h("div.card.area-asked", {}, h("div.card-head", {}, h("span.eyebrow", {}, "What the audience asked")), askedEl),
+    slidesCard,
+    saidCard,
+    host ? askCard() : h("div.card.area-ask", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Ask")), h("p.empty", {}, "Open the presenter link to ask the room.")),
+    qrBox,
+  )].filter(Boolean));
 
 // ---------- rendering ----------
 async function drawSlides() {
   slideLabel.textContent = `${meta.slide} / ${deck.count}`;
   const w = slideNow.clientWidth || 280;
   slideNow.replaceChildren(await deck.render(meta.slide, w));
-  slideNext.replaceChildren(meta.slide < deck.count ? await deck.render(meta.slide + 1, w) : h("p.small.faint", {}, "End of deck"));
+  slideNext.hidden = meta.slide >= deck.count;
+  if (!slideNext.hidden) slideNext.replaceChildren(await deck.render(meta.slide + 1, w));
   prev.disabled = demo || meta.slide <= 1;
   next.disabled = demo || meta.slide >= deck.count;
 }
@@ -165,9 +169,6 @@ function drawBoard() {
         h("div.kv", { style: { padding: "0 0 4px" } }, h("span", {}, langName(l)), h("span.muted.mono", {}, `${n}`)),
         h("div.meter", {}, h("i", { style: { width: `${total ? (n / total) * 100 : 0}%` } })))),
   );
-  topicsEl.replaceChildren(...(board.topics.length
-    ? board.topics.map((t) => h("div.topic", {}, h("span.n", {}, String(t.count)), h("div", {}, h("div", { style: { fontWeight: 600 } }, t.title), h("div.small.muted", {}, `“${t.sample}” · ${t.topic}`))))
-    : [h("p.empty", {}, "Questions from the audience show up here, grouped by the slide that answers them.")]));
   const n = Math.max(deck.count, ...Object.keys(board.bySlide).map(Number));
   const max = Math.max(1, ...Object.values(board.bySlide));
   const hot = Object.entries(board.bySlide).sort((a, b) => b[1] - a[1])[0]?.[0];
@@ -178,16 +179,24 @@ function drawBoard() {
     })),
     h("p.tiny.muted", { style: { marginTop: "8px" } }, hot ? `Slide ${hot} raised the most questions.` : "No questions yet."),
   );
-  queueEl.replaceChildren(...(board.queue.length
-    ? board.queue.map((g) => h(`div.q-item${g.answeredAt != null ? ".done" : ""}`, {},
-        h("span.chip" + (g.count > 1 ? ".red" : ""), {}, String(g.count)),
-        h("div", { style: { flex: 1 } }, h("div", {}, g.q), h("div.tiny.muted", {}, g.langs.map((l) => langName(l)).join(", "))),
-        h("div.row", { style: { gap: "6px", flexShrink: 0 } },
-          g.taught ? h("span.tiny.muted", {}, "Eco learned this ✓")
-            : g.answeredAt != null ? h("span.tiny.muted", {}, `answered ${fmtTime(g.answeredAt)}`) : null,
-          host && !g.taught ? h("button.btn.sm", { type: "button", onclick: () => teachSheet(g) }, icon("plus"), "Answer it") : null,
-          g.answeredAt == null ? h("button.btn.sm", { type: "button", onclick: () => answered(g.qids) }, icon("check"), "Answered") : null)))
-    : [h("p.empty", {}, "When Eco can't answer from your slides, the question lands here.")]));
+  // Needs you first (not in the slides, unanswered), then what the slides answered, then what you already answered.
+  const qItem = (g) => h(`div.q-item${g.answeredAt != null ? ".done" : ""}`, {},
+    h("span.chip" + (g.count > 1 ? ".red" : ""), {}, String(g.count)),
+    h("div", { style: { flex: 1 } }, h("div", {}, g.q), h("div.tiny.muted", {}, g.langs.map((l) => langName(l)).join(", "))),
+    h("div.row", { style: { gap: "6px", flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" } },
+      g.taught ? h("span.tiny.muted", {}, "Eco learned this ✓")
+        : g.answeredAt != null ? h("span.tiny.muted", {}, `answered ${fmtTime(g.answeredAt)}`) : null,
+      host && !g.taught ? h("button.btn.sm", { type: "button", onclick: () => teachSheet(g) }, icon("plus"), "Answer it") : null,
+      g.answeredAt == null ? h("button.btn.sm", { type: "button", onclick: () => answered(g.qids) }, icon("check"), "Answered") : null));
+  const open = board.queue.filter((g) => g.answeredAt == null);
+  const done = board.queue.filter((g) => g.answeredAt != null);
+  askedEl.replaceChildren(...(board.queue.length || board.topics.length ? [
+    open.length ? h("p.tiny.muted.asked-label", {}, "Not in your slides · answer out loud, then tap") : null,
+    ...open.map(qItem),
+    board.topics.length ? h("p.tiny.muted.asked-label", {}, "Answered from your slides") : null,
+    ...board.topics.map((t) => h("div.topic", {}, h("span.n", {}, String(t.count)), h("div", {}, h("div", { style: { fontWeight: 600 } }, t.title), h("div.small.muted", {}, `“${t.sample}” · ${t.topic}`)))),
+    ...done.map(qItem),
+  ].filter(Boolean) : [h("p.empty", {}, "Questions from the audience show up here. The ones your slides don't answer come first.")]));
 }
 
 // ---------- actions ----------
@@ -315,6 +324,16 @@ refreshCalls();
 setInterval(refreshCalls, 15000);
 latency.replaceChildren(h("span.dot"), "— s");
 
+/** Setup that doesn't belong on the live console: swap the deck, record or check the voice. */
+function setupSheet() {
+  const wrap = h("div.sheet-wrap", { onclick: (e) => e.target === wrap && wrap.remove() }, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "560px", width: "100%" } },
+    h("div.row", {}, h("h2", {}, "Slides & voice"), h("span.spacer"), h("button.btn.icon-btn", { type: "button", "aria-label": "Close", onclick: () => wrap.remove() }, icon("x"))),
+    replaceSlides(),
+    meta.voiceMode === "sample" ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
+    meta.voiceMode === "saved" ? h("p.small", {}, "This talk uses your saved voice. ", h("a", { href: "/me" }, "Hear or re-record it"), ".") : null));
+  document.body.append(wrap);
+}
+
 /** Swap the deck before (or between) talks: new PDF to R2, new slide text for answers; notes are kept. */
 function replaceSlides() {
   const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
@@ -340,22 +359,6 @@ function replaceSlides() {
   return h("div", { style: { marginTop: "10px" } }, btn, file);
 }
 
-/** Who is talking, and (host) a QR for a co-speaker to join from their own phone. */
-function speakersCard() {
-  const list = h("div.row", { style: { flexWrap: "wrap", gap: "8px" } });
-  drawSpeakers = () => list.replaceChildren(...meta.speakers.map((s) =>
-    h(`span.chip${speaking.has(s.id) ? ".speaking" : ""}`, {}, speaking.has(s.id) ? h("span.dot.live") : null, s.name, s.voice ? h("span.faint", { title: "Voice sample saved" }, " · voice") : null)));
-  drawSpeakers();
-  const joinUrl = meta.joinKey ? fullUrl(`/${id}/join#j=${meta.joinKey}`) : null;
-  const qr = h("div", { hidden: true, style: { width: "60%", margin: "12px auto 0" } }, joinUrl ? qrSvg(joinUrl) : null);
-  return h("div.card", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, "Speakers"), h("span.spacer"),
-      joinUrl ? h("button.btn.sm", { type: "button", onclick: () => (qr.hidden = !qr.hidden) }, icon("plus"), "Add a speaker") : null),
-    list,
-    joinUrl ? h("div", {}, qr, h("p.tiny.muted", { style: { marginTop: "8px" } }, "Each co-speaker scans this with their own phone and uses its mic. Eco shows who is talking.")) : null,
-  );
-}
-
 /** Ask: the speaker polls the room. They write and read in their own language; listeners in theirs. */
 function askCard() {
   const plangSel = h("select", { "aria-label": "Your language" },
@@ -365,8 +368,8 @@ function askCard() {
   plangSel.onchange = () => (store(`eco:plang:${id}`, plangSel.value), drawPolls());
   spokenLang.addEventListener("change", () => { if (!store(`eco:plang:${id}`) && spokenLang.value) (plangSel.value = spokenLang.value), drawPolls(); });
   askCard.lang = () => plangSel.value;
-  return h("div.card", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, "Ask"), h("span.spacer"),
+  return h("div.card.area-ask", {},
+    h("div.card-head", {}, h("span.eyebrow", {}, "Ask the room"), h("span.spacer"),
       h("button.btn.sm", { type: "button", disabled: meta.demo, onclick: () => pollSheet(plangSel.value) }, icon("plus"), "New question")),
     h("label.field", {}, "Your language", plangSel),
     pollsEl,
