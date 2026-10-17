@@ -1,7 +1,7 @@
 import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me } from "/js/eco.js";
 import { openPdf, pdfPages, pdfDeckRows, renderPage, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
 import { deckPreviewSetup } from "/js/deck-preview.js";
-import { splitScript } from "/js/script.js";
+import { scriptSummary } from "/js/script.js";
 
 const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
 const state = { langs: ["it", "es", "hi"], pages: [], deckPages: [], deckLang: "en", bytes: null, pdf: null };
@@ -12,12 +12,11 @@ const notes = h("textarea", { placeholder: "Things you'll say that aren't on the
 const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
 
 // Teleprompter script: pasted or read from a file, split into phrases on submit. Only the speaker sees it.
-const script = h("textarea", { placeholder: "Paste what you plan to say. Eco shows it to you a few words at a time while you present." });
+const script = h("textarea", { placeholder: "Paste what you plan to say. Eco shows it to you a few words at a time. Mark slide changes with \"Slide 2:\" lines or [next slide] and Eco turns the slide for you; other [notes] show as reminders." });
 const scriptInfo = h("span.small.muted");
 const scriptFile = h("input", { type: "file", accept: ".txt,.md,.pdf,.docx", hidden: true });
 const scriptCount = () => {
-  const n = splitScript(script.value).length;
-  scriptInfo.textContent = n ? `${n} lines` : "";
+  scriptInfo.textContent = scriptSummary(script.value, state.pdf?.numPages);
 };
 script.oninput = scriptCount;
 scriptFile.onchange = async () => {
@@ -60,6 +59,7 @@ async function readPdf(f) {
     state.bytes = new Uint8Array(await f.arrayBuffer());
     const pdf = await openPdf(state.bytes);
     state.pdf = pdf;
+    scriptCount(); // the summary checks cues against the deck size
     state.pages = await pdfPages(pdf);
     state.deckPages = await pdfDeckRows(pdf);
     state.deckLang = "en";
@@ -146,7 +146,7 @@ form.onsubmit = async (e) => {
       method: "POST",
       body: {
         mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs,
-        pages: state.pages, notes: notes.value, voice: state.voice, script: splitScript(script.value),
+        pages: state.pages, notes: notes.value, voice: state.voice, script: script.value,
       },
     });
     if (state.bytes) {

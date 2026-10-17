@@ -63,9 +63,8 @@ const MOCK_LINE = "(Mock mode: Eco heard you. Real transcripts and translations 
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 const uid = () => crypto.randomUUID().slice(0, 8);
 
-/** Teleprompter phrases from the client: at most 2,000 lines of 200 characters. */
-const cleanScript = (v: unknown): string[] =>
-  (Array.isArray(v) ? v : []).slice(0, 2000).map((p) => String(p ?? "").slice(0, 200).trim()).filter(Boolean);
+/** Raw teleprompter script, parsed on the speaker's laptop. Arrays are the first version's stored phrases. */
+const cleanScript = (v: unknown): string => (Array.isArray(v) ? v.join("\n") : String(v ?? "")).slice(0, 50_000).trim();
 
 export class Room extends DurableObject<Env> {
   meta: Meta | null = null;
@@ -79,8 +78,8 @@ export class Room extends DurableObject<Env> {
   summary: Summary | null = null;
   polls: Poll[] = [];
   deckPages: DeckPageRows[] = [];
-  /** Teleprompter phrases. Host only: never in publicMeta, pages or chunks. */
-  script: string[] = [];
+  /** Teleprompter script text. Host only: never in publicMeta, pages or chunks. */
+  script = "";
   slideTranslations: Record<number, Record<string, string[]>> = {};
   private slideTransPending = new Set<number>();
   private summarizing = false;
@@ -107,7 +106,7 @@ export class Room extends DurableObject<Env> {
       this.polls = (s.get("polls") as Poll[]) ?? [];
       this.deckPages = (s.get("deckPages") as DeckPageRows[]) ?? [];
       this.slideTranslations = (s.get("slideTranslations") as typeof this.slideTranslations) ?? {};
-      this.script = (s.get("script") as string[]) ?? [];
+      this.script = cleanScript(s.get("script"));
     });
   }
 

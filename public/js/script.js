@@ -30,6 +30,77 @@ export function splitScript(text) {
   });
 }
 
+const CUE_LINE = /^[\s\-=#*_>\[(]*slide\s+(\d+)\s*(?:[:.\-–—\])]|$)/i; // "--- Slide 3: Title ---", "## Slide 3", "SLIDE 3"
+const NEXT_LINE = /^\W*next slide\W*$/i;
+const BRACKET = /\[([^\]]*)\]|\{([^}]*)\}|\((next slide|advance|click|slide\s+\d+)\)/gi;
+const INLINE_CUE = /^(?:next slide|next|advance|click|slide\s+(\d+))$/i;
+
+/**
+ * The speaker's raw script as teleprompter lines: [{ text, slide, note }].
+ * Slide cues set `slide` for the text after them; [bracketed] notes ride on the line before them,
+ * "--- headings ---" on the line after.
+ * With no cues every slide is null. Text before a first "Slide 1" cue is a preamble and is dropped.
+ */
+export function parseScript(text) {
+  const events = [];
+  for (let l of String(text ?? "").split(/\n/)) {
+    const m = l.match(CUE_LINE);
+    if (m) { events.push({ cue: +m[1] }); continue; }
+    if (NEXT_LINE.test(l)) { events.push({ cue: "next" }); continue; }
+    const head = l.match(/^\s*[-=*_]{2,}\s*(.*?)\s*[-=*_]{2,}\s*$/); // "--- Q&A (if asked) ---" heads the next line
+    if (head) { if (head[1]) events.push({ heading: head[1] }); continue; }
+    if (/^\s*#/.test(l)) continue;
+    l = l.replace(/^\s*\(?\d{1,2}:\d{2}\)?\s*/, "");
+    let at = 0;
+    for (const b of l.matchAll(BRACKET)) {
+      events.push({ text: l.slice(at, b.index) });
+      const inner = (b[1] ?? b[2] ?? b[3]).trim();
+      const c = inner.match(INLINE_CUE);
+      if (c) events.push({ cue: c[1] ? +c[1] : "next" });
+      else if (inner) events.push({ note: inner });
+      at = b.index + b[0].length;
+    }
+    events.push({ text: l.slice(at) });
+  }
+  const first = events.findIndex((e) => "cue" in e);
+  let slide = first < 0 ? null : 1;
+  let cues = 0, notes = 0, sectionStart = 0, pending = "";
+  const lines = [];
+  for (const e of events.slice(first >= 0 && events[first].cue === 1 ? first : 0)) {
+    if ("cue" in e) {
+      slide = e.cue === "next" ? slide + 1 : e.cue;
+      cues++;
+      sectionStart = lines.length;
+    } else if ("heading" in e) {
+      pending = pending ? `${pending} · ${e.heading}` : e.heading;
+    } else if ("note" in e) {
+      notes++;
+      const prev = lines.length > sectionStart ? lines[lines.length - 1] : null;
+      if (prev) prev.note = prev.note ? `${prev.note} · ${e.note}` : e.note;
+      else pending = pending ? `${pending} · ${e.note}` : e.note;
+    } else {
+      for (const t of splitScript(e.text)) {
+        lines.push({ text: t, slide, note: pending });
+        pending = "";
+      }
+    }
+  }
+  return { lines, cues, notes };
+}
+
+/** "112 lines · 9 slide cues · 1 note", plus a warning when cues run past the deck. */
+export function scriptSummary(text, deckCount) {
+  const { lines, cues, notes } = parseScript(text);
+  if (!lines.length) return "";
+  const last = Math.max(0, ...lines.map((l) => l.slide ?? 0));
+  return [
+    `${lines.length} lines`,
+    cues && `${cues} slide cue${cues > 1 ? "s" : ""}`,
+    notes && `${notes} note${notes > 1 ? "s" : ""}`,
+    deckCount && last > deckCount && `cues go to slide ${last}, deck has ${deckCount}`,
+  ].filter(Boolean).join(" · ");
+}
+
 /** Plain text of a .docx: finds word/document.xml in the zip, inflates it natively, one line per paragraph. */
 export async function docxText(buf) {
   const b = new Uint8Array(buf);

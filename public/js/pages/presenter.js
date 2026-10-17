@@ -2,7 +2,7 @@ import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fm
 import { connect } from "/js/live.js";
 import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES } from "/js/mic.js";
 import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
-import { splitScript } from "/js/script.js";
+import { parseScript, scriptSummary } from "/js/script.js";
 import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
@@ -108,39 +108,51 @@ const saidCard = h("div.card.said-card", {},
 );
 
 // ---------- teleprompter: the speaker's own script, one line at a time (host only) ----------
-let script = meta.script ?? [];
-let line = Math.min(Number(store(`eco:prompt:${id}`)) || 0, Math.max(script.length - 1, 0));
+// Lines carry the slide their cue set: stepping across a cue changes the slide, changing the slide jumps here.
+let script = host && !meta.demo ? meta.script ?? "" : "";
+let promptLines = parseScript(script).lines;
+let line = Math.min(Number(store(`eco:prompt:${id}`)) || 0, Math.max(promptLines.length - 1, 0));
 const promptText = h("div.prompter-text");
 const promptCount = h("span.slide-count");
-const lineUp = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous line", onclick: () => goLine(line - 1) }, icon("up"));
-const lineDown = h("button.btn.icon-btn", { type: "button", "aria-label": "Next line", onclick: () => goLine(line + 1) }, icon("down"));
+const lineUp = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous line", onclick: () => goLine(line - 1, true) }, icon("up"));
+const lineDown = h("button.btn.icon-btn", { type: "button", "aria-label": "Next line", onclick: () => goLine(line + 1, true) }, icon("down"));
 const scriptBtn = h("button.btn.icon-btn.ghost", { type: "button", "aria-label": "Edit script", title: "Edit script", onclick: () => scriptSheet() }, icon("text"));
-const promptNav = h("div.prompter-nav", {}, lineUp, promptCount, lineDown);
-const prompter = host && !meta.demo ? h("div.card.prompter-card", {}, promptText, promptNav, scriptBtn) : null;
-function goLine(n) {
-  if (!script.length) {
-    promptNav.hidden = scriptBtn.hidden = true;
+const promptNav = h("div.prompter-nav", {}, lineUp, promptCount, lineDown, scriptBtn);
+const prompter = host && !meta.demo ? h("div.card.prompter-card", {}, promptText, promptNav) : null;
+function goLine(n, step = false) {
+  if (!promptLines.length) {
+    promptNav.hidden = true;
     return promptText.replaceChildren(h("button.btn.prompter-add", { type: "button", onclick: () => scriptSheet() }, icon("plus"), "Add your script"));
   }
-  promptNav.hidden = scriptBtn.hidden = false;
-  line = Math.max(0, Math.min(n, script.length - 1));
+  promptNav.hidden = false;
+  const from = promptLines[line]?.slide;
+  line = Math.max(0, Math.min(n, promptLines.length - 1));
   store(`eco:prompt:${id}`, String(line));
+  const cur = promptLines[line], prev = promptLines[line - 1], next = promptLines[line + 1];
   promptText.replaceChildren(
-    h("div.past", {}, script[line - 1] ?? "\u00a0"),
-    h("div.now", {}, script[line]),
-    h("div.past", {}, script[line + 1] ?? "\u00a0"),
+    cur.note ? h("div.past.note", {}, icon("flag"), cur.note) : h("div.past", {}, prev?.text ?? "\u00a0"),
+    h("div.now", {}, cur.text),
+    h("div.past", {}, next?.slide && next.slide !== cur.slide ? h("span.chip", {}, `Slide ${next.slide}`) : null, next?.text ?? "\u00a0"),
   );
-  promptCount.textContent = `${line + 1} / ${script.length}`;
+  promptCount.textContent = `${line + 1} / ${promptLines.length}`;
   lineUp.disabled = line <= 0;
-  lineDown.disabled = line >= script.length - 1;
+  lineDown.disabled = line >= promptLines.length - 1;
+  // Only a step across a cue moves the slide; loading or saving the script never does.
+  if (step && cur.slide && cur.slide !== from && cur.slide !== meta.slide && cur.slide <= deck.count) goSlide(cur.slide, true);
+}
+/** The slide changed some other way (keys, clicker, co-speaker): jump to that slide's first line. */
+function followSlide(n) {
+  if (!promptLines.length || promptLines[line].slide === n) return;
+  const i = promptLines.findIndex((l) => l.slide === n);
+  if (i >= 0) goLine(i);
 }
 if (prompter) goLine(line);
 
-/** Paste, type or upload the script; saving re-splits it into lines and starts from the top. */
+/** Paste, type or upload the script; saving re-parses it and keeps the current slide. */
 function scriptSheet() {
-  const box = h("textarea", { rows: 12, placeholder: "Paste or type what you plan to say." }, script.join("\n"));
-  const count = h("span.small.muted");
-  const recount = () => (count.textContent = `${splitScript(box.value).length} lines`);
+  const box = h("textarea", { rows: 12, placeholder: "Paste or type what you plan to say. Mark slide changes with \"Slide 2:\" lines or [next slide]; other [notes] show as reminders." }, script);
+  const count = h("span.small.muted.truncate");
+  const recount = () => (count.textContent = scriptSummary(box.value, deck.count));
   box.oninput = recount;
   recount();
   const file = h("input", { type: "file", accept: ".txt,.md,.pdf,.docx", hidden: true });
@@ -159,8 +171,9 @@ function scriptSheet() {
   save.onclick = async () => {
     save.disabled = true;
     try {
-      ({ script } = await api(`/api/rooms/${id}/script`, { method: "POST", key, body: { script: splitScript(box.value) } }));
-      goLine(0);
+      ({ script } = await api(`/api/rooms/${id}/script`, { method: "POST", key, body: { script: box.value } }));
+      promptLines = parseScript(script).lines;
+      goLine(Math.max(0, promptLines.findIndex((l) => l.slide === meta.slide)));
       wrap.remove();
     } catch {
       toast("Couldn't save the script");
@@ -254,11 +267,26 @@ function drawBoard() {
 }
 
 // ---------- actions ----------
-async function goSlide(n) {
+// Slide changes this console sent, oldest first. Sends go one at a time and only the latest, so their ws echoes
+// come back in order and are skipped: fast stepping never bounces back to an old slide.
+const sentSlides = [];
+let syncing = false;
+async function syncSlide() {
+  if (syncing) return;
+  syncing = true;
+  for (let n; n !== meta.slide; ) {
+    n = meta.slide;
+    sentSlides.push(n);
+    await api(`/api/rooms/${id}/slide`, { method: "POST", key, body: { n } }).catch(() => (sentSlides.splice(sentSlides.lastIndexOf(n), 1), toast("Slide not synced")));
+  }
+  syncing = false;
+}
+async function goSlide(n, fromPrompter = false) {
   if (demo || n < 1 || n > deck.count) return;
   meta.slide = n;
+  if (!fromPrompter) followSlide(n);
   drawSlides();
-  api(`/api/rooms/${id}/slide`, { method: "POST", key, body: { n } }).catch(() => toast("Slide not synced"));
+  syncSlide();
 }
 async function setStatus(status) {
   const r = await api(`/api/rooms/${id}/status`, { method: "POST", key, body: { status } }).catch(() => null);
@@ -360,6 +388,7 @@ async function send(blob, cutAt) {
 
 addEventListener("keydown", (e) => {
   if (e.target.closest("input, textarea, select")) return;
+  if (promptLines.length && ["ArrowDown", "ArrowUp"].includes(e.key)) return (e.preventDefault(), goLine(line + (e.key === "ArrowDown" ? 1 : -1), true));
   if (["ArrowRight", "PageDown", "ArrowDown"].includes(e.key)) goSlide(meta.slide + 1);
   if (["ArrowLeft", "PageUp", "ArrowUp"].includes(e.key)) goSlide(meta.slide - 1);
   if (e.code === "Space" && !e.repeat) (e.preventDefault(), toggleMic());
@@ -537,7 +566,11 @@ const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
   }
   if (m.type === "polls") polls = m.polls;
   if (m.type === "line") lines.push(m.line), (lines = lines.slice(-50));
-  if (m.type === "slide") meta.slide = m.n;
+  if (m.type === "slide") {
+    const mine = sentSlides.indexOf(m.n);
+    if (mine >= 0) sentSlides.splice(0, mine + 1); // our own change coming back: we're already past it
+    else (meta.slide = m.n, followSlide(m.n));
+  }
   if (m.type === "status") Object.assign(meta, { status: m.status, startedAt: m.startedAt, endedAt: m.endedAt });
   if (m.type === "board") board = m.board;
   if (m.type === "notice") toast(m.text, 4000);
