@@ -304,6 +304,9 @@ async function refreshCalls() {
   if (!s) return;
   calls.replaceChildren(h("span.dot"), s.live ? (s.max ? `${s.today}/${s.max} calls` : `${s.today} calls`) : "0 calls (mock)");
   calls.className = `pill ${s.tripped ? "mock" : ""}`;
+  // Stopped after 3 failed calls: say why and when Eco tries again, instead of a bare "tripped".
+  if (s.tripped) calls.replaceChildren(h("span.dot"), `Paused · retry ${s.retryAt ? new Date(Math.max(s.retryAt, Date.now())).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "soon"}`);
+  calls.title = s.lastError ? `Last failed call: ${s.lastError.why} (${s.lastError.kind}, ${s.lastError.model})` : "Token Factory calls today";
 }
 refreshCalls();
 setInterval(refreshCalls, 15000);
