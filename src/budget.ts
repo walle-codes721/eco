@@ -2,7 +2,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
 
-import { admit, PRICE, type Kind, type Denied } from "./limits";
+import { admit, probeDue, PROBE_MS, PRICE, type Kind, type Denied } from "./limits";
 export type { Kind, Denied };
 
 export interface CallRecord {
@@ -13,13 +13,18 @@ export interface CallRecord {
   tin: number;
   tout: number;
   pub: boolean;
+  why?: string; // "401: Invalid token" — Token Factory's message, never the key
 }
+type LastError = { t: number; kind: Kind; model: string; status: number; why: string };
 
 export class Budget extends DurableObject<Env> {
   private window: number[] = [];
   private inflight = 0;
   private fails = 0;
   private tripped = false;
+  private trippedAt = 0; // 0 on trips stored before probes existed: the first call after deploy probes
+  private probing = false;
+  private lastError: LastError | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -29,6 +34,8 @@ export class Budget extends DurableObject<Env> {
     ctx.blockConcurrencyWhile(async () => {
       this.tripped = (await ctx.storage.get<boolean>("tripped")) ?? false;
       this.fails = (await ctx.storage.get<number>("fails")) ?? 0;
+      this.trippedAt = (await ctx.storage.get<number>("trippedAt")) ?? 0;
+      this.lastError = (await ctx.storage.get<LastError>("lastError")) ?? null;
     });
   }
 
@@ -48,13 +55,14 @@ export class Budget extends DurableObject<Env> {
     for (;;) {
       const now = Date.now();
       this.window = this.window.filter((t) => now - t < 60_000);
+      const probe = probeDue(this.tripped, this.trippedAt, this.probing, now);
       const reason = admit(
         {
           today: this.count(this.dayStart()),
           max: Number(this.env.ECO_MAX_CALLS ?? 0),
           window: this.window.length,
           inflight: this.inflight,
-          tripped: this.tripped,
+          tripped: this.tripped && !probe,
           pubHour: pub ? this.count(now - 3_600_000, true) : 0,
           pubMax: Number(this.env.ECO_PUBLIC_HOURLY ?? 30),
         },
@@ -64,6 +72,7 @@ export class Budget extends DurableObject<Env> {
       if (!reason) {
         this.window.push(now);
         this.inflight++;
+        if (probe) this.probing = true;
         return { ok: true };
       }
       if ((reason !== "busy" && reason !== "rpm") || Date.now() + 250 > until) return { ok: false, reason };
@@ -77,12 +86,23 @@ export class Budget extends DurableObject<Env> {
       "INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       Date.now(), rec.kind, rec.model, rec.ms, rec.status, rec.tin, rec.tout, rec.pub ? 1 : 0,
     );
-    this.fails = rec.status === 200 ? 0 : this.fails + 1;
-    await this.ctx.storage.put("fails", this.fails); // survives the DO being evicted between calls
-    if (this.fails >= 3) {
-      this.tripped = true; // token rule 8: stop after 3 failures in a row
-      await this.ctx.storage.put("tripped", true);
+    const wasProbe = this.probing;
+    this.probing = false;
+    if (rec.status === 200) {
+      this.fails = 0;
+      if (this.tripped) (this.tripped = false), await this.ctx.storage.put("tripped", false); // the probe worked: live again
+    } else {
+      this.fails++;
+      this.lastError = { t: Date.now(), kind: rec.kind, model: rec.model, status: rec.status, why: (rec.why || String(rec.status)).slice(0, 200) };
+      await this.ctx.storage.put("lastError", this.lastError);
+      if (this.fails >= 3 || wasProbe) {
+        // token rule 8: stop after 3 failures in a row; a failed probe stops again for another PROBE_MS
+        this.tripped = true;
+        this.trippedAt = Date.now();
+        await this.ctx.storage.put({ tripped: true, trippedAt: this.trippedAt });
+      }
     }
+    await this.ctx.storage.put("fails", this.fails); // survives the DO being evicted between calls
   }
 
   async stats() {
@@ -107,6 +127,8 @@ export class Budget extends DurableObject<Env> {
       today: rows.length,
       max: Number(this.env.ECO_MAX_CALLS ?? 0),
       tripped: this.tripped,
+      retryAt: this.tripped ? this.trippedAt + PROBE_MS : null,
+      lastError: this.lastError,
       p50: { utterance: p50("utterance"), ask: p50("ask"), turn: p50("turn"), summary: p50("summary") },
       tokens: { in: ok.reduce((s, r) => s + r.tin, 0), out: ok.reduce((s, r) => s + r.tout, 0) },
       points: Math.round(points * 1e4) / 1e4,
@@ -124,6 +146,7 @@ export class Budget extends DurableObject<Env> {
   async reset(): Promise<void> {
     this.tripped = false;
     this.fails = 0;
+    this.probing = false;
     await this.ctx.storage.put({ tripped: false, fails: 0 });
   }
 }
