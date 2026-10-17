@@ -6,6 +6,7 @@ import { t } from "/js/i18n.js";
 import { captionFor, focusIndex, nearBottom, nextNewCount } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
+import { voiceChip } from "/js/voice-chip.js";
 import { paintSlideRows, showDesignedPage, slideViewToggleVisible } from "/js/slide-repaint.js";
 
 const id = roomId();
@@ -65,10 +66,7 @@ function waitForClip(l) {
   }
   return true;
 }
-function voiceChipLabel() {
-  if (voiceChoice === "speaker" || voiceChoice === "phone") return null;
-  return meta.presets?.find((p) => p.id === voiceChoice)?.label ?? null;
-}
+const voiceChipLabel = (l) => voiceChip(meta.presets, voiceChoice, l, lang);
 addEventListener("pagehide", () => playback.clear());
 
 // ---------- shell ----------
@@ -179,7 +177,7 @@ function drawCaps() {
   }
   const chip = voiceChipLabel();
   caps.replaceChildren(...lines.slice(-50).map((l) => h(keyOf(l) === picked ? "p.picked" : "p", { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
-    chip ? h("span.chip", {}, chip) : null,
+    voiceChipLabel(l) ? h("span.chip", {}, voiceChipLabel(l)) : null,
     !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l),
     reacts[keyOf(l)] ? h("span.emo.my-react", {}, reacts[keyOf(l)]) : null)));
   if (atBottom) caps.scrollTop = caps.scrollHeight;
@@ -308,6 +306,7 @@ function onAudio(m) {
   const l = lines.find((x) => x.seq === m.seq);
   if (l) l.audio = { ...l.audio, ...m.audio };
   playback.audio(m.seq, m.audio);
+  if (l && voiceChipLabel(l)) drawCaps(); // the label appears once the preset clip exists
 }
 
 // The speaker's typed answer in the listener's language once it is translated, otherwise exactly as the speaker typed it.
