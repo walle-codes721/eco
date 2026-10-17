@@ -52,10 +52,10 @@ async function stageRoom() {
 }
 
 describe("voice sample intake at the room boundary", () => {
-  it("shows about fifteen words of script to the speaker, so the reference stays short", async () => {
+  it("shows one short sentence of script to the speaker, so the reference stays short", async () => {
     const words = SAMPLE_TEXT.trim().split(/\s+/);
-    expect(words.length).toBeGreaterThanOrEqual(13);
-    expect(words.length).toBeLessThanOrEqual(17);
+    expect(words.length).toBeGreaterThanOrEqual(6);
+    expect(words.length).toBeLessThanOrEqual(12);
   });
 
   it("accepts recorded WAV and uploaded MP3 when consent is ticked", async () => {
