@@ -9,7 +9,6 @@ const TYPES = {
   restaurant: { label: "Restaurant or café", icon: "store", fields: [HOURS, PAY, ["dietary", "Allergens & dietary", "Gluten-free cones on request. Nuts are used in our kitchen."], ["takeaway", "Takeaway & delivery", "Takeaway boxes 500 g €12, 1 kg €22."]] },
   shop: { label: "Shop", icon: "store", fields: [HOURS, PAY, ["returns", "Returns & exchanges", "Exchanges within 14 days with the receipt."], ["taxfree", "Tax-free shopping", "Tax-free for non-EU residents on purchases over €70."], ["shipping", "Shipping", "We ship within the EU, 3–5 days."]] },
   service: { label: "Service", sub: "salon, massage, studio…", icon: "spark", fields: [HOURS, PAY, ["services", "Services & prices", "Haircut 30 min €25. Colour 90 min from €60."], ["booking", "Booking & cancellation", "Walk-ins welcome. Please cancel 24 hours ahead."]] },
-  other: { label: "Other", icon: "globe", fields: [HOURS, PAY, ["about", "About us", "What you do, in a few lines."]] },
   // Front desk only: Eco shares what the owner writes and never gives medical advice (see src/health.ts).
   pharmacy: { label: "Pharmacy", icon: "store", health: true, fields: [
     ["hours", "Opening hours", "Every day 8:00–20:00. Night service: see the sign on the door."], ["payment", "Payment & insurance", "Cash and cards. Health card accepted."],
@@ -24,6 +23,7 @@ const TYPES = {
     ["departments", "Departments & how to find them", "Radiology: floor 1, follow the blue line. Cafeteria: ground floor."],
     ["payment", "Payment & insurance", "Cards and cash at the cashier on the ground floor."], ["bring", "What to bring", "ID, insurance card and your referral letter."],
     HEALTH_LANGS, HEALTH_WHERE] },
+  other: { label: "Other", icon: "globe", fields: [HOURS, PAY, ["about", "About us", "What you do, in a few lines."]] }, // last: the catch-all
 };
 const OWNER_LANGS = ["it", "en", "es", "fr", "de", "pt", "zh", "ar", "hi"];
 
