@@ -354,8 +354,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
 .col-left { flex: 0 0 280px; } .col-mid { flex: 1; } .col-right { flex: 0 0 310px; }
 .console .card { padding: 16px; min-height: 0; min-width: 0; overflow: auto; flex: none; }
 .console .card.grow { flex: 1; }
-.room-card { max-height: 180px; }
-.room-card .stat { font-size: 30px; }
+.console .room-card { max-height: 180px; }
+.console .room-card .stat { font-size: 30px; }
 /* one laptop screen: the page never scrolls, the panels do */
 @media (min-width: 1100px) {
   body.console-page { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
