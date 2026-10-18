@@ -429,10 +429,10 @@ function syncSlideViewBtn(deckLang = meta.deckLang ?? "en") {
   slideViewBtn.setAttribute("aria-pressed", String(viewDesigned));
 }
 
-/** Never blocks the captions: the section appears once the deck is ready. `fresh` skips the cached copy after a new upload. */
-async function loadSlides(fresh = false) {
+/** Never blocks the captions: the section appears once the deck is ready. */
+async function loadSlides() {
   if (!meta.deck && !meta.slides?.length) return void (slideBox.hidden = true);
-  deck = await deckFor(id, meta, { fresh }).catch(() => null);
+  deck = await deckFor(id, meta).catch(() => null);
   drawSlide();
 }
 
@@ -653,7 +653,7 @@ if (meta.status === "ended") {
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") (meta.slide = m.n), drawSlide();
     if (m.type === "slides") (meta.slides = m.slides), loadSlides();
-    if (m.type === "deck") (meta.deck = true), (slideTr.clear(), loadSlides(true));
+    if (m.type === "deck") (meta.deck = true), (slideTr.clear(), loadSlides());
     if (m.type === "slidetr") (slideTr.delete(m.n), drawSlide());
     if (m.type === "reset") { playback.clear(0); Object.assign(meta, m.meta); lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); drawSlide(); }
     if (m.type === "summary") (summary = m.summary), drawSummary();

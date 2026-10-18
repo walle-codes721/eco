@@ -312,7 +312,7 @@ export class Room extends DurableObject<Env> {
         return isHost || m.demo ? json(m.mode === "stage" ? this.stageCard() : this.counterCard()) : json({ error: "Not allowed" }, 403);
       case "GET deck": {
         const obj = m.deck ? await this.env.FILES.get(`${m.id}/deck.pdf`) : null;
-        return obj ? new Response(obj.body, { headers: { "content-type": "application/pdf", "cache-control": "private, max-age=300" } }) : json({ error: "No slides" }, 404);
+        return obj ? new Response(obj.body, { headers: { "content-type": "application/pdf", "cache-control": "no-store" } }) : json({ error: "No slides" }, 404);
       }
       case "GET audio": {
         const k = (url.searchParams.get("k") ?? "").replace(/[^a-z0-9-]/g, "");

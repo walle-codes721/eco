@@ -121,12 +121,11 @@ export const uploadDeck = (id, bytes, key) =>
   fetch(`/api/rooms/${id}/deck`, { method: "PUT", headers: { "content-type": "application/pdf", ...(key ? { "x-key": key } : {}) }, body: bytes }).then((r) => r.ok);
 
 /** A deck abstraction used by presenter and projector: the uploaded PDF if there is one, text otherwise. */
-export async function deckFor(id, meta, { fresh = false } = {}) {
-  let bytes = fresh ? null : await loadDeck(id);
-  if (!bytes && meta.deck) {
-    bytes = await fetch(`/api/rooms/${id}/deck`).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => b && new Uint8Array(b)).catch(() => null);
-    if (bytes) saveDeck(id, bytes);
-  }
+// Network first: the speaker can replace the deck mid-talk, and a stored copy would keep showing the old one.
+export async function deckFor(id, meta) {
+  let bytes = meta.deck ? await fetch(`/api/rooms/${id}/deck`, { cache: "no-store" }).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => b && new Uint8Array(b)).catch(() => null) : null;
+  if (bytes) saveDeck(id, bytes);
+  else bytes = await loadDeck(id);
   const pdf = bytes ? await openPdf(bytes).catch(() => null) : null;
   const count = pdf ? pdf.numPages : Math.max(1, meta.slides.length);
   return {
