@@ -13,16 +13,18 @@ try {
   throw new Error("no room");
 }
 
-const cid = store(`eco:cid:${id}`) ?? (store(`eco:cid:${id}`, `c${crypto.randomUUID().slice(0, 10)}`), store(`eco:cid:${id}`));
+let cid = store(`eco:cid:${id}`) ?? (store(`eco:cid:${id}`, `c${crypto.randomUUID().slice(0, 10)}`), store(`eco:cid:${id}`));
+let live = null;
 let lang = store(`eco:clang:${id}`) ?? phoneLang();
 let turns = [];
 let open = false;
+let sendError = null; // keep recoverable failure feedback visible until the next send
 const T = (k) => t(lang, k);
 
 const langSel = h("select.lang-select", { "aria-label": "Language" },
   ...[...new Set([lang, ...UI_LANGS, "pt", "zh", "ja", "ko", "ar", "ru"])].map((l) => h("option", { value: l, selected: l === lang }, langName(l, l))));
 const thread = h("div.thread", { "aria-live": "polite" });
-const status = h("p.tiny.muted", { style: { textAlign: "right", minHeight: "16px" } });
+const status = h("p.tiny.muted", { role: "status", style: { textAlign: "right", minHeight: "16px" } });
 const input = h("input", { type: "text", maxlength: 500, enterkeyhint: "send" });
 const form = h("form.ask-box", {}, input, h("button.send", { type: "submit", "aria-label": "Send" }, icon("up")));
 const hold = h("button.hold", { type: "button" }, icon("mic"));
@@ -57,14 +59,18 @@ function draw() {
     if (x.side === "eco") return h("div.bubble.eco", {}, h("div.who", {}, `Eco · ${T("fromList")}${x.cite ? ` · ${x.cite}` : ""}`), x.src);
     return h("div.bubble.them", {}, h("div.who", {}, T("staff")), x.out, x.out !== x.src ? h("div.orig", {}, x.src) : null);
   }));
-  status.textContent = open && turns.at(-1)?.side === "customer" && !turns.at(-1).pending ? `${T("sentToStaff")} ✓` : "";
+  status.textContent = sendError ? T(sendError) : open && turns.at(-1)?.side === "customer" && !turns.at(-1).pending ? `${T("sentToStaff")} ✓` : "";
   scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
 }
 
-function merge(m) {
-  turns = turns.filter((x) => !x.pending);
+function merge(m, pending) {
+  if (m.cid && m.cid !== cid) return; // an old HTTP reply must not restore a deleted chat
+  // Only the HTTP response knows which local request completed. WebSocket
+  // delivery must not discard placeholders belonging to other in-flight sends.
+  turns = turns.filter((x) => x !== pending);
   const fresh = m.turns.filter((x) => !turns.some((y) => y.id === x.id));
-  turns.push(...fresh);
+  const at = turns.findIndex((x) => x.pending);
+  turns.splice(at < 0 ? turns.length : at, 0, ...fresh);
   open = m.open;
   draw();
   for (const x of fresh) {
@@ -74,6 +80,8 @@ function merge(m) {
 }
 
 async function send(payload) {
+  const sendingCid = cid;
+  sendError = null;
   const pending = { side: "customer", src: payload instanceof Blob ? "" : payload, pending: true };
   turns.push(pending);
   draw();
@@ -81,11 +89,16 @@ async function send(payload) {
     const m = payload instanceof Blob
       ? await api(`/api/rooms/${id}/turn`, { method: "POST", body: payload, headers: { "content-type": "audio/wav", "x-side": "customer", "x-cid": cid, "x-lang": lang } })
       : await api(`/api/rooms/${id}/turn`, { method: "POST", body: { side: "customer", cid, lang, text: payload } });
-    merge(m);
+    if (sendingCid !== cid) return;
+    merge(m, pending);
   } catch (err) {
-    turns.splice(turns.indexOf(pending), 1);
+    if (sendingCid !== cid) return;
+    if (err.status === 410 && err.data?.deleted) { resetConversation(sendingCid); return; }
+    turns = turns.filter((x) => x !== pending);
+    if (typeof payload === "string" && !input.value) input.value = payload;
+    sendError = err.status === 429 ? "limit" : "busy";
     draw();
-    toast(err.status === 429 ? T("limit") : T("busy"));
+    toast(T(sendError));
   }
 }
 
@@ -101,6 +114,7 @@ langSel.onchange = () => {
   lang = langSel.value;
   store(`eco:clang:${id}`, lang);
   labels();
+  draw();
 };
 
 function welcome() {
@@ -125,11 +139,34 @@ function welcome() {
 labels();
 draw();
 if (!sessionStorage.getItem(`eco:cjoined:${id}`)) await welcome();
-connect(id, { role: "customer", cid, lang }, (m) => {
-  if (m.type === "hello" && m.convo) {
-    turns = m.convo.turns;
-    open = m.convo.open;
-    draw();
-  }
-  if (m.type === "turns") merge(m);
-});
+function resetConversation(deletedCid) {
+  if (deletedCid !== cid) return;
+  live?.close();
+  cid = `c${crypto.randomUUID().slice(0, 10)}`;
+  store(`eco:cid:${id}`, cid);
+  turns = [];
+  open = false;
+  sendError = null;
+  input.value = "";
+  globalThis.speechSynthesis?.cancel();
+  draw();
+  connectCustomer();
+}
+
+function connectCustomer() {
+  const connectedCid = cid;
+  live = connect(id, { role: "customer", cid, lang }, (m) => {
+    if (connectedCid !== cid) return;
+    if ((m.type === "conversationDeleted" && m.cid === cid) || (m.type === "hello" && m.deleted)) {
+      resetConversation(connectedCid);
+      return;
+    }
+    if (m.type === "hello" && m.convo) {
+      turns = m.convo.turns;
+      open = m.convo.open;
+      draw();
+    }
+    if (m.type === "turns") merge(m);
+  });
+}
+connectCustomer();

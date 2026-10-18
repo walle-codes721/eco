@@ -3,9 +3,11 @@ import { connect } from "/js/live.js";
 import { voice } from "/js/speak.js";
 import { stageAudio } from "/js/stage-audio.js";
 import { t } from "/js/i18n.js";
-import { captionFor, nearBottom, nextNewCount } from "/js/caps.js";
+import { captionFor, nearBottom, nextNewCount, setFocus } from "/js/caps.js";
 import { pollQ, pollOpts, pollResults } from "/js/polls.js";
 import { deckFor } from "/js/slides.js";
+import { voiceChip } from "/js/voice-chip.js";
+import { paintSlideRows, showDesignedPage, slideViewToggleVisible } from "/js/slide-repaint.js";
 
 const id = roomId();
 let meta;
@@ -24,20 +26,62 @@ const myQs = store(`eco:qs:${id}`) ?? [];
 let polls = []; // what the speaker asked: open polls, plus closed ones whose results they shared
 const votes = store(`eco:votes:${id}`) ?? {}; // poll id -> my answer
 const rankDraft = {}; // poll id -> option order, before Send
+const reacts = store(`eco:reacts:${id}`) ?? {}; // `${seq}-${t}` -> my reaction on that Line
+const keyOf = (l) => `${l.seq}-${l.t}`;
+let picked = null; // the Line whose overlay is open
+const REACTIONS = ["👍", "👎", "😂", "🤯", "❤️", "🤔"]; // same list as src/reaction.ts
 const voter = store("eco:voter") ?? ((v) => (store("eco:voter", v), v))(crypto.randomUUID()); // one answer per phone per poll
 let live = null;
 let atBottom = true; // smart follow: pinned to live unless the listener scrolls up
 let newCount = 0; // lines that arrived while reading history
 const T = (k) => t(lang, k);
 const textOf = (l) => captionFor(l, lang).text;
+let voiceChoice = store(`eco:voice:${id}`) ?? "speaker";
 const playback = stageAudio({ play: (...args) => voice.playStage(...args), stop: () => voice.stopStage() });
+
+function voiceOptions() {
+  const opts = [{ v: "speaker", label: "Speaker's voice" }];
+  if (meta.presetsEnabled && meta.presets?.length) opts.push(...meta.presets.map((p) => ({ v: p.id, label: p.label })));
+  opts.push({ v: "phone", label: "Phone voice" });
+  return opts;
+}
+function normalizeVoice() {
+  if (voiceChoice === "speaker" || voiceChoice === "phone") return;
+  if (!meta.presetsEnabled || !meta.presets?.some((p) => p.id === voiceChoice)) voiceChoice = "speaker";
+}
+function audioKeyForChoice() {
+  if (voiceChoice === "phone") return null;
+  if (voiceChoice === "speaker") return lang;
+  return `${lang}@${voiceChoice}`;
+}
+function lineAudioUrl(l) {
+  const key = audioKeyForChoice();
+  return key ? l.audio?.[key] : null;
+}
+function waitForClip(l) {
+  if (l.cue) return false; // HACKATHON: a script line arrives with every clip prep made; none for this voice means the phone speaks now
+  if (voiceChoice === "phone" || !meta.voice) return false;
+  if (voiceChoice === "speaker") {
+    const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
+    return !!sp?.voice;
+  }
+  return true;
+}
+const voiceChipLabel = (l) => voiceChip(meta.presets, voiceChoice, l, lang);
 addEventListener("pagehide", () => playback.clear());
 
 // ---------- shell ----------
 const langSel = h("select.lang-select", { "aria-label": "Language" }, ...choices.map((l) => h("option", { value: l, selected: l === lang }, langName(l, l))));
+const voiceSel = h("select.lang-select", { "aria-label": "Voice" });
+const drawVoiceSel = () => {
+  normalizeVoice();
+  voiceSel.replaceChildren(...voiceOptions().map((o) => h("option", { value: o.v, selected: o.v === voiceChoice }, o.label)));
+};
 const soundBtn = h("button.btn.icon-btn", { type: "button" });
 const titleEl = h("span.title.truncate", {}, meta.title);
-const bar = h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), titleEl, h("span.spacer"), langSel, soundBtn));
+const bar = h("header.bar", {}, h("div.inner", {}, h("a.brand", { href: "/" }, "Eco"), titleEl, h("span.spacer"), langSel, voiceSel, soundBtn));
+normalizeVoice();
+drawVoiceSel();
 const statusRow = h("div.status-row");
 const caps = h("div.captions", { "aria-live": "polite" });
 const summaryBox = h("section", { hidden: true });
@@ -58,18 +102,29 @@ const pollBox = h("section.lst-panel.lst-polls", { hidden: true },
   h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, pollHead, h("span.spacer"), newQBtn),
   h("div.poll-carousel", {}, pollPrev, pollSlot, pollNext), pollDots);
 // The deck: the live slide by default; listeners can page back, never ahead of the speaker.
-const slideHead = h("h2", { style: { fontSize: "20px" } });
 const slideFrame = h("div.slide-frame");
-const slideLabel = h("span.small.muted.mono");
+const slideLabel = h("span.slide-count");
 const slidePrev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous slide", onclick: () => goSlide(view - 1) }, icon("prev"));
 const slideNext = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(view + 1) }, icon("next"));
 const currentBtn = h("button.btn.sm", { type: "button", hidden: true, onclick: () => goSlide(Infinity) });
+let viewDesigned = !!store(`eco:slideDesigned:${id}`);
+const slideViewBtn = h("button.btn.sm", {
+  type: "button",
+  hidden: true,
+  onclick: () => {
+    viewDesigned = !viewDesigned;
+    store(`eco:slideDesigned:${id}`, viewDesigned);
+    syncSlideViewBtn();
+    drawSlide();
+  },
+});
 // Expand: the slide at ~80% of the screen over the dimmed page; Esc or a tap outside closes it.
-const zoomBtn = h("button.btn.icon-btn", { type: "button", onclick: () => zoom(true) }, icon("expand"));
+const zoomBtn = h("button.btn.icon-btn.zoom-btn", { type: "button", onclick: () => zoom(true) }, icon("expand"));
+// No heading: the controls float over the slide, like the presenter's.
 const slideBox = h("section.lst-panel.lst-slides", { hidden: true }, h("div.divider"),
-  h("div.row", { style: { alignItems: "center", marginBottom: "10px" } }, slideHead, h("span.spacer"), currentBtn, zoomBtn),
-  slideFrame,
-  h("div.row", { style: { justifyContent: "center", gap: "12px", marginTop: "10px" } }, slidePrev, slideLabel, slideNext),
+  h("div.lst-slide", {}, slideFrame,
+    h("div.slide-tools", {}, slideViewBtn, currentBtn, zoomBtn),
+    h("div.slide-nav", {}, slidePrev, slideLabel, slideNext)),
   h("div.zoom-back", { onclick: () => zoom(false) }));
 const askSub = h("p.small.muted");
 const askBox = h("section.lst-panel.lst-ask", {},
@@ -94,7 +149,7 @@ function labels() {
   qInput.placeholder = T("askPh");
   askHead.textContent = T("ask");
   pollHead.textContent = T("poll");
-  slideHead.textContent = T("slides");
+  syncSlideViewBtn();
   currentBtn.textContent = T("current");
   newQBtn.textContent = T("newQuestion");
   askSub.textContent = T("fromTalk");
@@ -121,39 +176,102 @@ function drawCaps() {
     caps.replaceChildren(h("div.empty", {}, h("p", { style: { fontSize: "20px", fontWeight: 600, color: "var(--ink)" } }, T("waiting")), h("p.small", { style: { marginTop: "6px" } }, T("waitingSub"))));
     return;
   }
-  caps.replaceChildren(...lines.slice(-50).map((l) => h("p", { onclick: () => showMsg(l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
-    !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l))));
+  caps.replaceChildren(...lines.slice(-50).map((l) => h(`p${keyOf(l) === picked ? ".picked" : ""}${keyOf(l) === focusKey ? ".focus" : ""}`, { onclick: (e) => tapCap(e.currentTarget, l) }, who(meta, l), h("span.when", {}, fmtTime(l.at)),
+    voiceChipLabel(l) ? h("span.chip", {}, voiceChipLabel(l)) : null,
+    !captionFor(l, lang).lang ? h("span.chip", {}, T("original")) : null, textOf(l),
+    reacts[keyOf(l)] ? h("span.emo.my-react", {}, reacts[keyOf(l)]) : null)));
   if (atBottom) caps.scrollTop = caps.scrollHeight;
+  markFocus();
+}
+
+// The big bold line follows the scroll: the bottom-most fully visible line, or the latest while following live.
+// Redraws keep it on the same line (focusKey), so a new line arriving never resizes what you're reading.
+let focusKey = null;
+function markFocus() {
+  if (!lines.length) return; // the waiting message isn't a line
+  const i = setFocus(caps, atBottom);
+  if (i >= 0) focusKey = keyOf(lines.slice(-50)[i]);
+}
+
+// One tap opens the caption; a quick second tap likes it without opening (dblclick is unreliable on phones).
+let tapTimer = 0, tapLine = null;
+function tapCap(el, l) {
+  if (tapTimer && tapLine === l) {
+    clearTimeout(tapTimer), (tapTimer = 0);
+    burst(el, "👍");
+    if (reacts[keyOf(l)] !== "👍") react(l, "👍");
+    return;
+  }
+  clearTimeout(tapTimer);
+  tapLine = l;
+  tapTimer = setTimeout(() => ((tapTimer = 0), showMsg(l)), 250);
+}
+
+async function react(l, r) {
+  const k = keyOf(l), before = reacts[k];
+  r ? (reacts[k] = r) : delete reacts[k];
+  drawCaps();
+  try {
+    await api(`/api/rooms/${id}/react`, { method: "POST", body: { voter, seq: l.seq, t: l.t, r } });
+    store(`eco:reacts:${id}`, Object.fromEntries(Object.entries(reacts).slice(-200)));
+  } catch (err) {
+    before ? (reacts[k] = before) : delete reacts[k];
+    drawCaps();
+    if (err.status !== 404) toast(T("busy")); // 404: the Line has left the room
+  }
+}
+
+function burst(anchor, r) {
+  const b = anchor.getBoundingClientRect();
+  const el = h("span.emo.emo-burst", { style: { left: `${b.left + b.width / 2}px`, top: `${b.top + b.height / 2}px` } }, r);
+  el.addEventListener("animationend", () => el.remove());
+  document.body.append(el);
+  navigator.vibrate?.(10);
 }
 
 // Tap a caption to read it comfortably: same overlay as the welcome sheet, centered.
 function showMsg(l) {
   const textLang = captionFor(l, lang).lang;
   const close = h("button.btn.ghost", { type: "button" }, icon("x"), T("close"));
+  const reactRow = h("div.msg-react");
+  const drawReact = () => reactRow.replaceChildren(...REACTIONS.map((r, i) => [
+    i === 2 ? h("span.msg-react-gap") : null,
+    h("button.toggle.emo", { type: "button", "aria-pressed": String(reacts[keyOf(l)] === r), "aria-label": r, onclick: (e) => {
+      const off = reacts[keyOf(l)] === r;
+      if (!off) burst(e.currentTarget, r);
+      react(l, off ? null : r).then(drawReact);
+      drawReact();
+    } }, r),
+  ]).flat().filter(Boolean));
+  drawReact();
+  picked = keyOf(l);
+  drawCaps();
   const wrap = h("div.sheet-wrap.msg-wrap", { onclick: (e) => { if (e.target === wrap) done(); } },
     h("div.msg-modal", {},
       h("p.msg-meta", {}, who(meta, l), h("span.when", {}, fmtTime(l.at)), h("span.msg-lang", {}, textLang ? langName(textLang, textLang) : T("original"))),
       h("p.msg-text", {}, textOf(l)),
+      reactRow,
       h("div.msg-end", {}, close),
     ));
   const onKey = (e) => { if (e.key === "Escape") done(); };
-  function done() { wrap.remove(); removeEventListener("keydown", onKey); }
+  function done() { wrap.remove(); removeEventListener("keydown", onKey); picked = null; drawCaps(); }
   close.onclick = done;
   addEventListener("keydown", onKey);
   document.body.append(wrap);
 }
 
 function drawJump() {
-  jumpBtn.replaceChildren(`${newCount} ${T("newLines")}`, icon("down"));
-  jumpBtn.classList.toggle("show", !atBottom && newCount > 0);
+  jumpBtn.replaceChildren(...(newCount ? [`${newCount} ${T("newLines")}`] : []), icon("down"));
+  jumpBtn.setAttribute("aria-label", T("latest"));
+  jumpBtn.classList.toggle("show", !atBottom);
 }
 
 function snapToLive() {
   atBottom = true;
   newCount = 0;
   drawJump();
-  if (caps.scrollTo) caps.scrollTo({ top: caps.scrollHeight, behavior: "smooth" });
-  else caps.scrollTop = caps.scrollHeight;
+  caps.scrollTop = caps.scrollHeight; // instant: a smooth scroll's onscroll ticks would flip atBottom back mid-way
+  markFocus();
 }
 
 caps.onscroll = () => {
@@ -163,6 +281,7 @@ caps.onscroll = () => {
   // counting up is addLine's job, so mere scrolling never bumps the count.
   if (atBottom) newCount = 0;
   if (atBottom !== was) drawJump();
+  markFocus();
 };
 
 jumpBtn.onclick = snapToLive;
@@ -178,12 +297,19 @@ function addLine(l) {
   // A speaker with a voice sample: wait briefly for their cloned clip, else the phone speaks.
   const sp = meta.speakers?.find((s) => s.id === (l.speaker ?? "s0"));
   const idx = Math.max(0, meta.speakers?.indexOf(sp) ?? 0);
-  playback.line({ seq: l.seq, text: textOf(l), lang, speaker: idx, url: l.audio?.[lang], wait: meta.voice && sp?.voice, enabled: voice.on });
+  playback.line({
+    seq: l.seq, text: textOf(l), lang, speaker: idx, url: lineAudioUrl(l),
+    audioKey: audioKeyForChoice(),
+    wait: waitForClip(l),
+    enabled: voice.on,
+    cue: !!l.cue,
+  });
 }
 function onAudio(m) {
   const l = lines.find((x) => x.seq === m.seq);
   if (l) l.audio = { ...l.audio, ...m.audio };
   playback.audio(m.seq, m.audio);
+  if (l && voiceChipLabel(l)) drawCaps(); // the label appears once the preset clip exists
 }
 
 // The speaker's typed answer in the listener's language once it is translated, otherwise exactly as the speaker typed it.
@@ -248,6 +374,7 @@ pollSlot.addEventListener("touchend", (e) => {
 // ---------- slides ----------
 let deck = null, view = 1, following = true;
 let drawn = 0; // newest render wins when taps outrun pdf.js
+const slideTr = new Map(); // slide n -> { rows, paints, deckLang }
 
 function goSlide(n) {
   const top = Math.min(meta.slide, deck?.count ?? 1);
@@ -267,7 +394,20 @@ async function drawSlide() {
   currentBtn.hidden = view === top;
   const n = ++drawn;
   const el = await deck.render(view, slideFrame.clientWidth || 360);
-  if (n === drawn) slideFrame.replaceChildren(el);
+  if (n !== drawn) return;
+  if (meta.deck && deck.pdf) {
+    let tr = slideTr.get(view);
+    if (!tr || tr.lang !== lang) {
+      tr = await api(`/api/rooms/${id}/slidetr?n=${view}&lang=${encodeURIComponent(lang)}`).catch(() => null);
+      if (tr) slideTr.set(view, { ...tr, lang });
+    }
+    const deckL = tr?.deckLang ?? meta.deckLang ?? "en";
+    syncSlideViewBtn(deckL);
+    if (!showDesignedPage(lang, deckL, viewDesigned) && tr?.rows?.length && tr.paints?.some((p) => p.paint)) {
+      paintSlideRows(el, tr.rows, tr.paints);
+    }
+  }
+  slideFrame.replaceChildren(el);
 }
 
 function zoom(on) {
@@ -282,6 +422,12 @@ addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft") goSlide(view - 1);
   if (e.key === "ArrowRight") goSlide(view + 1);
 });
+
+function syncSlideViewBtn(deckLang = meta.deckLang ?? "en") {
+  slideViewBtn.hidden = !meta.deck || !slideViewToggleVisible(lang, deckLang);
+  slideViewBtn.textContent = viewDesigned ? T("slideShowTranslated") : T("slideShowDesigned");
+  slideViewBtn.setAttribute("aria-pressed", String(viewDesigned));
+}
 
 /** Never blocks the captions: the section appears once the deck is ready. `fresh` skips the cached copy after a new upload. */
 async function loadSlides(fresh = false) {
@@ -356,6 +502,13 @@ qForm.onsubmit = async (e) => {
   drawQs();
 };
 
+voiceSel.onchange = () => {
+  voiceChoice = voiceSel.value;
+  store(`eco:voice:${id}`, voiceChoice);
+  live?.send({ type: "voice", voice: voiceChoice });
+  drawCaps();
+};
+
 langSel.onchange = () => {
   playback.clear();
   lang = langSel.value;
@@ -368,6 +521,7 @@ langSel.onchange = () => {
   drawJump();
   drawStatus();
   drawPolls();
+  drawSlide(); // repaint from stored paints; do not wait for the next slide or slidetr
 };
 soundBtn.onclick = () => {
   playback.clear();
@@ -405,7 +559,7 @@ async function recap() {
       h("p.eyebrow", {}, T("ended")),
       h("h1", { style: { fontSize: "34px", margin: "8px 0 4px" } }, T("recap")),
       h("p.muted", {}, `${meta.title}${meta.speaker ? ` · ${meta.speaker}` : ""}`),
-      h("div.row", { style: { marginTop: "18px" } }, shareBtn),
+      h("div.row", { style: { marginTop: "18px" } }, shareBtn, h("a.btn", { href: `/${id}/replay` }, icon("play"), T("replay"))),
     ),
     summaryBox,
     h("section", { hidden: !myQs.length }, h("h2", { style: { fontSize: "20px", margin: "12px 0" } }, T("yourQs")), qList),
@@ -462,9 +616,11 @@ if (meta.status === "ended") {
   labels();
   keepAwake();
   loadSlides();
-  live = connect(id, { role: "listener", lang }, (m) => {
+  live = connect(id, { role: "listener", lang, voice: voiceChoice }, (m) => {
     if (m.type === "hello") {
       Object.assign(meta, m.meta);
+      normalizeVoice();
+      drawVoiceSel();
       lines = m.lines ?? [];
       playback.clear(lines.at(-1)?.seq ?? 0);
       polls = m.polls ?? [];
@@ -486,11 +642,19 @@ if (meta.status === "ended") {
     }
     if (m.type === "tally") { const p = polls.find((x) => x.id === m.pid); if (p) (p.tally = m.tally), drawPolls(); }
     if (m.type === "pollclose") (polls = m.poll ? polls.map((x) => (x.id === m.pid ? m.poll : x)) : polls.filter((x) => x.id !== m.pid)), drawPolls();
+    if (m.type === "presets") {
+      meta.presetsEnabled = m.presetsEnabled;
+      meta.presets = m.presets ?? [];
+      normalizeVoice();
+      drawVoiceSel();
+      drawCaps();
+    }
     if (m.type === "speakers") (meta.speakers = m.speakers), drawCaps();
     if (m.type === "speaking") m.on ? speakingNow.add(m.speaker) : speakingNow.delete(m.speaker);
     if (m.type === "slide") (meta.slide = m.n), drawSlide();
     if (m.type === "slides") (meta.slides = m.slides), loadSlides();
-    if (m.type === "deck") (meta.deck = true), loadSlides(true);
+    if (m.type === "deck") (meta.deck = true), (slideTr.clear(), loadSlides(true));
+    if (m.type === "slidetr") (slideTr.delete(m.n), drawSlide());
     if (m.type === "reset") { playback.clear(0); Object.assign(meta, m.meta); lines = []; summary = null; drawCaps(); drawSummary(); snapToLive(); drawSlide(); }
     if (m.type === "summary") (summary = m.summary), drawSummary();
     if (m.type === "status") {

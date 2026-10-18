@@ -1,15 +1,45 @@
-import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me } from "/js/eco.js";
-import { openPdf, pdfPages, renderPage, saveDeck, uploadDeck } from "/js/slides.js";
+import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, me, STAGE_LANGS, MAX_STAGE_LANGS } from "/js/eco.js";
+import { openPdf, pdfPages, pdfDeckRows, renderPage, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
+import { deckPreviewSetup } from "/js/deck-preview.js";
+import { scriptSummary, parseScript } from "/js/script.js";
+import { SAMPLE_TEXT } from "/js/sample-text.js";
 
-const LANGS = ["it", "es", "hi", "fr", "de", "pt", "zh", "ja", "ar"];
-const state = { langs: ["it", "es", "hi"], pages: [], bytes: null };
+const state = { langs: ["it", "es", "hi"], pages: [], deckPages: [], deckLang: "en", bytes: null, pdf: null };
 
 const title = h("input", { type: "text", placeholder: "One engine, two rooms", maxlength: 120, autocomplete: "off" });
 const speaker = h("input", { type: "text", placeholder: "Your name", maxlength: 80, autocomplete: "name" });
 const notes = h("textarea", { placeholder: "Things you'll say that aren't on the slides: numbers, links, answers to likely questions." });
 const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
+
+// Talk context: sent with every translation so terms like "Apple" stay Apple, not Apfel.
+const about = h("textarea", { maxlength: 500, rows: 3, placeholder: "A keynote about Apple's new products. Any language." });
+const aboutCount = h("span.small.muted", {}, "0 / 500");
+about.oninput = () => { aboutCount.textContent = `${about.value.length} / 500`; };
+const keep = h("textarea", { rows: 2, placeholder: "Apple, Vision Pro, Tim Cook" });
+
+// Teleprompter script: pasted or read from a file, split into phrases on submit. Only the speaker sees it.
+const script = h("textarea", { placeholder: "Paste what you plan to say. Eco shows it to you a few words at a time. Mark slide changes with \"Slide 2:\" lines or [next slide] and Eco turns the slide for you; other [notes] show as reminders." });
+const scriptInfo = h("span.small.muted");
+const scriptFile = h("input", { type: "file", accept: ".txt,.md,.pdf,.docx", hidden: true });
+const scriptCount = () => {
+  scriptInfo.textContent = scriptSummary(script.value, state.pdf?.numPages);
+};
+script.oninput = scriptCount;
+scriptFile.onchange = async () => {
+  const f = scriptFile.files[0];
+  scriptFile.value = "";
+  if (!f) return;
+  try {
+    script.value = await scriptFileText(f);
+    scriptCount();
+  } catch (err) {
+    toast(err.message.startsWith("Save") ? err.message : "Couldn't read that file");
+  }
+};
+const scriptUpload = h("button.btn.sm", { type: "button", onclick: () => scriptFile.click() }, icon("doc"), "Upload script");
 const thumbs = h("div.thumbs");
 const deckInfo = h("p.small.muted");
+const deckPreview = h("div");
 const drop = h("div.drop", { role: "button", tabindex: 0 },
   icon("doc"), h("p", { style: { marginTop: "8px", fontWeight: 600, color: "var(--ink)" } }, "Drop your slides (PDF)"),
   h("p.small", {}, "Export from Keynote, PowerPoint or Google Slides. Eco keeps the PDF so the projector and any laptop you present from show your real slides."),
@@ -30,10 +60,15 @@ async function readPdf(f) {
   if (!/pdf$/i.test(f.type) && !/\.pdf$/i.test(f.name)) return toast("That isn't a PDF");
   deckInfo.textContent = "Reading slides…";
   thumbs.replaceChildren();
+  deckPreview.replaceChildren();
   try {
     state.bytes = new Uint8Array(await f.arrayBuffer());
     const pdf = await openPdf(state.bytes);
+    state.pdf = pdf;
+    scriptCount(); // the summary checks cues against the deck size
     state.pages = await pdfPages(pdf);
+    state.deckPages = await pdfDeckRows(pdf);
+    state.deckLang = "en";
     const withText = state.pages.filter((p) => p.text).length;
     deckInfo.textContent = `${f.name} · ${pdf.numPages} slides · text found on ${withText}` + (withText < pdf.numPages / 2 ? ". Some slides are images; add what they say in Notes." : "");
     if (!title.value) title.value = state.pages[0]?.text.split("\n")[0].slice(0, 120) ?? "";
@@ -42,19 +77,27 @@ async function readPdf(f) {
       thumbs.append(slot);
       slot.append(await renderPage(pdf, n, 160));
     }
+    deckPreview.replaceChildren(deckPreviewSetup(thumbs, state.pdf, state.deckPages, {
+      getDeckLang: () => state.deckLang,
+      onLang: (l) => { state.deckLang = l; },
+      onChange: (pages) => { state.deckPages = pages; },
+    }));
   } catch (err) {
     console.error(err);
     state.bytes = null;
     state.pages = [];
+    state.deckPages = [];
+    state.pdf = null;
+    deckPreview.replaceChildren();
     deckInfo.textContent = "Couldn't read that PDF. Try exporting it again.";
   }
 }
 
-const langBtns = LANGS.map((l) => {
+const langBtns = STAGE_LANGS.map((l) => {
   const b = h("button.toggle", { type: "button", "aria-pressed": state.langs.includes(l) ? "true" : "false" }, langName(l, l));
   b.onclick = () => {
     const on = state.langs.includes(l);
-    if (!on && state.langs.length >= 3) return toast("Up to 3 languages");
+    if (!on && state.langs.length >= MAX_STAGE_LANGS) return toast(`Up to ${MAX_STAGE_LANGS} languages`);
     state.langs = on ? state.langs.filter((x) => x !== l) : [...state.langs, l];
     b.setAttribute("aria-pressed", String(!on));
   };
@@ -71,13 +114,20 @@ state.voice = user?.voice ? "saved" : "sample";
 const voices = {
   saved: option("Your saved voice", user?.voice ? "The voice you recorded on your account page. Nothing to record for this talk."
     : h("span", {}, user ? "Record it once on " : "Sign in and record it once on ", h("a", { href: user ? "/me" : "/auth/google?next=/me" }, "your account page"), ", then every talk can use it."), state.voice === "saved", !user?.voice),
-  sample: option("Record for this talk", "Record a 10-second sample from the presenter page (and each co-speaker from theirs). Listeners hear each speaker's cloned voice in their language.", state.voice === "sample"),
+  sample: option("Record for this talk", "Record a short sample from the presenter page (and each co-speaker from theirs). Listeners hear each speaker's cloned voice in their language.", state.voice === "sample"),
   phone: option("Phone voice", "No cloning: each phone reads the translation aloud, a different voice per speaker.", false),
 };
+const sampleScript = h("div", { hidden: state.voice !== "sample", style: { marginTop: "12px" } },
+  h("p.small", {}, "You will read this aloud (just this one sentence) on the presenter page:"),
+  h("blockquote.small", { style: { margin: "6px 0 0", padding: "10px 14px", borderLeft: "3px solid var(--red)", background: "var(--bg-2)", borderRadius: "8px" } }, SAMPLE_TEXT));
+const presetBox = h("input", { type: "checkbox", id: "presets-enabled" });
+const presetField = h("label.check", { style: { marginTop: "12px" } }, presetBox,
+  h("span.small", {}, "Offer the Morgan Freeman, Jack Sparrow and SpongeBob (AI) preset voices (demo only — always labelled synthetic on listeners' phones)."));
 for (const [v, el] of Object.entries(voices)) {
   const pick = () => {
     if (el.getAttribute("aria-disabled") === "true") return;
     state.voice = v;
+    sampleScript.hidden = v !== "sample";
     for (const [k, o] of Object.entries(voices)) o.setAttribute("aria-checked", String(k === v));
   };
   el.onclick = (e) => e.target.closest("a") || pick();
@@ -89,40 +139,60 @@ const section = (head, sub, ...body) =>
   h("section.form-section", {}, h("header", {}, h("h2", {}, head), h("p", {}, sub)), h("div.stack", {}, ...body));
 
 const create = h("button.btn.primary.big", { type: "submit" }, "Create the room", icon("right"));
+// Signed in: save it to your presentations and come back to it another day (its prep keeps going without this page).
+const later = user ? h("button.btn.big", { type: "submit" }, "Save for later") : null;
 const form = h("form", {},
   section("Your talk", "Shown on every listener's phone.", h("label.field", {}, "Title", title), h("label.field", {}, "Speaker", speaker), link.el),
-  section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs),
+  section("Slides", "Eco answers questions only from these and from what you say. Answers cite the slide.", drop, file, deckInfo, thumbs, deckPreview),
+  section("Talk context", "Optional. Helps the translator pick the right meaning.",
+    h("label.field", {}, "About the talk", about, aboutCount),
+    h("label.field", {}, "Words to keep as they are", keep, h("span.small.muted", {}, "Names, brands, product terms. Separate with commas or new lines."))),
   section("Notes", "Optional. Also used to answer questions.", notes),
-  section("Languages", "Up to 3. Listeners pick one when they scan. You speak English.", h("div.lang-grid", {}, langBtns)),
-  section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices))),
-  h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end" } }, create),
+  section("Script", "Optional. Only you see it, as a teleprompter above your slides. Word, PDF or text.", script, h("div.row", { style: { gap: "10px" } }, scriptUpload, scriptFile, scriptInfo)),
+  section("Languages", `Up to ${MAX_STAGE_LANGS}. Listeners pick one when they scan. You speak English.`, h("div.lang-grid", {}, langBtns)),
+  section("Voice", "What listeners hear when they turn sound on.", h("div.stack", { role: "radiogroup", "aria-label": "Voice" }, ...Object.values(voices)), sampleScript, presetField),
+  h("div.row", { style: { padding: "28px 0 80px", justifyContent: "flex-end", gap: "10px" } }, later, create),
 );
 
 form.onsubmit = async (e) => {
   e.preventDefault();
   if (!state.langs.length) return toast("Pick at least one language");
+  const saving = !!later && e.submitter === later;
+  if (later) later.disabled = true;
   create.disabled = true;
   create.firstChild.textContent = "Creating…";
   try {
     const { id, hostKey } = await api("/api/rooms", {
       method: "POST",
-      body: { mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs, pages: state.pages, notes: notes.value, voice: state.voice },
+      body: {
+        mode: "stage", slug: link.value(), title: title.value, speaker: speaker.value, langs: state.langs,
+        pages: state.pages, notes: notes.value, voice: state.voice, script: script.value, presetsEnabled: presetBox.checked,
+        about: about.value, keep: keep.value,
+      },
     });
     if (state.bytes) {
+      create.firstChild.textContent = "Storing slide rows…";
+      await api(`/api/rooms/${id}/deckrows`, { method: "POST", key: hostKey, body: { deckLang: state.deckLang, pages: state.deckPages } });
       await saveDeck(id, state.bytes);
       create.firstChild.textContent = "Uploading slides…";
       if (!(await uploadDeck(id, state.bytes, hostKey))) toast("Slides didn't upload: this laptop will still show them", 4000);
     }
     try { localStorage.setItem(`eco:host:${id}`, hostKey); } catch {}
-    ready(id, hostKey);
+    // HACKATHON mode (on unless turned off on /me): start translating and voicing the script now, once, before the talk.
+    const lines = parseScript(script.value).lines.map((l) => l.text);
+    const prepping = (user?.hackathon ?? true) && lines.length > 0
+      && (await api(`/api/rooms/${id}/prep`, { method: "POST", key: hostKey, body: { lines } }).then(() => true, () => false));
+    if (saving) return void (location.href = "/me");
+    ready(id, hostKey, prepping);
   } catch (err) {
     toast(err.message || "Couldn't create the room");
+    if (later) later.disabled = false;
     create.disabled = false;
     create.firstChild.textContent = "Create the room";
   }
 };
 
-function ready(id, key) {
+function ready(id, key, prepping = false) {
   const listen = `/${id}`;
   const presenter = `/${id}/speak#k=${key}`;
   const copy = (text, label) => h("button.btn", { type: "button", onclick: () => navigator.clipboard.writeText(text).then(() => toast(`${label} copied`)) }, icon("copy"), label);
@@ -131,6 +201,7 @@ function ready(id, key) {
       h("span.pill.ok", {}, h("span.dot"), "Room ready"),
       h("h1", { style: { fontSize: "clamp(32px,5vw,48px)", margin: "18px 0 8px", letterSpacing: "-0.04em" } }, title.value || "Your talk"),
       h("p.muted", {}, "Show this to the room. Listeners scan it and pick their language."),
+      prepping ? h("p.small", {}, h("b", {}, "HACKATHON mode: "), "Eco is translating and voicing your script now. Watch it finish on the presenter page.") : null,
       h("div", { style: { margin: "28px 0 12px" } }, qrSvg(fullUrl(listen))),
       h("p.url", { style: { fontSize: "20px" } }, shortUrl(listen)),
       h("div.row", { style: { justifyContent: "center", flexWrap: "wrap", margin: "32px 0 12px" } },

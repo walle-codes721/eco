@@ -42,6 +42,12 @@ const L = {
   addFile: it ? "Carica file" : "Upload a file",
   addWeb: it ? "Link al sito web" : "Website link",
   cancel: it ? "Annulla" : "Cancel",
+  deleteTitle: it ? "Eliminare la conversazione?" : "Delete conversation?",
+  deleteText: it ? "La chat e i suoi messaggi verranno eliminati per te e per il cliente. Questa azione non può essere annullata. Il menu e le informazioni insegnate a Eco resteranno invariati." : "This chat and its messages will be deleted for you and the customer. This cannot be undone. Your menu and information taught to Eco will stay unchanged.",
+  deleteChat: it ? "Elimina chat" : "Delete chat",
+  deleting: it ? "Eliminazione…" : "Deleting…",
+  deleteFailed: it ? "Impossibile confermare l'eliminazione. Riprova." : "Couldn't confirm deletion. Try again.",
+  close: it ? "Chiudi" : "Close",
   save: it ? "Salva" : "Save",
   saved: it ? "Info salvate" : "Info saved",
   teach: it ? "Insegna a Eco" : "Teach Eco",
@@ -58,6 +64,8 @@ const L = {
 
 let convos = [];
 let active = null;
+const deletedConvos = new Set();
+let deleteDialog = null;
 const ago = (t) => new Intl.RelativeTimeFormat(OL, { numeric: "auto" }).format(Math.round((t - Date.now()) / 60000), "minute");
 
 const soundBtn = h("button.btn.icon-btn", { type: "button", "aria-label": "Sound", onclick: () => { voice.on ? voice.off() : voice.unlock(); drawSound(); } });
@@ -140,18 +148,108 @@ function teachEco(c, t, asked) {
   aIn.focus();
 }
 
+function removeConversation(cid) {
+  deletedConvos.add(cid);
+  convos = convos.filter((c) => c.id !== cid);
+  if (active === cid) {
+    active = convos.slice().sort((a, b) => Number(b.open) - Number(a.open))[0]?.id ?? null;
+    replyIn.value = "";
+  }
+  drawList();
+  drawThread();
+  f2fDraw?.();
+  if (deleteDialog?.cid === cid) deleteDialog.confirm();
+}
+
+async function deleteConversationRequest(cid) {
+  const controller = new AbortController();
+  let timer;
+  try {
+    await Promise.race([
+      api(`/api/rooms/${id}/convo`, { method: "DELETE", key, body: { cid }, signal: controller.signal }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error("Deletion timed out"));
+          controller.abort();
+        }, 15000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function deleteChat(c) {
+  const previousFocus = document.activeElement;
+  let busy = false, closed = false;
+  const dialog = { cid: c.id, confirm: () => done(true) };
+  const error = h("p.small", { role: "alert", style: { color: "var(--red)" } });
+  const cancel = h("button.btn", { type: "button", onclick: () => done() }, L.cancel);
+  const close = h("button.btn.ghost.icon-btn", { type: "button", "aria-label": L.close, onclick: () => done() }, icon("x"));
+  const remove = h("button.btn.red", { type: "button" }, L.deleteChat);
+  const wrap = h("div.sheet-wrap", { onclick: (e) => { if (e.target === wrap) done(); } },
+    h("div.sheet.stack", { role: "dialog", "aria-modal": "true", "aria-labelledby": "delete-chat-title", "aria-describedby": "delete-chat-description", style: { gap: "14px", maxWidth: "480px", width: "100%" } },
+      h("div.row", {}, h("h2", { id: "delete-chat-title" }, L.deleteTitle), h("span.spacer"), close),
+      h("p.small.muted", { id: "delete-chat-description" }, L.deleteText), error,
+      h("div.row", {}, h("span.spacer"), cancel, remove)));
+  function done(force = false) {
+    if (closed || (busy && !force)) return;
+    closed = true;
+    if (deleteDialog === dialog) deleteDialog = null;
+    removeEventListener("keydown", onKey);
+    wrap.remove();
+    if (previousFocus?.isConnected) previousFocus.focus();
+    else listEl.querySelector("button")?.focus();
+  }
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); done(); }
+    if (e.key === "Tab") {
+      const buttons = [close, cancel, remove].filter((b) => !b.disabled);
+      const i = buttons.indexOf(document.activeElement);
+      e.preventDefault();
+      buttons[(i + (e.shiftKey ? buttons.length - 1 : 1)) % buttons.length]?.focus();
+    }
+  };
+  remove.onclick = async () => {
+    if (closed || busy) return;
+    busy = true;
+    remove.disabled = cancel.disabled = close.disabled = true;
+    remove.textContent = L.deleting;
+    error.textContent = "";
+    try {
+      await deleteConversationRequest(c.id);
+      removeConversation(c.id);
+      done(true);
+    } catch {
+      if (closed) return;
+      busy = false;
+      remove.disabled = cancel.disabled = close.disabled = false;
+      remove.textContent = L.deleteChat;
+      error.textContent = L.deleteFailed;
+    }
+  };
+  deleteDialog = dialog;
+  addEventListener("keydown", onKey);
+  document.body.append(wrap);
+  cancel.focus();
+}
+
 function drawList() {
   // Waiting conversations first, and among them an emergency before a medical or allergy question before the rest.
   const urgency = (c) => (!c.open ? 0 : c.turns.some((t) => t.health === "emergency") ? 2 : c.turns.some((t) => t.health || t.allergy) ? 1 : 0);
   const sorted = convos.slice().sort((a, b) => Number(b.open) - Number(a.open) || urgency(b) - urgency(a) || (b.turns.at(-1)?.t ?? 0) - (a.turns.at(-1)?.t ?? 0));
   const item = (c) => {
     const last = c.turns.at(-1);
-    return h("button.convo-item", { type: "button", "aria-current": String(c.id === active), onclick: () => { active = c.id; drawList(); drawThread(); } },
+    return h("div", { style: { position: "relative" } },
+      h("button.convo-item", { type: "button", style: { paddingRight: meta.host && !meta.demo ? "52px" : null }, "aria-current": String(c.id === active), onclick: () => { active = c.id; drawList(); drawThread(); } },
       h("div.top", {}, c.open ? h("span.needs") : null, h("b", {}, langName(c.lang, OL)),
         c.open && c.turns.some((t) => t.health === "emergency") ? h("span.chip.red", {}, `⚠ ${L.urgent}`)
           : c.turns.some((t) => t.allergy || t.health) ? h("span.chip.red", { title: L.allergy }, "⚠") : null,
         h("span.spacer"), last ? ago(last.t) : ""),
-      h("div.last", {}, last ? (last.side === "owner" ? last.src : last.out) : ""));
+      h("div.last", {}, last ? (last.side === "owner" ? last.src : last.out) : "")),
+      meta.host && !meta.demo ? h("button.btn.ghost.icon-btn", { type: "button", "aria-label": L.deleteChat, title: L.deleteChat,
+        style: { position: "absolute", top: "8px", right: "10px", width: "30px", height: "30px" },
+        onclick: (e) => { e.stopPropagation(); deleteChat(c); } }, icon("trash")) : null);
   };
   const open = sorted.filter((c) => c.open);
   listEl.replaceChildren(...[
@@ -171,6 +269,7 @@ function drawThread() {
 }
 
 function addTurns(m) {
+  if (deletedConvos.has(m.cid)) return;
   let c = convos.find((x) => x.id === m.cid);
   if (!c) convos.push((c = { id: m.cid, lang: m.lang, open: m.open, turns: [] }));
   const fresh = m.turns.filter((t) => !c.turns.some((x) => x.id === t.id));
@@ -193,6 +292,7 @@ async function sendOwner(cid, payload) {
       : await api(`/api/rooms/${id}/turn`, { method: "POST", key, body: { side: "owner", cid, text: payload } });
     addTurns(m);
   } catch (err) {
+    if (err.status === 410 && err.data?.deleted) { removeConversation(cid); return; }
     toast(err.status === 503 ? "Eco is busy, try again" : err.message);
   }
 }
@@ -204,13 +304,22 @@ replyForm.onsubmit = (e) => {
   replyIn.value = "";
   sendOwner(active, text);
 };
-bindHold(holdBtn, { onBlob: (b) => active && sendOwner(active, b), onError: () => toast("Microphone blocked"), lang: () => OL });
+function bindOwnerMic(btn) {
+  bindHold(btn, {
+    onStart: () => active,
+    onBlob: (b, cid) => {
+      if (cid && !deletedConvos.has(cid) && convos.some((c) => c.id === cid)) sendOwner(cid, b);
+    },
+    onError: () => toast("Microphone blocked"), lang: () => OL,
+  });
+}
+bindOwnerMic(holdBtn);
 
 // ---------- face to face: one iPad flat on the counter, top half faces the customer ----------
 let f2fDraw = null;
 function faceToFace() {
   voice.unlock();
-  const cid = `f2f-${crypto.randomUUID().slice(0, 8)}`;
+  let cid = `f2f-${crypto.randomUUID().slice(0, 8)}`;
   const CUST_LANGS = ["en", "it", "es", "fr", "de", "pt", "zh", "ja", "ko", "ar", "hi", "ru"];
   let custLang = "en";
   const custSel = h("select.lang-select", {}, ...CUST_LANGS.map((l) => h("option", { value: l }, langName(l, l))));
@@ -221,30 +330,38 @@ function faceToFace() {
   const ownHold = h("button.hold", { type: "button" }, icon("mic"));
   const busy = (b, on) => b.classList.toggle("busy", on);
 
-  const sendCust = async (blob) => {
+  const sendCust = async (blob, targetCid = cid) => {
+    if (targetCid !== cid || deletedConvos.has(targetCid)) return;
     busy(custHold, true);
     try {
-      addTurns(await api(`/api/rooms/${id}/turn`, typeof blob === "string"
-        ? { method: "POST", key, body: { side: "customer", cid, lang: custLang, text: blob } }
-        : { method: "POST", key, body: blob, headers: { "content-type": "audio/wav", "x-side": "customer", "x-cid": cid, "x-lang": custLang } }));
+      const m = await api(`/api/rooms/${id}/turn`, typeof blob === "string"
+        ? { method: "POST", key, body: { side: "customer", cid: targetCid, lang: custLang, text: blob } }
+        : { method: "POST", key, body: blob, headers: { "content-type": "audio/wav", "x-side": "customer", "x-cid": targetCid, "x-lang": custLang } });
+      if (targetCid !== cid || deletedConvos.has(targetCid)) return;
+      addTurns(m);
       const c = convos.find((x) => x.id === cid);
       const eco = c?.turns.at(-1);
       if (eco?.side === "eco") voice.say(eco.src, c.lang);
-    } catch { toast("Eco is busy, try again"); }
-    busy(custHold, false);
+    } catch (err) {
+      if (err.status === 410 && err.data?.deleted) removeConversation(targetCid);
+      else if (targetCid === cid) toast("Eco is busy, try again");
+    } finally { busy(custHold, false); }
   };
-  const sendOwn = async (blob) => {
+  const sendOwn = async (blob, targetCid = cid) => {
+    if (targetCid !== cid || deletedConvos.has(targetCid)) return;
     if (!convos.find((x) => x.id === cid)) return toast(it ? "Prima parla il cliente" : "Let the customer speak first");
     busy(ownHold, true);
-    await sendOwner(cid, blob);
+    await sendOwner(targetCid, blob);
+    if (targetCid !== cid || deletedConvos.has(targetCid)) { busy(ownHold, false); return; }
     const c = convos.find((x) => x.id === cid);
     voice.say(c?.turns.at(-1)?.out, c?.lang);
     busy(ownHold, false);
   };
-  bindHold(custHold, { onBlob: sendCust, lang: () => custLang });
-  bindHold(ownHold, { onBlob: sendOwn, lang: () => OL });
+  bindHold(custHold, { onStart: () => cid, onBlob: sendCust, lang: () => custLang });
+  bindHold(ownHold, { onStart: () => cid, onBlob: sendOwn, lang: () => OL });
 
   f2fDraw = () => {
+    if (deletedConvos.has(cid)) cid = `f2f-${crypto.randomUUID().slice(0, 8)}`;
     const c = convos.find((x) => x.id === cid);
     const turns = c?.turns.slice(-4) ?? [];
     const forCust = (t) => (t.side === "owner" ? t.out : t.src);
@@ -269,11 +386,15 @@ if (new URLSearchParams(location.search).has("split")) faceToFace();
 
 connect(id, { role: "owner", ...(key ? { key } : {}) }, (m) => {
   if (m.type === "hello") {
-    convos = m.convos ?? [];
+    for (const cid of m.deletedConvos ?? []) deletedConvos.add(cid);
+    convos = (m.convos ?? []).filter((c) => !deletedConvos.has(c.id));
     active = convos.slice().sort((a, b) => Number(b.open) - Number(a.open))[0]?.id ?? null;
     drawList();
     drawThread();
+    f2fDraw?.();
+    if (deleteDialog && deletedConvos.has(deleteDialog.cid)) deleteDialog.confirm();
   }
+  if (m.type === "conversationDeleted") removeConversation(m.cid);
   if (m.type === "turns") addTurns(m);
   if (m.type === "taught") {
     const t = convos.find((x) => x.id === m.cid)?.turns.find((x) => x.id === m.tid);

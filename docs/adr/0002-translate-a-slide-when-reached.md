@@ -1,0 +1,5 @@
+# Translate a slide when it is about to be seen
+
+The room knows its languages when the deck is uploaded, so every page could be translated then. Instead the room translates the current slide and the next one: when the PDF and its rows are stored (the speaker's slide is still the first, and listeners may already be waiting in the lobby), whenever the speaker moves to a new slide, and when the talk goes live. Listeners see the original page until that call returns, and they keep the original if the call fails. The room stores the result for every listener, so a slide is never asked for twice. A talk that has ended asks for nothing, and mock mode makes no call.
+
+Translating the whole deck at upload would spend one call per page, including pages the speaker never shows, against the shared daily ceiling. Waiting until the talk goes live would leave listeners reading the untranslated slide while they wait, which is when they most want to understand it; two calls per upload is the cost of avoiding that.

@@ -48,11 +48,51 @@ The stretch of speech between pauses that the Stage captures as one unit — the
 _Avoid_: utterance, sentence, chunk
 
 **Line**:
-One phrase as the room keeps it: who said it, what was said, every translation, and the slide showing at the time. Delivered to everyone in the room.
+One phrase as the room keeps it: who said it, what was said, every translation, and the slide showing at the time. Delivered to everyone in the room. Its translations may arrive one language at a time; the line is complete once every language has arrived or been given up on.
 _Avoid_: caption, message, utterance
 
 **Caption**:
-A line as one listener reads it, in that listener's language.
+A line as one listener reads it, in that listener's language. A listener has no caption for a line until their own language has arrived: they are never shown, or played, another language in its place.
+
+**Reaction**:
+A listener's single emoji on a line (👍 👎 😂 🤯 ❤️ 🤔), chosen by tapping its caption; they can change or clear it. Private to that listener: only the projector shows it, anonymously, and the speaker reads them on the Post-talk card. Not a Poll.
+_Avoid_: like, vote, feedback
+
+**Talk context**:
+What a Stage is about (up to 500 characters, in any language) and the terms every translation keeps verbatim, set by the speaker before the talk. It rides along on each translation call; it never adds one.
+_Avoid_: glossary, brief
+
+**Deck**:
+The speaker's slides for a Stage. Its written words are in one language, English unless the speaker chooses another.
+_Avoid_: presentation, slideshow
+
+**Slide**:
+One page of the deck. On a PDF, the projector shows it as designed, and a listener's phone shows that same page with the written words in their language, except rows the speaker kept. The listener can switch to the designed page and back; the choice stays for the talk. Without a PDF, the page stays in the deck's language.
+_Avoid_: presentation, page, caption, user
+
+**Skipped slide**:
+A slide the speaker marks, while reviewing the deck, so that none of its rows are translated. Every phone shows it as designed, whatever the listener's language, and no translation call is made for it. Its rows stay stored, so the speaker can undo this, and it wins over any row marked kept on that slide.
+_Avoid_: ignored slide, hidden slide
+
+**Row**:
+The written words on a slide that sit together on one baseline. A wide gap on that baseline starts another row. Translated as one string, then painted across that row. A row the speaker marks when uploading the deck stays in the deck's language on every phone.
+_Avoid_: line, text run, fragment, quotation
+
+**Prep**:
+HACKATHON mode, before the talk: every line of the speaker's teleprompter script translated into each room language and voiced in each offered voice, once, and saved. English is voiced from the script as written. Editing the script redoes only the lines that changed; adding a language makes only that language; a new recording of the speaker's voice remakes only their clips.
+_Avoid_: pre-generation, cache
+
+**Cue**:
+HACKATHON mode, live: the speaker presses ↓ as they start the next teleprompter line, and the room plays that line from prep in every listener's language and voice. A cue makes no call. The mic only shows a level; nothing it hears is sent.
+_Avoid_: trigger, match
+
+**Presentation**:
+A Stage saved on the speaker's account, with its deck, talk context, script and prep, ready to give on any day.
+_Avoid_: talk (in the UI), saved talk
+
+**Duplicate**:
+A new Presentation at a new link that starts from the beginning with the same deck, context, script, translations and prepared voices, and nothing that was said. It shares the original's clips, so it makes no call.
+_Avoid_: copy, restart
 
 **Now speaking**:
 The room's live signal of which speaker is talking at this moment, driven by speech detection on each speaker's device, never by an AI call.
@@ -129,7 +169,7 @@ Real model calls, every one through the single client and under the budget.
 _Avoid_: production
 
 **Replay**:
-A recorded take played back as if live — how demo rooms run, and where a room falls back when the network or budget fails. Always announced on screen.
+A recorded take played back as if live — how demo rooms run, where a room falls back when the network or budget fails, and how anyone with its link rewatches an ended Stage (slides, lines in stored cloned clips, questions and reactions at their original times, no new calls). Always announced on screen.
 _Avoid_: demo mode, playback
 
 ## Budget

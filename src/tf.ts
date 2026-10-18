@@ -1,6 +1,7 @@
 // The ONE Token Factory client (CONTRIBUTING.md, token rule 3). Mock unless ECO_LIVE=1 and a key is set.
 import type { Env } from "./env";
 import type { Kind, Denied } from "./budget";
+import { isTranslationKind } from "./limits";
 import { MODELS } from "./prompts";
 import type { TranslationTiming } from "./timing";
 
@@ -18,8 +19,10 @@ export type TfResult<T> =
 
 // Gemma vanished from Token Factory on 15 Oct. Text jobs try it first and fall back to DeepSeek when it's "not supported",
 // then skip it for 10 minutes. When AMD restores it, Eco is back on Gemma with no deploy.
+// Slide row translation tries Gemma → MiMo → DeepSeek so a slow or missing model still paints the listener's slide.
 // ponytail: per-isolate memory, so each Worker isolate pays one free 400 per 10 min; move it into Budget if that ever matters.
 export const TEXT_FALLBACK = "DeepSeek-V4-Flash";
+export const SLIDE_MODELS = [MODELS.answer, MODELS.audio, TEXT_FALLBACK] as const; // Gemma → MiMo → DeepSeek
 const GEMMA_RECHECK_MS = 10 * 60_000;
 // A live phrase gives Gemma GEMMA_LIVE_MS alone, then DeepSeek races it. If DeepSeek wins, Gemma is skipped for GEMMA_SLOW_MS.
 const GEMMA_LIVE_MS = 6_000;
@@ -35,7 +38,7 @@ async function hedged(post: Post, limit: number): Promise<{ res: Response; model
   const stopGemma = new AbortController();
   const gemma = post(MODELS.answer, AbortSignal.any([deadline, stopGemma.signal])).then((res) => ({ res, model: MODELS.answer as string }));
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const early = await Promise.race([gemma, new Promise<null>((r) => (timer = setTimeout(() => r(null), GEMMA_LIVE_MS)))]).finally(() => clearTimeout(timer));
+  const early = await Promise.race([gemma, new Promise<null>((r) => (timer = setTimeout(() => r(null), GEMMA_LIVE_MS)))]).finally(() => { if (timer != null) clearTimeout(timer); });
   if (early) return early;
   const stopDs = new AbortController();
   const ds = post(TEXT_FALLBACK, AbortSignal.any([deadline, stopDs.signal])).then((res) => ({ res, model: TEXT_FALLBACK }));
@@ -52,18 +55,36 @@ async function hedged(post: Post, limit: number): Promise<{ res: Response; model
 
 export const isLive =(env: Env) => env.ECO_LIVE === "1" && !!env.RADEON_API_KEY;
 
+/** Next model in the slide chain, or null when every option has been tried. */
+export function nextSlideModel(current: string): string | null {
+  const i = (SLIDE_MODELS as readonly string[]).indexOf(current);
+  return i >= 0 && i < SLIDE_MODELS.length - 1 ? SLIDE_MODELS[i + 1]! : null;
+}
+
 /** Parses model output that should be JSON, tolerating ```json fences. */
 export function parseJson<T>(content: string): T {
   const s = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "");
   return JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1)) as T;
 }
 
-/** OmniVoice on /audio/speech: one clip in the voice of `refB64` (a WAV). Same gate and log as chat; null = phones speak.
- *  Mock returns null too: no recorded clip, so mock rooms hear the phone voice. No retries: a late clip is useless live. */
-export async function tfSpeech(env: Env, input: string, lang: string, refB64: string, refText: string): Promise<ArrayBuffer | null> {
+/** Why a clip came back null: status 0 = not admitted (no call made), 429 = Token Factory said slow down. */
+export type SpeechStatus = { status: number; retryAfter: number };
+
+/** OmniVoice on /audio/speech: one clip in the voice of `refB64`. Same gate and log as chat; null = phones speak.
+ *  Mock is handled in voiceFor; this runs only live. No retries: a late clip is useless live, and prep retries on its next tick. */
+export async function tfSpeech(
+  env: Env,
+  input: string,
+  lang: string,
+  refB64: string,
+  refText: string,
+  refMime = "audio/wav",
+  kind: "voice" | "prep" = "voice",
+  out?: SpeechStatus,
+): Promise<ArrayBuffer | null> {
   if (!isLive(env)) return null;
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
-  const gate = await budget.acquire("voice", false);
+  const gate = await budget.acquire(kind, false);
   if (!gate.ok) return null;
   const t0 = Date.now();
   let status = 0;
@@ -73,19 +94,21 @@ export async function tfSpeech(env: Env, input: string, lang: string, refB64: st
       method: "POST",
       headers: { authorization: `Bearer ${env.RADEON_API_KEY}`, "content-type": "application/json" },
       // ref_text skips server-side transcription of the sample (~4 s per clip instead of ~17 s).
-      body: JSON.stringify({ model: MODELS.voice, input, language: lang, ref_audio: `data:audio/wav;base64,${refB64}`, ref_text: refText, response_format: "wav" }),
-      signal: AbortSignal.timeout(10_000), // later than this the phone voice already spoke
+      body: JSON.stringify({ model: MODELS.voice, input, language: lang, ref_audio: `data:${refMime};base64,${refB64}`, ref_text: refText, response_format: "mp3" }), // mp3 is far smaller than wav for a phone to download
+      signal: AbortSignal.timeout(12_000), // keep in sync with CLONE_WAIT_MS in public/js/stage-audio.js
     });
     status = res.status;
+    if (out) (out.status = status), (out.retryAfter = Number(res.headers.get("retry-after") ?? 0) * 1000);
     if (status === 200) return await res.arrayBuffer();
     why = `${status}: ${(await res.text().catch(() => "")).slice(0, 160)}`;
     console.warn("tf voice failed", why);
     return null;
   } catch {
     status = status || 599;
+    if (out) out.status = status;
     return null;
   } finally {
-    await budget.finish({ kind: "voice", model: MODELS.voice, ms: Date.now() - t0, status, tin: 0, tout: 0, pub: false, why });
+    await budget.finish({ kind, model: MODELS.voice, ms: Date.now() - t0, status, tin: 0, tout: 0, pub: false, why });
   }
 }
 
@@ -97,10 +120,11 @@ export async function tf<T>(
   opts: { pub: boolean; mock: () => T; timing?: TranslationTiming },
 ): Promise<TfResult<T>> {
   if (!isLive(env)) return { data: opts.mock(), live: false, ms: 0 };
-  if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = TEXT_FALLBACK;
+  // Gemma missing from the catalog: other jobs jump to DeepSeek; slide jobs start at MiMo so DeepSeek stays last.
+  if (model === MODELS.answer && Date.now() < gemmaMissingUntil) model = kind === "slide" ? MODELS.audio : TEXT_FALLBACK;
 
   const budget = env.BUDGET.get(env.BUDGET.idFromName("global"));
-  const translation = kind === "utterance" || kind === "turn";
+  const translation = isTranslationKind(kind);
   const admissionAt = Date.now();
   const gate = await budget.acquire(kind, opts.pub, translation ? 1500 : 0);
   if (opts.timing) opts.timing.budgetMs = Date.now() - admissionAt;
@@ -118,6 +142,7 @@ export async function tf<T>(
       const measured = { model, status: 0, ms: 0 };
       opts.timing?.attempts.push(measured);
       let retryMs = 0;
+      let stop = false;
       try {
         const post = (m: string, signal: AbortSignal) =>
           fetch(`${BASE}/chat/completions`, {
@@ -131,7 +156,8 @@ export async function tf<T>(
             }),
             signal,
           });
-        const limit = kind === "extract" ? 60_000 : kind === "summary" || kind === "poll" ? 30_000 : 15_000; // a 4-language summary writes ~1,000 tokens
+        // a 4-language summary writes ~1,000 tokens; a slide is translated a slide ahead, so it can take longer than live speech
+        const limit = kind === "extract" ? 60_000 : kind === "slide" ? 45_000 : kind === "summary" || kind === "poll" || kind === "script" ? 30_000 : 15_000;
         let res: Response;
         if (translation && model === MODELS.answer) ({ res, model } = await hedged(post, limit));
         else res = await post(model, AbortSignal.timeout(limit));
@@ -155,6 +181,7 @@ export async function tf<T>(
           content = typeof value === "string" ? value : "";
           finishReason = j.choices[0]?.finish_reason;
           usage = j.usage ?? usage;
+          stop = true;
         } else {
           // Gateway errors are {"error":{...}}, platform errors {"detail":{"error":{...}}}. Never includes the key.
           const body = await res.text().catch(() => "");
@@ -167,20 +194,36 @@ export async function tf<T>(
           // Gemma off the catalog: same request on the fallback, no retry. This 400 never reaches finish(), so it can't trip the stop.
           if (status === 400 && model === MODELS.answer && /not supported/i.test(msg)) {
             gemmaMissingUntil = Date.now() + GEMMA_RECHECK_MS;
-            model = TEXT_FALLBACK;
+            model = kind === "slide" ? MODELS.audio : TEXT_FALLBACK;
             why = "";
             continue;
           }
+          const next = kind === "slide" ? nextSlideModel(model) : null;
+          if (next) {
+            model = next;
+            why = "";
+            status = 0;
+            continue;
+          }
+          stop = true;
         }
-        break;
+      } catch (e) {
+        status = status || 599; // timeout or network
+        why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
+        const next = kind === "slide" ? nextSlideModel(model) : null;
+        if (next) {
+          model = next;
+          why = "";
+          status = 0;
+          continue;
+        }
+        stop = true;
       } finally {
         // Provider round trip and body decoding; excludes explicit retry sleeps.
         measured.ms = Date.now() - attemptAt - retryMs;
       }
+      if (stop) break;
     }
-  } catch (e) {
-    status = status || 599; // timeout or network
-    why = why || `${status}: ${(e as Error).name === "TimeoutError" ? "timed out" : "network error"}`;
   } finally {
     const accountingAt = Date.now();
     await budget.finish({
@@ -205,13 +248,19 @@ export async function tf<T>(
   if (kind === "utterance" && finishReason && finishReason !== "stop") {
     return { data: null, live: true, ms, fallback: "error", why: `incomplete phrase output (${finishReason})`, invalidOutput: true };
   }
+  // Older gateway responses/fixtures can omit completion metadata. Absence is
+  // not itself truncation: still require complete JSON and Counter field validation.
+  // Explicit non-stop reasons, or an exhausted cap without a reason, fail closed.
+  if (kind === "turn" && (finishReason != null ? finishReason !== "stop" : usage.completion_tokens >= req.max_tokens)) {
+    return { data: null, live: true, ms, fallback: "error", why: `incomplete Counter output (${finishReason ?? "unknown"})`, invalidOutput: true };
+  }
   try {
     // Phrase evidence must be a complete response, not a JSON fragment extracted
     // from a malformed wrapper. Keep the existing parser for other job types.
-    const data = kind === "utterance"
+    const data = kind === "utterance" || kind === "turn"
       ? JSON.parse(content.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "")) as T
       : parseJson<T>(content);
-    if (kind === "utterance" && (!data || typeof data !== "object" || Array.isArray(data))) throw new Error("Expected phrase object");
+    if ((kind === "utterance" || kind === "turn") && (!data || typeof data !== "object" || Array.isArray(data))) throw new Error("Expected response object");
     return { data, live: true, ms };
   } catch {
     why = content ? "model didn't return JSON" : "model returned nothing";

@@ -223,10 +223,26 @@ describe("Stage playback completion", () => {
     expect(done).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back once if a clip fails before playing, including duplicate failure signals", async () => {
+  it("retries a clip that fails before playing once, and plays it", async () => {
     const { voice, clip, synth } = await browser();
+    clip.play.mockClear();
     clip.play.mockRejectedValueOnce(new Error("download failed"));
+    const playing = voice.playStage("One", "en", "/one.wav");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(clip.play).toHaveBeenCalledTimes(2);
+    expect(clip.src).toBe("/one.wav");
+    clip.onplaying!();
+    clip.onended!();
+    await playing;
+    expect(synth.speak).not.toHaveBeenCalled();
+  });
+
+  it("falls back once if a clip fails twice before playing, including duplicate failure signals", async () => {
+    const { voice, clip, synth } = await browser();
+    clip.play.mockRejectedValueOnce(new Error("download failed")).mockRejectedValueOnce(new Error("download failed"));
     const playing = voice.playStage("One", "en", "/one.wav", 2);
+    clip.onerror!();
     clip.onerror!();
     await Promise.resolve();
     expect(synth.speak).toHaveBeenCalledTimes(1);
@@ -264,5 +280,42 @@ describe("Stage playback completion", () => {
     expect(synth.speak.mock.calls[0][0].lang).toBe("it-IT");
     synth.speak.mock.calls[0][0].onerror();
     await playing;
+  });
+
+  it("unlocks by playing a real (silent) sound in the tap, which iOS needs before later clips", async () => {
+    const { clip } = await browser();
+    expect(clip.src).toMatch(/^blob:/);
+    expect(clip.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("plays preset clips from a language-and-voice audio key", async () => {
+    vi.useFakeTimers();
+    const { voice, clip } = await browser();
+    // @ts-expect-error browser module
+    const { stageAudio } = await import("../public/js/stage-audio.js");
+    const queue = stageAudio({ play: (...args: unknown[]) => voice.playStage(...args), stop: () => voice.stopStage() });
+    const key = "es@morgan-freeman";
+    queue.line({ seq: 1, text: "Hola", lang: "es", audioKey: key, enabled: true, wait: true });
+    queue.audio(1, { [key]: "/preset-es.wav" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clip.src).toBe("/preset-es.wav");
+    vi.useRealTimers();
+  });
+
+  it("falls back to phone speech when a preset clip never arrives", async () => {
+    vi.useFakeTimers();
+    const { voice, clip, synth } = await browser();
+    // @ts-expect-error browser module
+    const { CLONE_WAIT_MS, stageAudio } = await import("../public/js/stage-audio.js");
+    const queue = stageAudio({ play: (...args: unknown[]) => voice.playStage(...args), stop: () => voice.stopStage() });
+    queue.line({ seq: 1, text: "Hola", lang: "es", audioKey: "es@morgan-freeman", enabled: true, wait: true });
+    await vi.advanceTimersByTimeAsync(CLONE_WAIT_MS - 1);
+    expect(synth.speak).not.toHaveBeenCalled();
+    expect(clip.src).toMatch(/^blob:/); // only the unlock's silence was loaded while waiting
+    await vi.advanceTimersByTimeAsync(1);
+    expect(clip.src).toBeFalsy(); // phone fallback releases the audio element
+    expect(clip.play).toHaveBeenCalledTimes(1); // no missing preset clip was played
+    expect(synth.speak).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { chunkPages, selectContext, bm25, normalize, bestSentence, slidePages, teach, tokensOf, TAUGHT_TAG } from "../src/retrieve";
-import { admit, countsTowardStop, probeDue, PROBE_MS } from "../src/limits";
+import { admit, countsTowardStop, isTranslationKind, isVoiceKind, probeDue, PROBE_MS, VOICE_CLIPS_IN_FLIGHT, VOICE_RPM } from "../src/limits";
 import { parseJson } from "../src/tf";
-import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations } from "../src/prompts";
+import { transcriptText, summaryPrompt, mockSummary, translateAnswerPrompt, cleanTranslations, mockTranslations, slideRowsPrompt } from "../src/prompts";
 import { DEMO_SLIDES, DEMO_SHOP } from "../src/fixtures/demo";
 // @ts-expect-error plain browser module, tested in Node
-import { Cutter, encodeWav, resample } from "../public/js/vad.js";
+import { Cutter, encodeWav, resample, trimSilence } from "../public/js/vad.js";
 
 const deck = chunkPages(DEMO_SLIDES);
 const shop = chunkPages(DEMO_SHOP.sources);
@@ -73,6 +73,41 @@ describe("budget admission", () => {
     expect(admit({ ...base, today: 50 }, "summary", false)).toBe("ceiling");
     expect(admit({ ...base, tripped: true }, "summary", false)).toBe("tripped");
     expect(admit({ ...base, inflight: 3 }, "summary", false)).toBe("busy");
+  });
+  it("treats a slide translation as translation: it gets the reserved last slots, and obeys every other limit", () => {
+    expect(admit({ ...base, window: 10 }, "slide", false)).toBeNull();
+    expect(admit({ ...base, window: 12 }, "slide", false)).toBe("rpm");
+    expect(admit({ ...base, today: 50 }, "slide", false)).toBe("ceiling");
+    expect(admit({ ...base, tripped: true }, "slide", false)).toBe("tripped");
+    expect(admit({ ...base, inflight: 3 }, "slide", false)).toBe("busy");
+    expect(isTranslationKind("slide")).toBe(true);
+    expect(isTranslationKind("ask")).toBe(false);
+  });
+  it("keeps voice in its own lane so translation concurrency stays available", () => {
+    expect(isVoiceKind("voice")).toBe(true);
+    expect(admit({ ...base, inflight: 3 }, "voice", false)).toBeNull();
+    expect(admit({ ...base, inflight: 0, voiceInflight: VOICE_CLIPS_IN_FLIGHT }, "voice", false)).toBe("busy");
+    expect(admit({ ...base, inflight: 3 }, "utterance", false)).toBe("busy");
+    expect(admit({ ...base, inflight: 3, voiceInflight: VOICE_CLIPS_IN_FLIGHT }, "utterance", false)).toBe("busy");
+  });
+  it("caps voice rpm separately from translation", () => {
+    expect(admit({ ...base, voiceWindow: VOICE_RPM - 1 }, "voice", false)).toBeNull();
+    expect(admit({ ...base, voiceWindow: VOICE_RPM }, "voice", false)).toBe("rpm");
+    expect(admit({ ...base, window: 10 }, "utterance", false)).toBeNull();
+  });
+});
+
+describe("slide rows prompt", () => {
+  it("asks for one string per row in every target language, in one call, with a bounded output", () => {
+    const p = slideRowsPrompt("en", ["it", "hi"], ["Hello", "World"]);
+    const system = String((p.messages[0] as { content: string }).content);
+    expect(system).toContain("exactly 2 rows");
+    expect(system).toContain("Italian");
+    expect(system).toContain("Hindi");
+    expect(system).toContain('"it": string[]');
+    expect(String((p.messages[1] as { content: string }).content)).toBe('["Hello","World"]'); // no "1. ": models copy the numbers
+    expect(p.response_format).toEqual({ type: "json_object" });
+    expect(p.max_tokens).toBeLessThanOrEqual(1200);
   });
 });
 
@@ -294,6 +329,13 @@ describe("phrase cutter", () => {
     expect(wav.size).toBe(44 + 32000);
     expect(resample(new Float32Array(48000), 48000).length).toBe(16000);
   });
+  it("trims the silence around a voice sample, keeping 0.15 s each side", () => {
+    const rate = 24000;
+    const x = new Float32Array(rate * 3); // 1 s silence, 1 s voice, 1 s silence
+    for (let i = rate; i < rate * 2; i++) x[i] = 0.3 * Math.sin(i / 5);
+    expect(trimSilence(x, rate).length / rate).toBeCloseTo(1.3, 1);
+    expect(trimSilence(new Float32Array(rate), rate).length).toBe(rate); // all quiet: left as it is
+  });
 });
 
 import { signSub, signedSub } from "../src/auth";
@@ -361,7 +403,7 @@ describe("multiple speakers", () => {
 });
 
 // @ts-expect-error plain browser module, tested in Node
-import { nearBottom, nextNewCount } from "../public/js/caps.js";
+import { focusIndex, nearBottom, nextNewCount } from "../public/js/caps.js";
 
 describe("caption scroll position", () => {
   const view = (scrollTop: number, scrollHeight: number, clientHeight: number) => ({ scrollTop, scrollHeight, clientHeight });
@@ -394,9 +436,62 @@ describe("new-lines pill counter", () => {
 });
 
 import { vi } from "vitest";
-import { tf, TEXT_FALLBACK } from "../src/tf";
+import { tf, TEXT_FALLBACK, nextSlideModel, SLIDE_MODELS } from "../src/tf";
 
 describe("Gemma fallback (fetch mocked, no real calls)", () => {
+  it("walks the slide chain Gemma → MiMo → DeepSeek", () => {
+    expect(SLIDE_MODELS).toEqual([MODELS.answer, MODELS.audio, TEXT_FALLBACK]);
+    expect(nextSlideModel(MODELS.answer)).toBe(MODELS.audio);
+    expect(nextSlideModel(MODELS.audio)).toBe(TEXT_FALLBACK);
+    expect(nextSlideModel(TEXT_FALLBACK)).toBeNull();
+  });
+
+  it("retries a slide translation on MiMo when Gemma times out", async () => {
+    const finished: { model: string; status: number }[] = [];
+    const env = {
+      ECO_LIVE: "1",
+      RADEON_API_KEY: "test",
+      BUDGET: { idFromName: () => "g", get: () => ({ acquire: async () => ({ ok: true }), finish: async (r: { model: string; status: number }) => void finished.push(r) }) },
+    } as never;
+    const sent: string[] = [];
+    const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"out":{"it":["Ciao"]}}' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }));
+    vi.stubGlobal("fetch", async (_u: string, init: { body: string }) => {
+      const model = JSON.parse(init.body).model;
+      sent.push(model);
+      if (model === MODELS.answer) throw new DOMException("The operation timed out.", "TimeoutError");
+      return ok();
+    });
+    const req = slideRowsPrompt("en", ["it"], ["Hello"]);
+    const r = await tf(env, "slide", MODELS.answer, req, { pub: false, mock: () => ({ out: {} }) });
+    expect(r.data).toEqual({ out: { it: ["Ciao"] } });
+    expect(sent).toEqual([MODELS.answer, MODELS.audio]);
+    expect(finished).toEqual([expect.objectContaining({ model: MODELS.audio, status: 200 })]);
+    vi.unstubAllGlobals();
+  });
+
+  it("falls through to DeepSeek when Gemma and MiMo both fail a slide translation", async () => {
+    const finished: { model: string; status: number }[] = [];
+    const env = {
+      ECO_LIVE: "1",
+      RADEON_API_KEY: "test",
+      BUDGET: { idFromName: () => "g", get: () => ({ acquire: async () => ({ ok: true }), finish: async (r: { model: string; status: number }) => void finished.push(r) }) },
+    } as never;
+    const sent: string[] = [];
+    const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"out":{"it":["Ciao"]}}' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }));
+    vi.stubGlobal("fetch", async (_u: string, init: { body: string }) => {
+      const model = JSON.parse(init.body).model;
+      sent.push(model);
+      if (model === TEXT_FALLBACK) return ok();
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    });
+    const req = slideRowsPrompt("en", ["it"], ["Hello"]);
+    const r = await tf(env, "slide", MODELS.answer, req, { pub: false, mock: () => ({ out: {} }) });
+    expect(r.data).toEqual({ out: { it: ["Ciao"] } });
+    expect(sent).toEqual([MODELS.answer, MODELS.audio, TEXT_FALLBACK]);
+    expect(finished).toEqual([expect.objectContaining({ model: TEXT_FALLBACK, status: 200 })]);
+    vi.unstubAllGlobals();
+  });
+
   it("answers on DeepSeek when Gemma is 'not supported', without counting a failure, then skips Gemma", async () => {
     const finished: { model: string; status: number }[] = [];
     const env = {
@@ -468,9 +563,35 @@ import { sampleKey } from "../src/voice";
 describe("voice samples", () => {
   const room = { id: "stage/seb/talk", owner: "g123" };
   it("uses the account's saved voice only for the host of a saved-voice room", () => {
-    expect(sampleKey({ ...room, voiceMode: "saved" }, "s0")).toBe("users/g123/voice.wav");
-    expect(sampleKey({ ...room, voiceMode: "saved" }, "s1")).toBe("stage/seb/talk/voice/s1.wav");
-    expect(sampleKey({ ...room, voiceMode: "sample" }, "s0")).toBe("stage/seb/talk/voice/s0.wav");
-    expect(sampleKey({ ...room, owner: "", voiceMode: "saved" }, "s0")).toBe("stage/seb/talk/voice/s0.wav");
+    expect(sampleKey({ ...room, voiceMode: "saved" }, "s0")).toBe("users/g123/voice");
+    expect(sampleKey({ ...room, voiceMode: "saved" }, "s1")).toBe("stage/seb/talk/voice/s1");
+    expect(sampleKey({ ...room, voiceMode: "sample" }, "s0")).toBe("stage/seb/talk/voice/s0");
+    expect(sampleKey({ ...room, owner: "", voiceMode: "saved" }, "s0")).toBe("stage/seb/talk/voice/s0");
+  });
+});
+
+describe("bolded caption while scrolling", () => {
+  const rects = [{ top: 0, bottom: 40 }, { top: 50, bottom: 90 }, { top: 100, bottom: 140 }];
+  it("bolds the latest line when following live", () => {
+    expect(focusIndex(rects, 60, true)).toBe(2);
+  });
+  it("bolds the bottom-most fully visible line when scrolled back", () => {
+    expect(focusIndex(rects, 95, false)).toBe(1);
+    expect(focusIndex(rects, 141, false)).toBe(2);
+  });
+  it("keeps the current line while it's on screen and nothing below it fits", () => {
+    expect(focusIndex(rects, 120, false, 2)).toBe(2);
+  });
+  it("moves on once the current line scrolls out of view", () => {
+    expect(focusIndex(rects, 95, false, 2)).toBe(1);
+  });
+  it("moves down to a line below that comes fully into view", () => {
+    expect(focusIndex(rects, 141, false, 1)).toBe(2);
+  });
+  it("falls back to a partly visible line when none fits", () => {
+    expect(focusIndex([{ top: 0, bottom: 500 }], 200, false)).toBe(0);
+  });
+  it("has nothing to bold with no lines", () => {
+    expect(focusIndex([], 100, false)).toBe(-1);
   });
 });

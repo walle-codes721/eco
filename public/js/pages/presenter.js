@@ -1,10 +1,13 @@
-import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store } from "/js/eco.js";
+import { h, icon, api, roomId, who, hostKey, qrSvg, fullUrl, shortUrl, toast, fmtTime, langName, modePill, notFound, phoneLang, store, me, STAGE_LANGS, MAX_STAGE_LANGS } from "/js/eco.js";
 import { connect } from "/js/live.js";
-import { phraseMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES, hasSpeechRecognition } from "/js/mic.js";
-import { deckFor, openPdf, pdfPages, saveDeck, uploadDeck } from "/js/slides.js";
+import { phraseMic, levelMic, phraseInit, speakingSignal, micErrorMessage, SPOKEN_LANGUAGES } from "/js/mic.js";
+import { deckFor, openPdf, pdfPages, pdfDeckRows, saveDeck, uploadDeck, scriptFileText } from "/js/slides.js";
+import { parseScript, scriptSummary } from "/js/script.js";
+import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
 import { pollQ, pollResults } from "/js/polls.js";
+import { nearBottom, setFocus } from "/js/caps.js";
 
 const id = roomId();
 const key = hostKey(id);
@@ -43,96 +46,253 @@ const timer = h("span.mono.muted");
 const latency = h("span.pill", { title: "Phrase end → translation back, measured on this laptop" });
 const calls = h("span.pill", { title: "Token Factory calls today / daily ceiling" });
 const endBtn = h("button.btn.sm", { type: "button", onclick: () => setStatus(meta.status === "ended" ? "live" : "ended") });
+// One language for the whole console: what the mic listens for, and what you write and read polls in.
+const spokenLang = h("select.lang-select", { "aria-label": "Your language", title: "Your language: what the mic listens for, and the language you write and read questions in. Stop the mic to change it." },
+  ...[...new Set([...SPOKEN_LANGUAGES, "en", ...meta.langs])].map((l) => h("option", { value: l }, `${l.toUpperCase()} · ${langName(l, "en")}`)));
+spokenLang.value = store(`eco:plang:${id}`) ?? phoneLang();
+if (!spokenLang.value) spokenLang.value = "en";
+spokenLang.onchange = () => (store(`eco:plang:${id}`, spokenLang.value), drawPolls());
 const bar = h("header.bar", {}, h("div.inner", {},
   h("a.brand", { href: "/" }, "Eco"),
   h("span.title.truncate", {}, meta.title),
-  modePill(meta), statusPill, timer,
+  meta.live && !meta.demo ? null : modePill(meta), statusPill, timer,
   h("span.spacer"),
-  latency, calls,
+  spokenLang, latency, calls,
   h("a.btn.sm", { href: `/${id}/screen`, target: "eco-screen" }, icon("ext"), "Projector"),
   host ? h("a.btn.sm", { href: `/${id}/card` }, "Card") : null,
+  host && !meta.demo ? h("button.btn.sm", { type: "button", onclick: () => setupSheet() }, icon("doc"), "Slides & voice") : null,
   host ? endBtn : null,
 ));
 
-// ---------- left: slides, QR, mic ----------
+// ---------- slide: as big as the column allows; arrows and counter on hover ----------
 const slideNow = h("div.slide-frame");
-const slideNext = h("div.slide-frame.slide-next");
-const slideLabel = h("span.small.muted");
+const slideLabel = h("span.slide-count");
 const prev = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous slide", onclick: () => goSlide(meta.slide - 1), disabled: demo }, icon("prev"));
 const next = h("button.btn.icon-btn", { type: "button", "aria-label": "Next slide", onclick: () => goSlide(meta.slide + 1), disabled: demo }, icon("next"));
+const slideStage = h("div.slide-stage", {}, h("div.slide-box", {}, slideNow, h("div.slide-nav", {}, prev, slideLabel, next)));
 
+// ---------- mic (bottom-left) ----------
 const level = h("i");
-const spokenLang = h("select", { disabled: !hasSpeechRecognition },
-  h("option", { value: "" }, `Browser default (${navigator.language})`),
-  ...SPOKEN_LANGUAGES.map((l) => h("option", { value: l }, langName(l, "en"))),
-);
-const micState = h("div.small.muted", {}, "Off");
-const micBtn = h("button.mic-btn", { type: "button", onclick: () => toggleMic() },
+const micState = h("div.tiny.muted", {}, "Off");
+const micBtn = h("button.mic-btn", { type: "button", onclick: () => toggleMic(), title: demo ? "30 seconds of live mic. The replay pauses while you talk." : "Eco cuts at your natural pauses. Space toggles the mic." },
   h("span.ico", {}, icon("mic")),
-  h("div", { style: { flex: 1 } }, h("div", { style: { fontWeight: 600 } }, demo ? "Try with your voice" : "Microphone"), micState),
+  h("div", {}, h("div", { style: { fontWeight: 600 } }, demo ? "Try with your voice" : "Microphone"), micState),
 );
 
-const left = h("div.col-left", {},
-  h("div.card", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, "Slides"), h("span.spacer"), slideLabel, prev, next),
-    slideNow,
-    h("p.tiny.muted", { style: { margin: "12px 0 6px" } }, "Next"),
-    slideNext,
-    deck.pdf || meta.demo ? null : h("p.tiny.faint", { style: { marginTop: "10px" } }, "Showing text slides: no PDF was uploaded for this talk."),
-    host && !meta.demo ? replaceSlides() : null,
-  ),
-  h("div.card", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, demo ? "Your turn" : "Stage input")),
-    h("label.field", {}, "Spoken Language", spokenLang),
-    h("p.tiny.muted", {}, hasSpeechRecognition ? "Choose before starting. Stop the mic to change languages." : "This browser uses audio upload. The language selector only applies to browser speech recognition."),
-    micBtn,
-    h("div.level", { style: { marginTop: "12px" } }, level),
-    h("p.tiny.muted", { style: { marginTop: "10px" } }, demo ? "30 seconds of live mic. The replay pauses while you talk." : "Eco cuts at your natural pauses. Space toggles the mic."),
-  ),
-  h("div.card.center", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, "Audience link")),
-    h("div", { style: { width: "70%", margin: "0 auto" } }, qrSvg(fullUrl(`/${id}`))),
-    h("p.url", { style: { marginTop: "10px", fontSize: "14px" } }, shortUrl(`/${id}`)),
-  ),
-  speakersCard(),
-  host && !demo && meta.voiceMode === "sample" ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
-  host && !demo && meta.voiceMode === "saved" ? h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Your voice")),
-    h("p.small", {}, "This talk uses your saved voice. ", h("a", { href: "/me" }, "Hear or re-record it"), ".")) : null,
+// QR box: the audience link, or (+ Co-speaker) the co-speaker join link.
+const joinUrl = meta.joinKey ? fullUrl(`/${id}/join#j=${meta.joinKey}`) : null;
+const qrBox = h("div.card.qr-card");
+const drawQr = (join) => qrBox.replaceChildren(
+  ...(join ? [h("button.btn.sm.qr-back", { type: "button", onclick: () => drawQr(false) }, "Back")] : []),
+  h("div.qr-fit", {}, qrSvg(join ? joinUrl : fullUrl(`/${id}`))),
+  join ? h("p.tiny.muted.truncate", {}, "Co-speakers scan this with their own phone")
+    : h("a.url.truncate", { href: fullUrl(`/${id}`), target: "_blank", rel: "noopener", title: fullUrl(`/${id}`) }, shortUrl(`/${id}`)),
+);
+drawQr(false);
+
+const speakersList = h("div.row", { style: { flexWrap: "wrap", gap: "6px" } });
+drawSpeakers = () => speakersList.replaceChildren(...(meta.speakers.length > 1 ? meta.speakers.map((s) =>
+  h(`span.chip${speaking.has(s.id) ? ".speaking" : ""}`, {}, speaking.has(s.id) ? h("span.dot.live") : null, s.name)) : []));
+
+const micBox = h("div.card.mic-box", {},
+  h("div.row", { style: { gap: "10px" } }, micBtn, h("span.spacer"),
+    joinUrl ? h("button.link-btn.tiny", { type: "button", onclick: () => drawQr(true) }, "+ Co-speaker") : null),
+  h("div.level", {}, level),
+  speakersList,
 );
 
-// ---------- middle: what you said ----------
+// ---------- transcript ----------
+// Scrollable history: the big bold line (and its translations) follows the scroll; at the bottom it follows the talk.
 const now = h("div.said");
-const mid = h("div.col-mid", {},
-  h("div.card", { style: { minHeight: "60vh" } },
-    h("div.card-head", {}, h("span.eyebrow", {}, "You said"), h("span.spacer"), h("span.chip", {}, "Original")),
-    now,
-  ),
+const trBox = h("div.said-tr");
+let atBottom = true, focused = null; // focused: the line shown big, with its translations below
+const jumpBtn = h("button.caps-jump", { type: "button", "aria-label": "Back to latest", onclick: () => ((now.scrollTop = now.scrollHeight), followed()) }, icon("down"));
+const saidCard = h("div.card.said-card", {},
+  h("div.card-head", {}, h("span.eyebrow", {}, "You said"), h("span.spacer"), h("span.chip", {}, "Original")),
+  h("div.caps-wrap", {}, now, jumpBtn),
+  trBox,
 );
+now.onscroll = followed;
+// The translation rows below (and the slide above) resize the scroller: stay pinned while following.
+new ResizeObserver(() => atBottom && (now.scrollTop = now.scrollHeight)).observe(now);
+function followed() {
+  atBottom = nearBottom(now);
+  jumpBtn.classList.toggle("show", !atBottom);
+  const i = lines.length ? setFocus(now, atBottom) : -1;
+  const l = lines[i];
+  if (l === focused) return;
+  focused = l;
+  trBox.replaceChildren(...(l ? meta.langs.map((g) => h("div.tr", {}, h("span.chip", { title: langName(g) }, g.toUpperCase()), h("span", {}, l.out[g] ?? "", l.flags?.includes(g) ? h("span.tiny.muted", {}, "  · literal") : null))) : []));
+}
 
-// ---------- right: the board ----------
+// ---------- teleprompter: the speaker's own script, one line at a time (host only) ----------
+// Lines carry the slide their cue set: stepping across a cue changes the slide, changing the slide jumps here.
+let script = host && !meta.demo ? meta.script ?? "" : "";
+let promptLines = parseScript(script).lines;
+let line = Math.min(Number(store(`eco:prompt:${id}`)) || 0, Math.max(promptLines.length - 1, 0));
+const promptText = h("div.prompter-text");
+const promptCount = h("span.slide-count");
+const lineUp = h("button.btn.icon-btn", { type: "button", "aria-label": "Previous line", onclick: () => stepLine(-1) }, icon("up"));
+const lineDown = h("button.btn.icon-btn", { type: "button", "aria-label": "Next line", onclick: () => stepLine(1) }, icon("down"));
+const scriptBtn = h("button.btn.icon-btn.ghost", { type: "button", "aria-label": "Edit script", title: "Edit script", onclick: () => scriptSheet() }, icon("text"));
+const prepPill = h("button.pill", { type: "button", hidden: true, title: "HACKATHON mode: your script, translated and voiced before the talk", onclick: () => prep({ retry: true }) });
+const langAdd = h("select.pill", { hidden: true, "aria-label": "Add a language", title: "Add a language: your script is translated and voiced in it", onchange: () => addLang(langAdd.value) });
+const promptNav = h("div.prompter-nav", {}, lineUp, promptCount, lineDown, prepPill, langAdd, scriptBtn);
+const prompter = host && !meta.demo ? h("div.card.prompter-card", {}, promptText, promptNav) : null;
+function goLine(n, step = false) {
+  if (!promptLines.length) {
+    promptNav.hidden = true;
+    return promptText.replaceChildren(h("button.btn.prompter-add", { type: "button", onclick: () => scriptSheet() }, icon("plus"), "Add your script"));
+  }
+  promptNav.hidden = false;
+  const from = promptLines[line]?.slide;
+  line = Math.max(0, Math.min(n, promptLines.length - 1));
+  store(`eco:prompt:${id}`, String(line));
+  const cur = promptLines[line], prev = promptLines[line - 1], next = promptLines[line + 1];
+  promptText.replaceChildren(
+    cur.note ? h("div.past.note", {}, icon("flag"), cur.note) : h("div.past", {}, prev?.text ?? "\u00a0"),
+    h("div.now", {}, cur.text),
+    h("div.past", {}, next?.slide && next.slide !== cur.slide ? h("span.chip", {}, `Slide ${next.slide}`) : null, next?.text ?? "\u00a0"),
+  );
+  promptCount.textContent = `${line + 1} / ${promptLines.length}`;
+  lineUp.disabled = line <= 0;
+  lineDown.disabled = line >= promptLines.length - 1;
+  // Only a step across a cue moves the slide; loading or saving the script never does.
+  if (step && cur.slide && cur.slide !== from && cur.slide !== meta.slide && cur.slide <= deck.count) goSlide(cur.slide, true);
+}
+/** The slide changed some other way (keys, clicker, co-speaker): jump to that slide's first line. */
+function followSlide(n) {
+  if (!promptLines.length || promptLines[line].slide === n) return;
+  const i = promptLines.findIndex((l) => l.slide === n);
+  if (i >= 0) goLine(i), (cueFrom = line - 1);
+}
+if (prompter) goLine(line);
+
+// ---------- HACKATHON mode (profile toggle, on by default) ----------
+// Every script line is translated and voiced once, before the talk (the room's prep). Live, ↓ plays the next line's
+// ready clips to the room: you read from the teleprompter, so the key is the timing. The mic only moves the level bar.
+const hack = host && !meta.demo && ((await me()).user?.hackathon ?? true);
+let cueFrom = line - 1; // the last line played; the first ↓ with the mic on plays the big line
+function drawPrep(p) {
+  drawLangAdd(p);
+  prepPill.hidden = !hack || !p?.lines;
+  if (prepPill.hidden) return;
+  const working = p.translated < p.lines ? `Translating ${p.translated}/${p.lines}` : p.done < p.total ? `Voices ${p.done}/${p.total}` : "";
+  prepPill.textContent = (working || `Ready · ${p.lines} lines`) + (p.failed ? ` · ${p.failed} failed, retry` : "");
+  prepPill.disabled = !p.failed;
+}
+/** "+ Language": adds a language to the talk; prep then translates and voices only that one. */
+function drawLangAdd(p) {
+  const left = STAGE_LANGS.filter((l) => !meta.langs.includes(l));
+  langAdd.hidden = !hack || !p?.lines || meta.langs.length >= MAX_STAGE_LANGS || !left.length;
+  langAdd.replaceChildren(h("option", { value: "" }, "+ Language"), ...left.map((l) => h("option", { value: l }, langName(l, "en"))));
+}
+async function addLang(l) {
+  if (!l) return;
+  langAdd.disabled = true;
+  try {
+    const r = await api(`/api/rooms/${id}/langs`, { method: "POST", key, body: { add: l } });
+    meta.langs = r.langs;
+    drawPrep(r.prep);
+    toast(`${langName(l, "en")} added: translating and voicing your script`);
+  } catch (err) {
+    toast(err.message || "Couldn't add that language");
+    langAdd.value = "";
+  } finally {
+    langAdd.disabled = false;
+  }
+}
+/** Sends the teleprompter lines to prep: the room translates and voices whatever isn't made yet. */
+async function prep(extra = {}) {
+  if (!hack || !promptLines.length) return;
+  try {
+    drawPrep(await api(`/api/rooms/${id}/prep`, { method: "POST", key, body: { lines: promptLines.map((l) => l.text), ...extra } }));
+  } catch {
+    toast("Couldn't prepare your script");
+  }
+}
+/** Plays line i to the room from prep, and moves the teleprompter (and the slide, at a cue) with you. */
+function fire(i) {
+  if (i < 0 || i >= promptLines.length) return;
+  live.send({ type: "cue", text: promptLines[i].text });
+  goLine(i, true);
+}
+/** ↓/↑ and the teleprompter arrows. With the mic on in HACKATHON mode, ↓ plays the next line to the room. */
+function stepLine(d) {
+  if (hack && stopMic && d > 0 && cueFrom + 1 < promptLines.length) return fire(++cueFrom);
+  goLine(line + d, true);
+  cueFrom = line - 1;
+}
+prep();
+
+/** Paste, type or upload the script; saving re-parses it and keeps the current slide. */
+function scriptSheet() {
+  const box = h("textarea", { rows: 12, placeholder: "Paste or type what you plan to say. Mark slide changes with \"Slide 2:\" lines or [next slide]; other [notes] show as reminders." }, script);
+  const count = h("span.small.muted.truncate");
+  const recount = () => (count.textContent = scriptSummary(box.value, deck.count));
+  box.oninput = recount;
+  recount();
+  const file = h("input", { type: "file", accept: ".txt,.md,.pdf,.docx", hidden: true });
+  file.onchange = async () => {
+    const f = file.files[0];
+    file.value = "";
+    if (!f) return;
+    try {
+      box.value = await scriptFileText(f);
+      recount();
+    } catch (err) {
+      toast(err.message.startsWith("Save") ? err.message : "Couldn't read that file");
+    }
+  };
+  const save = h("button.btn.primary.sm", { type: "button" }, icon("check"), "Save");
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      ({ script } = await api(`/api/rooms/${id}/script`, { method: "POST", key, body: { script: box.value } }));
+      promptLines = parseScript(script).lines;
+      goLine(Math.max(0, promptLines.findIndex((l) => l.slide === meta.slide)));
+      cueFrom = line - 1;
+      prep();
+      wrap.remove();
+    } catch {
+      toast("Couldn't save the script");
+      save.disabled = false;
+    }
+  };
+  const wrap = h("div.sheet-wrap", { onclick: (e) => e.target === wrap && wrap.remove() }, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "560px", width: "100%" } },
+    h("div.row", {}, h("h2", {}, "Teleprompter"), h("span.spacer"), h("button.btn.icon-btn", { type: "button", "aria-label": "Close", onclick: () => wrap.remove() }, icon("x"))),
+    box,
+    h("div.row", { style: { gap: "10px" } },
+      h("button.btn.icon-btn", { type: "button", "aria-label": "Upload Word, PDF or text", title: "Upload Word, PDF or text", onclick: () => file.click() }, icon("doc")), file,
+      count, h("span.spacer"), save)));
+  document.body.append(wrap);
+  box.focus();
+}
+
+// ---------- the board ----------
 const listenersEl = h("div");
-const topicsEl = h("div");
-const barsEl = h("div");
-const queueEl = h("div");
+const askedEl = h("div");
 const pollsEl = h("div");
-const right = h("div.col-right", {},
-  host ? askCard() : null,
-  h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "In the room")), listenersEl),
-  h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "What they asked")), topicsEl),
-  h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Questions per slide")), barsEl),
-  h("div.card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Not in your slides"), h("span.spacer"), h("span.tiny.muted", {}, "answer out loud, then tap")), queueEl),
-);
 
-document.body.replaceChildren(...[bar, demo ? h("div.wrap", { style: { maxWidth: "1840px", paddingTop: "16px" } },
+document.body.classList.add("console-page");
+document.body.replaceChildren(...[bar, demo ? h("div.wrap", { style: { maxWidth: "1840px", paddingTop: "12px" } },
   h("div.banner", {}, icon("play"), h("div", {}, h("b", {}, "Demo talk, replaying. "), "Open the audience link on your phone to follow it, ask it a question, and watch the board update. Or press “Try with your voice”."))) : null,
-  h("main.console", {}, left, mid, right)].filter(Boolean));
+  h("main.console", {},
+    h("div.col.col-left", {},
+      h("div.card.room-card", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Who's in the room")), listenersEl),
+      h("div.card.grow", {}, h("div.card-head", {}, h("span.eyebrow", {}, "What the audience asked")), askedEl),
+      micBox),
+    h("div.col.col-mid", {}, prompter, slideStage, saidCard),
+    h("div.col.col-right", {},
+      host ? askCard() : h("div.card.grow", {}, h("div.card-head", {}, h("span.eyebrow", {}, "Ask")), h("p.empty", {}, "Open the presenter link to ask the room.")),
+      qrBox),
+  )].filter(Boolean));
 
 // ---------- rendering ----------
 async function drawSlides() {
   slideLabel.textContent = `${meta.slide} / ${deck.count}`;
   const w = slideNow.clientWidth || 280;
   slideNow.replaceChildren(await deck.render(meta.slide, w));
-  slideNext.replaceChildren(meta.slide < deck.count ? await deck.render(meta.slide + 1, w) : h("p.small.faint", {}, "End of deck"));
   prev.disabled = demo || meta.slide <= 1;
   next.disabled = demo || meta.slide >= deck.count;
 }
@@ -146,13 +306,11 @@ function drawStatus() {
 setInterval(() => (timer.textContent = meta.startedAt && meta.status === "live" ? fmtTime((Date.now() - meta.startedAt) / 1000) : ""), 1000);
 
 function drawLines() {
-  const last = lines.at(-1);
-  if (!last) return now.replaceChildren(h("p.empty", {}, demo ? "Waiting for the replay…" : "Turn the mic on and start talking. Your words and their translations appear here."));
-  now.replaceChildren(
-    ...lines.slice(-4, -1).map((l) => h("p.past", {}, who(meta, l), l.src)),
-    h("p.now", {}, who(meta, last), last.src),
-    ...meta.langs.map((l) => h("div.tr", {}, h("span.chip", { title: langName(l) }, l.toUpperCase()), h("span", {}, last.out[l] ?? "", last.flags?.includes(l) ? h("span.tiny.muted", {}, "  · literal") : null))),
-  );
+  // Keep the big line on the same phrase across redraws, so a new phrase never resizes what you're reading.
+  if (!lines.length) now.replaceChildren(h("p.empty", {}, demo ? "Waiting for the replay…" : "Turn the mic on and start talking. Your words and their translations appear here."));
+  else now.replaceChildren(...lines.map((l, i) => h(`p${i === lines.length - 1 ? ".now" : ""}${focused && l.seq === focused.seq ? ".focus" : ""}`, {}, who(meta, l), l.src)));
+  if (atBottom) now.scrollTop = now.scrollHeight;
+  followed();
 }
 
 function drawBoard() {
@@ -165,37 +323,47 @@ function drawBoard() {
         h("div.kv", { style: { padding: "0 0 4px" } }, h("span", {}, langName(l)), h("span.muted.mono", {}, `${n}`)),
         h("div.meter", {}, h("i", { style: { width: `${total ? (n / total) * 100 : 0}%` } })))),
   );
-  topicsEl.replaceChildren(...(board.topics.length
-    ? board.topics.map((t) => h("div.topic", {}, h("span.n", {}, String(t.count)), h("div", {}, h("div", { style: { fontWeight: 600 } }, t.title), h("div.small.muted", {}, `“${t.sample}” · ${t.topic}`))))
-    : [h("p.empty", {}, "Questions from the audience show up here, grouped by the slide that answers them.")]));
-  const n = Math.max(deck.count, ...Object.keys(board.bySlide).map(Number));
-  const max = Math.max(1, ...Object.values(board.bySlide));
-  const hot = Object.entries(board.bySlide).sort((a, b) => b[1] - a[1])[0]?.[0];
-  barsEl.replaceChildren(
-    h("div.bars", {}, ...Array.from({ length: n }, (_, i) => {
-      const c = board.bySlide[i + 1] ?? 0;
-      return h(`div${String(i + 1) === hot && c ? ".hot" : ""}${i + 1 === meta.slide ? ".cur" : ""}`, { style: { height: `${(c / max) * 100}%` }, title: `Slide ${i + 1}: ${c}` });
-    })),
-    h("p.tiny.muted", { style: { marginTop: "8px" } }, hot ? `Slide ${hot} raised the most questions.` : "No questions yet."),
-  );
-  queueEl.replaceChildren(...(board.queue.length
-    ? board.queue.map((g) => h(`div.q-item${g.answeredAt != null ? ".done" : ""}`, {},
-        h("span.chip" + (g.count > 1 ? ".red" : ""), {}, String(g.count)),
-        h("div", { style: { flex: 1 } }, h("div", {}, g.q), h("div.tiny.muted", {}, g.langs.map((l) => langName(l)).join(", "))),
-        h("div.row", { style: { gap: "6px", flexShrink: 0 } },
-          g.taught ? h("span.tiny.muted", {}, "Eco learned this ✓")
-            : g.answeredAt != null ? h("span.tiny.muted", {}, `answered ${fmtTime(g.answeredAt)}`) : null,
-          host && !g.taught ? h("button.btn.sm", { type: "button", onclick: () => teachSheet(g) }, icon("plus"), "Answer it") : null,
-          g.answeredAt == null ? h("button.btn.sm", { type: "button", onclick: () => answered(g.qids) }, icon("check"), "Answered") : null)))
-    : [h("p.empty", {}, "When Eco can't answer from your slides, the question lands here.")]));
+  // Needs you first (not in the slides, unanswered), then what the slides answered, then what you already answered.
+  const qItem = (g) => h(`div.q-item${g.answeredAt != null ? ".done" : ""}`, {},
+    h("span.chip" + (g.count > 1 ? ".red" : ""), {}, String(g.count)),
+    h("div", { style: { flex: 1, minWidth: 0 } }, h("div", {}, g.q), h("div.tiny.muted", {}, g.langs.map((l) => langName(l)).join(", "))),
+    h("div.row", { style: { gap: "6px", flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" } },
+      g.taught ? h("span.tiny.muted", {}, "Eco learned this ✓")
+        : g.answeredAt != null ? h("span.tiny.muted", {}, `answered ${fmtTime(g.answeredAt)}`) : null,
+      host && !g.taught ? h("button.btn.icon-btn.q-act", { type: "button", "aria-label": "Answer it", title: "Answer it: teach Eco the answer", onclick: () => teachSheet(g) }, "Aa") : null,
+      g.answeredAt == null ? h("button.btn.icon-btn.q-act", { type: "button", "aria-label": "Answered", title: "Mark answered", onclick: () => answered(g.qids) }, icon("check")) : null));
+  const open = board.queue.filter((g) => g.answeredAt == null);
+  const done = board.queue.filter((g) => g.answeredAt != null);
+  askedEl.replaceChildren(...(board.queue.length || board.topics.length ? [
+    open.length ? h("p.tiny.muted.asked-label", {}, "Not in your slides · answer out loud, then tap") : null,
+    ...open.map(qItem),
+    board.topics.length ? h("p.tiny.muted.asked-label", {}, "Answered from your slides") : null,
+    ...board.topics.map((t) => h("div.topic", {}, h("span.n", {}, String(t.count)), h("div", {}, h("div", { style: { fontWeight: 600 } }, t.title), h("div.small.muted", {}, `“${t.sample}” · ${t.topic}`)))),
+    ...done.map(qItem),
+  ].filter(Boolean) : [h("p.empty", {}, "Questions from the audience show up here. The ones your slides don't answer come first.")]));
 }
 
 // ---------- actions ----------
-async function goSlide(n) {
+// Slide changes this console sent, oldest first. Sends go one at a time and only the latest, so their ws echoes
+// come back in order and are skipped: fast stepping never bounces back to an old slide.
+const sentSlides = [];
+let syncing = false;
+async function syncSlide() {
+  if (syncing) return;
+  syncing = true;
+  for (let n; n !== meta.slide; ) {
+    n = meta.slide;
+    sentSlides.push(n);
+    await api(`/api/rooms/${id}/slide`, { method: "POST", key, body: { n } }).catch(() => (sentSlides.splice(sentSlides.lastIndexOf(n), 1), toast("Slide not synced")));
+  }
+  syncing = false;
+}
+async function goSlide(n, fromPrompter = false) {
   if (demo || n < 1 || n > deck.count) return;
   meta.slide = n;
+  if (!fromPrompter) followSlide(n);
   drawSlides();
-  api(`/api/rooms/${id}/slide`, { method: "POST", key, body: { n } }).catch(() => toast("Slide not synced"));
+  syncSlide();
 }
 async function setStatus(status) {
   const r = await api(`/api/rooms/${id}/status`, { method: "POST", key, body: { status } }).catch(() => null);
@@ -243,11 +411,14 @@ async function toggleMic() {
   }
   if (meta.status === "ended") return toast("The talk has ended");
   micBtn.disabled = spokenLang.disabled = true;
+  const scripted = hack && promptLines.length > 0; // HACKATHON: ↓ plays the lines, the mic is only the level bar
+  if (scripted) cueFrom = line - 1;
   try {
-    const end = await phraseMic({
-      lang: spokenLang.value || undefined,
+    const onLevel = speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`));
+    const end = scripted ? await levelMic(onLevel) : await phraseMic({
+      lang: spokenLang.value,
       maxTotalMs: demo ? 30000 : Infinity,
-      onLevel: speakingSignal(live.send, (l) => (level.style.width = `${Math.round(l * 100)}%`)),
+      onLevel,
       onPhrase: send,
       onError: (err) => { stopMic?.(); toast(micErrorMessage(err)); },
     });
@@ -255,7 +426,7 @@ async function toggleMic() {
       end();
       live.send({ type: "speaking", on: false });
       stopMic = null;
-      spokenLang.disabled = !hasSpeechRecognition;
+      spokenLang.disabled = false;
       micBtn.classList.remove("on");
       micState.textContent = "Off";
       level.style.width = "0";
@@ -267,7 +438,7 @@ async function toggleMic() {
     toast(micErrorMessage(err));
   } finally {
     micBtn.disabled = false;
-    spokenLang.disabled = !hasSpeechRecognition || !!stopMic;
+    spokenLang.disabled = !!stopMic;
   }
 }
 
@@ -297,6 +468,7 @@ async function send(blob, cutAt) {
 
 addEventListener("keydown", (e) => {
   if (e.target.closest("input, textarea, select")) return;
+  if (promptLines.length && ["ArrowDown", "ArrowUp"].includes(e.key)) return (e.preventDefault(), stepLine(e.key === "ArrowDown" ? 1 : -1));
   if (["ArrowRight", "PageDown", "ArrowDown"].includes(e.key)) goSlide(meta.slide + 1);
   if (["ArrowLeft", "PageUp", "ArrowUp"].includes(e.key)) goSlide(meta.slide - 1);
   if (e.code === "Space" && !e.repeat) (e.preventDefault(), toggleMic());
@@ -315,6 +487,42 @@ refreshCalls();
 setInterval(refreshCalls, 15000);
 latency.replaceChildren(h("span.dot"), "— s");
 
+function presetToggle() {
+  const box = h("input", { type: "checkbox", checked: !!meta.presetsEnabled });
+  const status = h("p.small.muted", {}, meta.presetsEnabled ? "Listeners hear the preset voice and see it labelled as AI." : "Preset voice is off for this talk.");
+  box.onchange = async () => {
+    box.disabled = true;
+    try {
+      const r = await api(`/api/rooms/${id}/presets`, { method: "POST", key, body: { enabled: box.checked } });
+      meta.presetsEnabled = r.presetsEnabled;
+      meta.presets = r.presets ?? [];
+      status.textContent = meta.presetsEnabled ? "Listeners hear the preset voice and see it labelled as AI." : "Preset voice is off for this talk.";
+    } catch {
+      box.checked = !!meta.presetsEnabled;
+      toast("Couldn't update preset voice");
+    } finally {
+      box.disabled = false;
+    }
+  };
+  return h("div.card", {},
+    h("div.card-head", {}, h("span.eyebrow", {}, "Preset voice (demo)")),
+    h("p.small", {}, "Morgan Freeman, Jack Sparrow and SpongeBob (all AI) are bundled demo voices (ADR 0006). Never offered in Counter."),
+    h("label.check", {}, box, h("span.small", {}, "Enable AI preset voices for listeners")),
+    status,
+  );
+}
+
+/** Setup that doesn't belong on the live console: swap the deck, record or check the voice. */
+function setupSheet() {
+  const wrap = h("div.sheet-wrap", { onclick: (e) => e.target === wrap && wrap.remove() }, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "560px", width: "100%" } },
+    h("div.row", {}, h("h2", {}, "Slides & voice"), h("span.spacer"), h("button.btn.icon-btn", { type: "button", "aria-label": "Close", onclick: () => wrap.remove() }, icon("x"))),
+    replaceSlides(),
+    meta.voiceMode === "sample" ? voiceCard(id, meta, key ? { "x-key": key } : {}) : null,
+    meta.voiceMode === "saved" ? h("p.small", {}, "This talk uses your saved voice. ", h("a", { href: "/me" }, "Hear or re-record it"), ".") : null,
+    presetToggle()));
+  document.body.append(wrap);
+}
+
 /** Swap the deck before (or between) talks: new PDF to R2, new slide text for answers; notes are kept. */
 function replaceSlides() {
   const file = h("input", { type: "file", accept: "application/pdf", hidden: true });
@@ -323,10 +531,25 @@ function replaceSlides() {
     const f = file.files[0];
     if (!f) return;
     btn.disabled = true;
-    btn.lastChild.textContent = "Uploading…";
     try {
       const bytes = new Uint8Array(await f.arrayBuffer());
-      const pages = await pdfPages(await openPdf(bytes));
+      const pdf = await openPdf(bytes);
+      const pages = await pdfPages(pdf);
+      const deckPages = await pdfDeckRows(pdf);
+      let deckLang = meta.deckLang || "en";
+      const ok = await openDeckRowCarousel(pdf, deckPages, {
+        deckLang,
+        onLang: (l) => { deckLang = l; },
+        onChange: () => {},
+        confirmLabel: "Store slides",
+        withLang: true,
+      });
+      if (!ok) {
+        btn.disabled = false;
+        return;
+      }
+      btn.lastChild.textContent = "Uploading…";
+      await api(`/api/rooms/${id}/deckrows`, { method: "POST", key, body: { deckLang, pages: deckPages } });
       const { pages: old } = await api(`/api/rooms/${id}/sources`, { key });
       await api(`/api/rooms/${id}/sources`, { method: "POST", key, body: { pages: [...pages, ...old.filter((p) => p.tag === "notes")] } });
       await saveDeck(id, bytes);
@@ -334,48 +557,24 @@ function replaceSlides() {
     } catch {
       toast("Couldn't replace the slides");
       btn.disabled = false;
-      btn.lastChild.textContent = "Replace slides";
+      btn.lastChild.textContent = deck.pdf ? "Replace slides" : "Upload slides (PDF)";
     }
   };
   return h("div", { style: { marginTop: "10px" } }, btn, file);
 }
 
-/** Who is talking, and (host) a QR for a co-speaker to join from their own phone. */
-function speakersCard() {
-  const list = h("div.row", { style: { flexWrap: "wrap", gap: "8px" } });
-  drawSpeakers = () => list.replaceChildren(...meta.speakers.map((s) =>
-    h(`span.chip${speaking.has(s.id) ? ".speaking" : ""}`, {}, speaking.has(s.id) ? h("span.dot.live") : null, s.name, s.voice ? h("span.faint", { title: "Voice sample saved" }, " · voice") : null)));
-  drawSpeakers();
-  const joinUrl = meta.joinKey ? fullUrl(`/${id}/join#j=${meta.joinKey}`) : null;
-  const qr = h("div", { hidden: true, style: { width: "60%", margin: "12px auto 0" } }, joinUrl ? qrSvg(joinUrl) : null);
-  return h("div.card", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, "Speakers"), h("span.spacer"),
-      joinUrl ? h("button.btn.sm", { type: "button", onclick: () => (qr.hidden = !qr.hidden) }, icon("plus"), "Add a speaker") : null),
-    list,
-    joinUrl ? h("div", {}, qr, h("p.tiny.muted", { style: { marginTop: "8px" } }, "Each co-speaker scans this with their own phone and uses its mic. Eco shows who is talking.")) : null,
-  );
-}
-
 /** Ask: the speaker polls the room. They write and read in their own language; listeners in theirs. */
 function askCard() {
-  const plangSel = h("select", { "aria-label": "Your language" },
-    ...[...new Set([...SPOKEN_LANGUAGES, "en", ...meta.langs])].map((l) => h("option", { value: l }, langName(l, "en"))));
-  plangSel.value = store(`eco:plang:${id}`) ?? (spokenLang.value || phoneLang());
-  if (!plangSel.value) plangSel.value = "en";
-  plangSel.onchange = () => (store(`eco:plang:${id}`, plangSel.value), drawPolls());
-  spokenLang.addEventListener("change", () => { if (!store(`eco:plang:${id}`) && spokenLang.value) (plangSel.value = spokenLang.value), drawPolls(); });
-  askCard.lang = () => plangSel.value;
-  return h("div.card", {},
-    h("div.card-head", {}, h("span.eyebrow", {}, "Ask"), h("span.spacer"),
-      h("button.btn.sm", { type: "button", disabled: meta.demo, onclick: () => pollSheet(plangSel.value) }, icon("plus"), "New question")),
-    h("label.field", {}, "Your language", plangSel),
+  return h("div.card.grow", {},
+    h("div.card-head", {}, h("span.eyebrow", {}, "Ask the room"), h("span.spacer"),
+      h("button.btn.sm", { type: "button", disabled: meta.demo, onclick: () => pollSheet(spokenLang.value) }, icon("plus"), "New question")),
     pollsEl,
   );
 }
 
 function drawPolls() {
   if (!host) return;
-  const lang = askCard.lang();
+  const lang = spokenLang.value;
   pollsEl.replaceChildren(...(polls.length
     ? polls.slice().reverse().map((p) => {
         const L = p.q[lang] && (p.kind !== "free" || p.share) ? lang : p.lang; // picked after it went out: private free answers exist only in the language it was written in
@@ -472,11 +671,16 @@ const live = connect(id, { role: "host", ...(key ? { key } : {}) }, (m) => {
     polls = m.polls ?? polls;
   }
   if (m.type === "polls") polls = m.polls;
-  if (m.type === "line") lines.push(m.line), (lines = lines.slice(-50));
-  if (m.type === "slide") meta.slide = m.n;
+  if (m.type === "line") (atBottom = nearBottom(now)), lines.push(m.line), (lines = lines.slice(-50));
+  if (m.type === "slide") {
+    const mine = sentSlides.indexOf(m.n);
+    if (mine >= 0) sentSlides.splice(0, mine + 1); // our own change coming back: we're already past it
+    else (meta.slide = m.n, followSlide(m.n));
+  }
   if (m.type === "status") Object.assign(meta, { status: m.status, startedAt: m.startedAt, endedAt: m.endedAt });
   if (m.type === "board") board = m.board;
   if (m.type === "notice") toast(m.text, 4000);
+  if (m.type === "prep") drawPrep(m);
   if (m.type === "reset") (Object.assign(meta, m.meta), (lines = []));
   if (m.type === "speakers") meta.speakers = m.speakers;
   if (m.type === "speaking") m.on ? speaking.add(m.speaker) : speaking.delete(m.speaker);

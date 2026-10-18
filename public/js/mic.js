@@ -1,6 +1,6 @@
 // Microphone: continuous phrase mode (stage) and hold-to-talk (counter).
 // With the browser's speech recognition they produce text; without it (Firefox), 16 kHz WAV.
-import { Cutter, encodeWav, resample } from "./vad.js";
+import { Cutter, encodeWav, resample, trimSilence } from "./vad.js";
 
 // ponytail: Token Factory stopped taking audio on 15 Oct, so the browser does speech-to-text (Chrome/Safari; Chrome sends
 // the audio to Google). Delete SR and the sr* functions to go back to WAV → MiMo if AMD restores audio input.
@@ -100,15 +100,23 @@ function srHold({ onLevel, lang }) {
   });
 }
 
-async function open(onFrame) {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+/** `filters: false` for a voice sample: the browser's call filters (noise suppression, auto gain) make a clone sound like a phone. */
+async function open(onFrame, { rate = 16000, filters = true } = {}) {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: filters, noiseSuppression: filters, autoGainControl: filters, channelCount: 1 } });
   const ctx = new AudioContext();
   await ctx.audioWorklet.addModule("/js/worklet.js");
   const src = ctx.createMediaStreamSource(stream);
   const tap = new AudioWorkletNode(ctx, "eco-tap");
-  tap.port.onmessage = (e) => onFrame(resample(e.data, ctx.sampleRate));
+  tap.port.onmessage = (e) => onFrame(resample(e.data, ctx.sampleRate, rate));
   src.connect(tap);
   return () => { tap.disconnect(); src.disconnect(); stream.getTracks().forEach((t) => t.stop()); ctx.close(); };
+}
+
+/** HACKATHON mode: the mic only moves the level bar and "now speaking". Nothing is recognised or sent. Returns stop(). */
+export async function levelMic(onLevel) {
+  const cut = new Cutter();
+  const stop = await open((frame) => onLevel(cut.push(frame).level));
+  return () => (stop(), onLevel(0));
 }
 
 /** Stage: listens until stopped, calls onPhrase(textOrWav, cutAt) at each pause. */
@@ -132,9 +140,10 @@ export async function phraseMic({ onPhrase, onLevel = () => {}, onError = () => 
 }
 
 /** Counter: press and hold. Returns stop() which resolves to text or a WAV blob (or null if too short). */
-/** `wav: true` always records audio (voice samples), even where the browser could transcribe. */
+/** `wav: true` records a voice sample: always audio, at OmniVoice's 24 kHz, unfiltered, silence trimmed. */
 export async function holdMic({ onLevel = () => {}, maxMs = 15000, lang = navigator.language, wav = false } = {}) {
   if (SR && !wav) return srHold({ onLevel, lang });
+  const rate = wav ? 24000 : 16000;
   const parts = [];
   let len = 0, finished = false, resolve;
   const done = new Promise((r) => (resolve = r));
@@ -143,11 +152,11 @@ export async function holdMic({ onLevel = () => {}, maxMs = 15000, lang = naviga
     finished = true;
     close();
     onLevel(0);
-    if (len < 16000 * 0.5) return resolve(null);
+    if (len < rate * 0.5) return resolve(null);
     const all = new Float32Array(len);
     let o = 0;
     for (const p of parts) { all.set(p, o); o += p.length; }
-    resolve(encodeWav(all));
+    resolve(encodeWav(wav ? trimSilence(all, rate) : all, rate));
   };
   const close = await open((frame) => {
     if (finished) return;
@@ -156,43 +165,53 @@ export async function holdMic({ onLevel = () => {}, maxMs = 15000, lang = naviga
     let peak = 0;
     for (const x of frame) peak = Math.max(peak, Math.abs(x));
     onLevel(Math.min(1, peak * 2));
-    if (len > (16000 * maxMs) / 1000) finish();
-  });
+    if (len > (rate * maxMs) / 1000) finish();
+  }, wav ? { rate, filters: false } : {});
   return { stop: () => (finish(), done) };
 }
 
 /** Wires a .hold button: press to talk, release to send (text or WAV). Space bar works too when `key` is set. */
-export function bindHold(btn, { onBlob, onError = () => {}, key = false, lang = () => navigator.language }) {
-  let rec = null, pressed = false;
+export function bindHold(btn, { onBlob, onStart = () => undefined, onError = () => {}, key = false, lang = () => navigator.language }) {
+  // Object identity is the per-press token, including while startup is pending.
+  let session = null;
   const level = (l) => btn.style.setProperty("--level", l.toFixed(2));
   const down = async (e) => {
     e?.preventDefault();
-    if (pressed || btn.classList.contains("busy")) return;
-    pressed = true;
+    if (session || btn.classList.contains("busy")) return;
+    const current = { recorder: null, context: undefined };
+    session = current;
     btn.classList.add("on");
     navigator.vibrate?.(10);
     try {
-      const r = await holdMic({ onLevel: level, lang: lang() });
-      if (pressed) rec = r;
-      else r.stop(); // released before the mic opened
+      // Keep the destination with this recording, including while stop() awaits final speech.
+      current.context = onStart();
+      const r = await holdMic({ onLevel: (l) => { if (session === current) level(l); }, lang: lang() });
+      if (session === current) current.recorder = r;
+      else await r.stop(); // stale startup: release its resources and discard its result
     } catch (err) {
-      pressed = false;
+      if (session !== current) return;
+      session = null;
       btn.classList.remove("on");
+      level(0);
       onError(err);
     }
   };
-  const up = async () => {
-    if (!pressed) return;
-    pressed = false;
+  const up = async (deliver = true) => {
+    const current = session;
+    if (!current) return;
+    session = null; // invalidate before any await or later press
     btn.classList.remove("on");
-    const r = rec;
-    rec = null;
-    const blob = await r?.stop();
-    if (blob) onBlob(blob);
+    level(0);
+    try {
+      const blob = await current.recorder?.stop();
+      if (deliver && blob) onBlob(blob, current.context);
+    } catch (err) {
+      if (!session) onError(err);
+    }
   };
   btn.addEventListener("pointerdown", down);
-  addEventListener("pointerup", up);
-  addEventListener("pointercancel", up);
+  addEventListener("pointerup", () => up());
+  addEventListener("pointercancel", () => up(false));
   btn.addEventListener("contextmenu", (e) => e.preventDefault());
   if (key) {
     addEventListener("keydown", (e) => e.code === "Space" && !e.repeat && e.target === document.body && down(e));

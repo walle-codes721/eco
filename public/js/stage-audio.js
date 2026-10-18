@@ -1,4 +1,7 @@
 // One decision per caption, in caption order. No network requests are made here.
+/** How long to wait for a cloned clip before the phone speaks. Matches tfSpeech timeout (OmniVoice can take several seconds). */
+export const CLONE_WAIT_MS = 12_000;
+
 export function stageAudio({ play, stop }) {
   const pending = new Map();
   let active = null, latest = 0;
@@ -9,7 +12,10 @@ export function stageAudio({ play, stop }) {
     if (!item?.ready) return;
     remove(item);
     active = item;
-    Promise.resolve().then(() => active === item && play(item.text, item.lang, item.url, item.speaker)).catch(() => {}).finally(() => {
+    const args = [item.text, item.lang, item.url, item.speaker];
+    // HACKATHON script line with another already waiting: play it a little faster so the room keeps up with the speaker.
+    if (item.cue) args.push([...pending.values()].some((entry) => entry.ready));
+    Promise.resolve().then(() => active === item && play(...args)).catch(() => {}).finally(() => {
       if (active !== item) return;
       active = null;
       drain();
@@ -27,21 +33,27 @@ export function stageAudio({ play, stop }) {
     for (const entry of backlog.slice(0, Math.max(0, backlog.length - 3))) remove(entry);
     drain();
   };
+  const pickUrl = (item, audio) => {
+    if (!item.audioKey) return null;
+    return audio[item.audioKey] ?? null;
+  };
   return {
-    line({ seq, text, lang, speaker, url, wait, enabled }) {
+    line({ seq, text, lang, speaker, url, audioKey = lang, wait, enabled, cue = false }) {
       if (seq <= latest) return; // duplicate frames/reconnect history must not replay
       latest = seq;
       if (!enabled) return;
-      const item = { seq, text, lang, speaker, url, ready: false, deadline: Date.now() + 4000, timer: null };
+      const item = { seq, text, lang, speaker, url, audioKey, cue, ready: false, deadline: Date.now() + CLONE_WAIT_MS, timer: null };
       pending.set(seq, item);
-      if (wait && !url) item.timer = setTimeout(() => ready(item, null), 4000);
-      else ready(item, url);
+      if (wait && audioKey && !url) item.timer = setTimeout(() => ready(item, null), CLONE_WAIT_MS);
+      else ready(item, url ?? null);
       drain();
     },
     audio(seq, audio) {
       const item = pending.get(seq);
-      if (!item || item.ready || !audio[item.lang]) return;
-      ready(item, Date.now() < item.deadline ? audio[item.lang] : null);
+      if (!item || item.ready) return;
+      if (item.audioKey && !Object.prototype.hasOwnProperty.call(audio, item.audioKey)) return;
+      const url = pickUrl(item, audio);
+      ready(item, Date.now() < item.deadline ? url : null);
     },
     clear(sequence = latest) {
       for (const item of pending.values()) clearTimeout(item.timer);

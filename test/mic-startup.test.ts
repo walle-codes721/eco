@@ -1,4 +1,3 @@
-// @ts-expect-error test-only Node built-in; the Worker tsconfig intentionally omits Node types
 import { readFileSync } from "node:fs";
 import * as ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -55,7 +54,7 @@ describe.each(["presenter", "join"])("%s microphone startup", (page) => {
     const send = vi.fn();
     const toggle = pageHandler(page, {
       micBtn, spokenLang, toast, send, phraseMic, micErrorMessage,
-      meta: { status: "live" }, demo: false, hasSpeechRecognition: true,
+      meta: { status: "live" }, demo: false, hasSpeechRecognition: true, hack: false,
       level: { style: { width: "0" } }, micState: { textContent: "Off" },
       live: { send: vi.fn() }, keepAwake: vi.fn(), speakingSignal: (_send: unknown, onLevel: unknown) => onLevel,
     });
