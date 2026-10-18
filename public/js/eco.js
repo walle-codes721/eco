@@ -207,3 +207,32 @@ export function who(meta, line) {
   if ((meta.speakers?.length ?? 0) < 2) return null;
   return h("span.who", {}, meta.speakers.find((s) => s.id === (line.speaker ?? "s0"))?.name ?? "");
 }
+
+/** "Website link" row for a Counter's list: paste an address, Eco reads that page once, and the text lands in an editable box
+ *  for the owner to check. onText(tag, text, note) adds it. Returns { el, open }: show the row with open(). */
+export function websiteImport(onText) {
+  const input = h("input", { type: "text", inputmode: "url", placeholder: "luna.it/menu", maxlength: 2000, autocomplete: "off", autocapitalize: "off", spellcheck: "false", "aria-label": "Website address" });
+  const go = h("button.btn.primary", { type: "button" }, "Read page");
+  const msg = h("p.tiny.muted", { role: "status" }, "Eco reads this page once, now. It never browses the web while answering customers.");
+  const el = h("div.stack", { hidden: true, style: { gap: "8px" } },
+    h("div.row", { style: { flexWrap: "nowrap", gap: "8px" } }, h("div", { style: { flex: 1, minWidth: 0 } }, input), go), msg);
+  const run = async () => {
+    const url = input.value.trim();
+    if (!url) return (msg.textContent = "Paste a website address first.");
+    go.disabled = input.disabled = true;
+    msg.textContent = "Reading the page…";
+    try {
+      const r = await api("/api/fetch-url", { method: "POST", body: { url } });
+      const n = r.parts.length;
+      r.parts.forEach((text, i) => onText((n > 1 ? `website ${r.host} ${i + 1}/${n}` : `website ${r.host}`).slice(0, 40), text, r.truncated && i === n - 1 ? "The page was longer: only this much was read" : "Read from the website: check it"));
+      msg.textContent = (n > 1 ? `Added below in ${n} parts. ` : "Added below. ") + "Read it, fix anything wrong and delete what you don't want customers to see (a page may repeat itself or show old prices). For allergens, write them yourself above.";
+      input.value = "";
+    } catch (err) {
+      msg.textContent = err.data?.error || "Couldn't read that website. Paste the text, take a photo or upload a file instead.";
+    }
+    go.disabled = input.disabled = false;
+  };
+  go.onclick = run;
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") (e.preventDefault(), run()); }); // not onkeydown: returning false from it would block typing
+  return { el, open: () => { el.hidden = false; input.focus(); } };
+}

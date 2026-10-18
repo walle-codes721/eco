@@ -1,4 +1,4 @@
-import { h, icon, api, roomId, hostKey, qrSvg, fullUrl, shortUrl, toast, langName, modePill, notFound } from "/js/eco.js";
+import { h, icon, api, websiteImport, roomId, hostKey, qrSvg, fullUrl, shortUrl, toast, langName, modePill, notFound } from "/js/eco.js";
 import { connect } from "/js/live.js";
 import { bindHold } from "/js/mic.js";
 import { voice } from "/js/speak.js";
@@ -40,6 +40,7 @@ const L = {
   editSub: it ? "Eco risponde ai clienti solo da queste informazioni. Le modifiche valgono subito." : "Eco answers customers only from this. Changes apply right away.",
   addSection: it ? "Aggiungi sezione" : "Add section",
   addFile: it ? "Carica file" : "Upload a file",
+  addWeb: it ? "Link al sito web" : "Website link",
   cancel: it ? "Annulla" : "Cancel",
   save: it ? "Salva" : "Save",
   saved: it ? "Info salvate" : "Info saved",
@@ -305,12 +306,14 @@ async function editInfo() {
       } else add(f.name.replace(/\.[^.]+$/, ""), (await f.text()).slice(0, 8000));
     }
   };
+  const web = websiteImport((tag, text) => (add(tag, text), list.lastChild.scrollIntoView({ block: "nearest" })));
   const save = h("button.btn.primary", { type: "button" }, L.save);
   const wrap = h("div.sheet-wrap", {}, h("div.sheet.stack", { style: { gap: "14px", maxWidth: "720px", width: "100%" } },
-    h("h2", {}, L.edit), h("p.small.muted", {}, L.editSub), list,
+    h("h2", {}, L.edit), h("p.small.muted", {}, L.editSub), list, web.el,
     h("div.row", { style: { flexWrap: "wrap" } },
       h("button.btn.sm", { type: "button", onclick: () => add() }, icon("plus"), L.addSection),
       h("button.btn.sm", { type: "button", onclick: () => fileIn.click() }, icon("doc"), L.addFile), fileIn,
+      h("button.btn.sm", { type: "button", onclick: () => web.open() }, icon("globe"), L.addWeb),
       h("span.spacer"), h("button.btn", { type: "button", onclick: () => wrap.remove() }, L.cancel), save)));
   save.onclick = async () => {
     save.disabled = true;

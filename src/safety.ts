@@ -27,19 +27,24 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const TERMS = new RegExp(`(?<![\\p{L}\\p{N}])(?:${LATIN.map(esc).join("|")})|(?:${OTHER.map(esc).join("|")})`, "iu");
 const TAGS = /allerg|alerg|dietar|dieta|diet|ingredien|ingredient/i;
 
+/** Text imported from a website is tagged "website…". It can be stale, so it is never trusted for allergies, diets or ingredients:
+ *  the owner must write that part themselves (or rename the tag after checking it). */
+export const isWebsite = (c: Chunk): boolean => /^website\b/i.test(c.tag);
+
 const norm = (s: string) => String(s ?? "").normalize("NFC").toLowerCase();
 
 /** Does this question, in any of the languages customers use, ask about allergies, ingredients or diet? */
 export const isAllergyQuestion = (text: string): boolean => TERMS.test(norm(text));
 
 /** Does the owner's list say anything about allergens or diet? */
-export const hasAllergenInfo = (chunks: Chunk[]): boolean => chunks.some((c) => TAGS.test(c.tag) || TERMS.test(norm(c.text)));
+export const hasAllergenInfo = (chunks: Chunk[]): boolean => chunks.some((c) => !isWebsite(c) && (TAGS.test(c.tag) || TERMS.test(norm(c.text))));
 
 /**
  * The owner's own allergen and diet text, tagged sections first, then any other chunk that mentions allergens,
  * at most `budget` tokens. This is what Eco must read for an allergy question, however the question was worded.
  */
-export function allergenChunks(chunks: Chunk[], budget = 1000): Chunk[] {
+export function allergenChunks(all: Chunk[], budget = 1000): Chunk[] {
+  const chunks = all.filter((c) => !isWebsite(c));
   const tagged = chunks.filter((c) => TAGS.test(c.tag));
   const mentioned = chunks.filter((c) => !TAGS.test(c.tag) && TERMS.test(norm(c.text)));
   const out: Chunk[] = [];
@@ -60,6 +65,7 @@ export function allergyContext(chunks: Chunk[], picked: Chunk[], budget = 1800):
   const seen = new Set(out.map(key));
   let used = out.reduce((n, c) => n + tokensOf(c.text), 0);
   for (const c of picked) {
+    if (isWebsite(c)) continue;
     const cost = tokensOf(c.text);
     if (seen.has(key(c)) || used + cost > budget) continue;
     out.push(c);
