@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "scripts": {
     "dev": "wrangler dev --var ECO_LIVE:0 --local-upstream localhost:8787",
     "dev:live": "wrangler dev --local-upstream localhost:8787",
