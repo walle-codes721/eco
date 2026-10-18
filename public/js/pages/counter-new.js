@@ -1,4 +1,4 @@
-import { h, icon, api, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, phoneLang } from "/js/eco.js";
+import { h, icon, api, websiteImport, accountLink, linkField, qrSvg, fullUrl, shortUrl, toast, langName, phoneLang } from "/js/eco.js";
 import { openPdf, pdfPages } from "/js/slides.js";
 
 const HOURS = ["hours", "Opening hours", "Every day 12:00–23:00. Closed Mondays in November."];
@@ -123,6 +123,8 @@ async function shrink(file, max = 1600) {
   return c.toDataURL("image/jpeg", 0.82);
 }
 
+const web = websiteImport((tag, text, note) => addSource(tag, text, note));
+
 const consent = h("input", { type: "checkbox" });
 const link = linkField("counter", name);
 const section = (head, sub, ...body) => h("section.form-section", {}, h("header", {}, h("h2", {}, head), h("p", {}, sub)), h("div.stack", {}, ...body));
@@ -136,8 +138,10 @@ const form = h("form", {},
       h("button.btn", { type: "button", onclick: () => addSource("info").ta.focus() }, icon("text"), "Type or paste"),
       h("button.btn", { type: "button", onclick: () => photoIn.click() }, icon("photo"), "Photo of a menu"),
       h("button.btn", { type: "button", onclick: () => fileIn.click() }, icon("doc"), "Upload a file"),
+      h("button.btn", { type: "button", onclick: () => web.open() }, icon("globe"), "Website link"),
     ),
-    h("p.tiny.muted", {}, "Files: PDF, TXT, CSV. A Word file? Save it as PDF first. Photos are read once by Eco; check the text before you save."),
+    web.el,
+    h("p.tiny.muted", {}, "Files: PDF, TXT, CSV. A Word file? Save it as PDF first. Photos and website pages are read once by Eco; check the text before you save."),
     fileIn, photoIn, sourcesEl,
   ),
   section("Your language", "What you read and speak at the counter.", ownerLang),

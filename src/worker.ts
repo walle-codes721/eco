@@ -4,6 +4,7 @@ import { MODELS, extractPrompt } from "./prompts";
 import { authRoute, sessionSub } from "./auth";
 import { NAME, slugify } from "./names";
 import { SAMPLE_TEXT, savedKey, sampleObjectKey, parseVoiceUpload, deleteStoredSample, loadStoredSample, hasStoredSample, VOICE_SAMPLE_EXTS, shownSentence, sampleSentence } from "./voice";
+import { readPage, allowFetch } from "./webpage";
 
 export { Room } from "./room";
 export { Budget } from "./budget";
@@ -147,6 +148,14 @@ async function api(req: Request, env: Env, url: URL, path: string, ip: string): 
       }),
     });
     return r.data === null ? json({ error: "busy", fallback: r.fallback }, 503) : json({ text: r.data.text, live: r.live });
+  }
+
+  // Counter setup: read one public web page once and hand the text back for the owner to review. No AI call, nothing stored here.
+  if (path === "/api/fetch-url" && req.method === "POST") {
+    if (!allowFetch(ip)) return json({ error: "You've read a lot of pages this hour. Try again later, or paste the text." }, 429);
+    const { url } = (await req.json().catch(() => ({}))) as { url?: string };
+    const r = await readPage(String(url ?? ""));
+    return r.ok ? json({ parts: r.parts, title: r.title, host: r.host, truncated: r.truncated }) : json({ error: r.error }, r.status);
   }
 
   if (path === "/api/stats" && req.method === "GET") return json(await budget().stats());
