@@ -298,6 +298,21 @@ input:focus, textarea:focus, select:focus { border-color: var(--ink-2); box-shad
   width: min(560px, 100%); margin-inline: auto; animation: up 0.5s var(--ease);
 }
 @media (min-width: 700px) { .sheet-wrap { align-items: center; } .sheet { border-radius: 28px; } }
+
+/* presenter: API call chart (calls-chart.js). Worked = green dot, failed = red cross: shape and colour both differ. */
+button.pill { cursor: pointer; }
+.cc-chart svg { width: 100%; height: auto; display: block; margin-bottom: 8px; overflow: visible; }
+.cc-ok { fill: var(--ok); fill-opacity: 0.8; }
+.cc-fail { stroke: var(--red); stroke-width: 2; fill: none; }
+.cc-fail-bar { fill: var(--red); }
+.cc-grid { stroke: var(--line); }
+.cc-limit { stroke: var(--muted); stroke-dasharray: 4 3; }
+.cc-label { fill: var(--muted); font-size: 11px; font-family: var(--font); }
+.cc-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.cc-summary > div { display: flex; flex-direction: column; gap: 4px; }
+.cc-summary .stat { font-size: 26px; }
+.cc-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+.cc-table th, .cc-table td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
 @keyframes up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes fade { from { opacity: 0; } }
 

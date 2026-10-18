@@ -282,6 +282,9 @@ export class Room extends DurableObject<Env> {
         return json({ ...this.publicMeta(), host: isHost, me: me?.id ?? null, ...(me ? { sampleText: SAMPLE_TEXT } : {}), ...(isHost ? { joinKey: m.joinKey, script: this.script, prep: this.prepStatus() } : {}) });
       case "GET ws":
         return this.openSocket(url, isHost, me);
+      case "GET calls": // the presenter's call chart: the global log, so the room's host only
+        if (!isHost) return json({ error: "Not allowed" }, 403);
+        return json(await this.env.BUDGET.get(this.env.BUDGET.idFromName("global")).history());
       case "GET transcript":
         return json({ meta: this.publicMeta(), lines: this.lines });
       case "GET timeline":

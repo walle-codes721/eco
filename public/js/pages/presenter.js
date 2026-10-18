@@ -7,6 +7,7 @@ import { openDeckRowCarousel } from "/js/deck-preview.js";
 import { voiceCard } from "/js/sample.js";
 import { t } from "/js/i18n.js";
 import { pollQ, pollResults } from "/js/polls.js";
+import { openCallsChart } from "/js/calls-chart.js";
 import { nearBottom, setFocus } from "/js/caps.js";
 
 const id = roomId();
@@ -44,7 +45,7 @@ deck = await deckFor(id, meta);
 const statusPill = h("span.pill");
 const timer = h("span.mono.muted");
 const latency = h("span.pill", { title: "Phrase end → translation back, measured on this laptop" });
-const calls = h("span.pill", { title: "Token Factory calls today / daily ceiling" });
+const calls = h("button.pill", { type: "button", title: "Token Factory calls today / daily ceiling", onclick: () => openCallsChart({ id, key, chip: calls }) });
 const endBtn = h("button.btn.sm", { type: "button", onclick: () => setStatus(meta.status === "ended" ? "live" : "ended") });
 // One language for the whole console: what the mic listens for, and what you write and read polls in.
 const spokenLang = h("select.lang-select", { "aria-label": "Your language", title: "Your language: what the mic listens for, and the language you write and read questions in. Stop the mic to change it." },
@@ -481,7 +482,7 @@ async function refreshCalls() {
   calls.className = `pill ${s.tripped ? "mock" : ""}`;
   // Stopped after 3 failed calls: say why and when Eco tries again, instead of a bare "tripped".
   if (s.tripped) calls.replaceChildren(h("span.dot"), `Paused · retry ${s.retryAt ? new Date(Math.max(s.retryAt, Date.now())).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "soon"}`);
-  calls.title = s.lastError ? `Last failed call: ${s.lastError.why} (${s.lastError.kind}, ${s.lastError.model})` : "Token Factory calls today";
+  calls.title = (s.lastError ? `Last failed call: ${s.lastError.why} (${s.lastError.kind}, ${s.lastError.model})` : "Token Factory calls today") + ". Click for the chart.";
 }
 refreshCalls();
 setInterval(refreshCalls, 15000);

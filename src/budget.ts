@@ -15,7 +15,8 @@ export interface CallRecord {
   pub: boolean;
   why?: string; // "401: Invalid token" — Token Factory's message, never the key
 }
-type LastError = { t: number; kind: Kind; model: string; status: number; why: string };
+const HISTORY_CAP = 2000;
+type LastError ={ t: number; kind: Kind; model: string; status: number; why: string };
 
 export class Budget extends DurableObject<Env> {
   private window: number[] = [];
@@ -28,6 +29,7 @@ export class Budget extends DurableObject<Env> {
   private probing = false;
   private lastError: LastError | null = null;
   private dayMemo: { at: number; v: ReturnType<Budget["day"]> } | null = null;
+  private historyMemo: { at: number; rows: Record<string, SqlStorageValue>[] } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -157,6 +159,22 @@ export class Budget extends DurableObject<Env> {
       tokens: { in: ok.reduce((s, r) => s + r.tin, 0), out: ok.reduce((s, r) => s + r.tout, 0) },
       points: Math.round(points * 1e4) / 1e4,
     };
+  }
+
+  /** Today's calls for the presenter's chart (issue #67): the newest HISTORY_CAP, read at most once a minute through the
+   *  `t` index. No `pub` flag, no prompt text. A Gemma 400 that falls back to another model (tf.ts) never reaches finish(),
+   *  so it isn't in here. Mock mode logs nothing: the page draws a sample instead. */
+  async history() {
+    const live = this.env.ECO_LIVE === "1" && !!this.env.RADEON_API_KEY;
+    if (!live) return { live, rows: [] };
+    if (!this.historyMemo || Date.now() - this.historyMemo.at > 60_000) {
+      const rows = this.ctx.storage.sql
+        .exec("SELECT t, kind, model, ms, status, tin, tout FROM calls WHERE t >= ? ORDER BY t DESC LIMIT ?", this.dayStart(), HISTORY_CAP)
+        .toArray()
+        .reverse();
+      this.historyMemo = { at: Date.now(), rows };
+    }
+    return { live, rows: this.historyMemo.rows };
   }
 
   async log(): Promise<string> {
